@@ -85,6 +85,35 @@ def test_commit_range_tampered_listed_test_still_flagged(tmp_path: Path, no_remo
     assert _tamper_paths(_evaluate_commit_range(f"{base}..{head}", cwd=str(repo))) == {LISTED}
 
 
+def test_diff_base_adoption_exempts_and_tampered_still_flagged(tmp_path: Path, no_remote: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, manifest, expected_rc in (("ok", None, 0), ("tampered", _manifest({LISTED: _sha256_bytes(b"other content\n")}), 1)):
+        (tmp_path / name).mkdir()
+        repo = _base_repo(tmp_path / name, manifest=manifest)
+        base = _git(repo, "rev-parse", "HEAD")
+        _stage_adoption(repo, LISTED)
+        _git(repo, "commit", "-q", "-m", "adopt guard.lock")
+        head = _git(repo, "rev-parse", "HEAD")
+        assert _tamper_paths(_evaluate_transition(base, head, cwd=str(repo))) == (set() if expected_rc == 0 else {LISTED})
+        monkeypatch.chdir(repo)
+        assert ai_slop_scanner.main(["--diff-base", base, "--head-ref", head]) == expected_rc
+
+
+@pytest.mark.parametrize("kind", ["symlink", "executable"])
+def test_non_regular_target_lock_flagged(tmp_path: Path, no_remote: None, kind: str) -> None:
+    repo = _base_repo(tmp_path)
+    _stage_adoption(repo, LISTED, lock=None)
+    if kind == "symlink":
+        (repo / "real.lock").write_text(LOCK_BODY, encoding="utf-8")
+        (repo / LOCK).symlink_to("real.lock")
+        _git(repo, "add", LOCK, "real.lock")
+    else:
+        (repo / LOCK).write_text(LOCK_BODY, encoding="utf-8")
+        _git(repo, "add", LOCK)
+        _git(repo, "update-index", "--chmod=+x", LOCK)
+    assert adopted_guard_files("HEAD", "", [LISTED], cwd=str(repo)) == frozenset()
+    assert _tamper_paths(_evaluate_transition("HEAD", None, cwd=str(repo))) == {LISTED}
+
+
 def test_tampered_listed_test_flagged(tmp_path: Path) -> None:
     repo = _base_repo(tmp_path, manifest=_manifest({LISTED: _sha256_bytes(b"other content\n")}))
     _stage_adoption(repo, LISTED)
