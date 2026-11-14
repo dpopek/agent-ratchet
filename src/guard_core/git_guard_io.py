@@ -337,6 +337,15 @@ def _check_extra_slop_rules_monotonicity(base_rules: Sequence[Mapping[str, Any]]
     return errs
 
 
+def _check_import_roots_monotonicity(base_roots: Sequence[str], target_roots: Sequence[str]) -> list[str]:
+    # The resolver always includes DEFAULT_IMPORT_ROOTS, so only a dropped custom root narrows the graph.
+    def norm(roots: Sequence[str]) -> list[str]:
+        return [r.strip("/").strip() or "." for r in roots]
+    kept = set(norm(target_roots)) | set(DEFAULT_IMPORT_ROOTS)
+    removed = dict.fromkeys(r for r in norm(base_roots) if r not in kept)
+    return [f"import_roots entry removed: '{r}' (narrows import-cycle detection)" for r in removed]
+
+
 def verify_audit_guard_config_monotonicity(base_prefix: str, target_prefix: str, cwd: str | None = None) -> list[str]:
     if not base_prefix or (base_prefix == "HEAD" and not head_commit_exists(cwd)):
         return []
@@ -348,6 +357,7 @@ def verify_audit_guard_config_monotonicity(base_prefix: str, target_prefix: str,
         return []
     b_cfg, t_cfg = load_guard_config_for_ref(base_prefix, cwd=cwd), load_guard_config_for_ref(target_prefix, cwd=cwd)
     errors = _check_extra_slop_rules_monotonicity(b_cfg.get("extra_slop_rules", []), t_cfg.get("extra_slop_rules", []))
+    errors.extend(_check_import_roots_monotonicity(b_cfg["import_roots"], t_cfg["import_roots"]))
     base_waivers, target_waivers = b_cfg.get("legacy_loc_waivers", []), t_cfg.get("legacy_loc_waivers", [])
     if base_waivers == target_waivers:
         return errors

@@ -586,8 +586,14 @@ def _report_violations(all_violations: list[SlopViolation]) -> int:
     return 1
 
 
+FILE_SCAN_SCOPE_NOTE = (
+    "note: file scan runs text rules and syntax checks only; use --staged-only, --diff-base or --commit-range "
+    "for AST, topology and test-integrity checks"
+)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="AI Slop & Anti-Hacking Scanner (2.3.3)")
+    parser = argparse.ArgumentParser(description="AI Slop & Anti-Hacking Scanner")
     parser.add_argument("--staged-only", action="store_true", help="Scan git index against HEAD")
     parser.add_argument("--diff-base", default=None, help="Base commit ref for single diff scan")
     parser.add_argument("--head-ref", default="HEAD", help="Target commit ref for --diff-base")
@@ -612,6 +618,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.staged_only:
             all_violations = _evaluate_transition("HEAD", None)
         else:
+            print(FILE_SCAN_SCOPE_NOTE, file=sys.stderr)
             targets = _resolve_scan_targets(args)
             all_violations = _scan_worktree_files(targets)
     except GuardAnalysisError as exc:

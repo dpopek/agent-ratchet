@@ -339,7 +339,7 @@ def _evaluate_local_state(explicit_base_ref: str | None, require_base_ref: bool,
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Audit baseline monotonic descent & policy isolation guard (2.3.3)")
+    parser = argparse.ArgumentParser(description="Audit baseline monotonic descent & policy isolation guard")
     parser.add_argument("--test-violation-mock", action="store_true", help="Simulate baseline violation for meta-testing")
     parser.add_argument("--baseline-dir", default=None, help="Directory containing baseline JSON files")
     parser.add_argument("--base-ref", default=None, help="Explicit base git ref")
