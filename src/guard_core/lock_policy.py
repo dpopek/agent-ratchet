@@ -138,7 +138,9 @@ def _release_error(git_dir: str, old_sha: str | None, new_sha: str) -> str | Non
 
 def _shim_error(git_dir: str, sha: str, shim: bytes | None) -> str | None:
     canonical = _git(["cat-file", "blob", f"{sha}:{CANONICAL_SHIM_PATH}"], git_dir=git_dir)
-    if canonical.returncode != 0 or shim is None or canonical.stdout != shim:
+    if canonical.returncode != 0:
+        return f"cannot read {CANONICAL_SHIM_PATH} at guard-core {sha}: {canonical.stderr.decode('utf-8', errors='replace').strip()}"
+    if shim is None or canonical.stdout != shim:
         return _shim_mismatch_msg(sha)
     return None
 

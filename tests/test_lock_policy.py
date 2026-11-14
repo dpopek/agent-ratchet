@@ -223,6 +223,25 @@ def test_shim_change_treated_like_lock_change(tmp_path: Path, remote: Remote, mo
     assert verify_lock_transition("HEAD", "", cwd=str(repo), local=True, repo_url=remote.url) == [mismatch]
 
 
+def test_unreadable_canonical_shim_reported_distinctly(tmp_path: Path, remote: Remote, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, base = _consumer(tmp_path, {LOCK_PATH: remote.c2 + "\n", SHIM_PATH: _shim("c1")})
+    synced = _commit_files(repo, "build: sync shim", {SHIM_PATH: _shim("c2")})
+    real_git = lock_policy._git
+
+    def _lazy_fetch_fails(args: list[str], git_dir: str | None = None, cwd: str | None = None) -> subprocess.CompletedProcess[bytes]:
+        if args[:2] == ["cat-file", "blob"]:
+            return subprocess.CompletedProcess(args, 128, b"", b"fatal: could not fetch blob\n")
+        return real_git(args, git_dir=git_dir, cwd=cwd)
+
+    monkeypatch.setattr(lock_policy, "_git", _lazy_fetch_fails)
+    lock_policy._remote_errors.cache_clear()
+    try:
+        errs = verify_lock_transition(base, synced, cwd=str(repo), local=False, repo_url=remote.url)
+    finally:
+        lock_policy._remote_errors.cache_clear()
+    assert errs == [f"cannot read consumer/guard at guard-core {remote.c2}: fatal: could not fetch blob"]
+
+
 def test_shim_without_lock_rejected(tmp_path: Path, remote: Remote) -> None:
     repo, _ = _consumer(tmp_path, {})
     _stage(repo, {SHIM_PATH: _shim("c1")})
