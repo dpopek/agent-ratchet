@@ -13,10 +13,11 @@ requires-python = ">=3.11"
 dependencies = []
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_ratchet"]
+packages = ["src/agent_ratchet", "src/guard_core"]
 
 [project.scripts]
 agent-ratchet = "agent_ratchet.cli:main"
+guard-core = "agent_ratchet.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
