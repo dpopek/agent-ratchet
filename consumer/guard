@@ -1,0 +1,100 @@
+#!/bin/sh
+# Guard Core consumer shim: runs the guard-core release pinned by guard.lock.
+# Copy to scripts/guard; it must stay byte-identical to consumer/guard at the locked SHA.
+#   scripts/guard [--lock-from REF] <guard-core args...>
+#   scripts/guard exec [--lock-from REF] -- <cmd...>
+set -eu
+LC_ALL=C
+export LC_ALL
+
+URL="git+https://github.com/dpopek/guard-core"
+NL='
+'
+
+die() {
+    printf 'guard: %s\n' "$1" >&2
+    exit 3
+}
+
+mode=run
+if [ "${1-}" = "exec" ]; then
+    mode=exec
+    shift
+fi
+
+ref=""
+if [ "${1-}" = "--lock-from" ]; then
+    [ "$#" -ge 2 ] || die "--lock-from needs a git ref"
+    ref=$2
+    shift 2
+    case "$ref" in
+        "" | -*) die "invalid ref for --lock-from" ;;
+    esac
+fi
+
+if [ "$mode" = "exec" ]; then
+    [ "${1-}" = "--" ] || die "usage: guard exec [--lock-from REF] -- <cmd...>"
+    shift
+    [ "$#" -gt 0 ] || die "exec needs a command after --"
+fi
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git work tree"
+
+# Prints the raw lock bytes of the chosen source ("wt" worktree, "ref" git object).
+emit_lock() {
+    if [ "$src" = "ref" ]; then
+        git -C "$ROOT" cat-file blob "$ref:guard.lock"
+    else
+        cat "$ROOT/guard.lock"
+    fi
+}
+
+src=wt
+if [ -n "$ref" ]; then
+    entry=$(git -C "$ROOT" ls-tree "$ref" -- guard.lock 2>/dev/null) || die "cannot resolve ref $ref"
+    if [ -n "$entry" ]; then
+        src=ref
+        [ "${entry%% *}" = "100644" ] || die "guard.lock in $ref is not a regular file"
+    else
+        printf 'guard: bootstrap, %s has no guard.lock\n' "$ref" >&2
+    fi
+fi
+
+if [ "$src" = "wt" ]; then
+    if [ -L "$ROOT/guard.lock" ]; then
+        die "guard.lock must be a regular file, not a symlink"
+    fi
+    [ -f "$ROOT/guard.lock" ] || die "guard.lock is missing or not a regular file"
+fi
+
+# Same grammar as guard_core.lock_policy: 40 lowercase hex, optional single LF, nothing else.
+size=$(emit_lock | wc -c | tr -d ' ')
+data=$(
+    emit_lock
+    printf x
+)
+data=${data%x}
+want=40
+case "$data" in
+    *"$NL")
+        data=${data%"$NL"}
+        want=41
+        ;;
+esac
+[ "${#data}" -eq 40 ] && [ "$size" -eq "$want" ] || die "guard.lock is malformed (expected 40 lowercase hex characters)"
+case "$data" in
+    *[!0-9a-f]*) die "guard.lock is malformed (expected 40 lowercase hex characters)" ;;
+esac
+SHA=$data
+
+if [ "$mode" = "exec" ]; then
+    tool=uv
+else
+    tool=uvx
+fi
+command -v "$tool" >/dev/null 2>&1 || die "$tool not found on PATH; install uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
+
+if [ "$mode" = "exec" ]; then
+    exec uv run --no-project --with "$URL@$SHA" -- "$@"
+fi
+exec uvx --from "$URL@$SHA" guard-core --expect-sha "$SHA" "$@"
