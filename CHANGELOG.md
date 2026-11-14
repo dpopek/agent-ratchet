@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.1.0
+
+### Changed
+
+- Renamed to `agent-ratchet`: distribution, import package `agent_ratchet`,
+  command `agent-ratchet` and repository `github.com/dpopek/agent-ratchet`.
+  The PyPI name `guard-core` belongs to an unrelated project. Findings are
+  unchanged.
+- The rule-set version constant is `RULES_VERSION`.
+
+### Deprecated (removed in 4.0)
+
+- `import guard_core...`, `python -m guard_core`, the `guard-core` command and
+  `GUARD_VERSION` in `git_guard_io` / `refactoring_guard`. They still work.
+
+### Upgrade
+
+In the bump pull request, besides `guard.lock` and `scripts/guard`:
+
+- Change the dev-dependency pin to
+  `agent-ratchet @ git+https://github.com/dpopek/agent-ratchet@SHA`. pip
+  rejects the old name for this release.
+- Update the expected pin in tests that assert it.
+
 ## 3.0.3
 
 ### Fixed
