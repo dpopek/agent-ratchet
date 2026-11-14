@@ -64,8 +64,7 @@ def _stub_cmd(tmp_path: Path, name: str, body: str = STUB) -> str:
 
 def test_identical_outputs_exit_0(consumer, tmp_path):
     repo, sha = consumer
-    legacy = _stub_cmd(tmp_path, "legacy_stub.py")
-    new = _stub_cmd(tmp_path, "new_stub.py")
+    legacy = new = _stub_cmd(tmp_path, "stub.py")
     out = tmp_path / "out"
     proc = _run(repo, sha, out, "--legacy-cmd", legacy, "--new-cmd", new)
     assert proc.returncode == 0, proc.stderr
@@ -160,9 +159,16 @@ def test_normalise_clone_path_to_root():
     assert diff_tool.normalise(text, Path("/private/var/folders/x/clone")) == "error in <ROOT>/src/a.py:3\n"
 
 
-def test_normalise_other_temp_paths():
-    out = diff_tool.normalise("wrote /tmp/tmpabc123/x.json and /var/folders/zz/T/y.txt\n", Path("/nowhere"))
-    assert out == "wrote <TMP> and <TMP>\n"
+def test_normalise_tool_created_temp_dirs_literally():
+    out = diff_tool.normalise("wrote /scratch/guard-diff-q1/x.json\n", Path("/nowhere"), ["/scratch/guard-diff-q1"])
+    assert out == "wrote <TMP>/x.json\n"
+
+
+def test_normalise_does_not_collapse_lookalike_tmp_segments():
+    root = Path("/nowhere")
+    assert diff_tool.normalise("src/tmp/a.py:3: slop\n", root) != diff_tool.normalise("src/tmp/b.py:3: slop\n", root)
+    assert diff_tool.normalise("app/var/folders/x.py\n", root) != diff_tool.normalise("app/var/folders/y.py\n", root)
+    assert diff_tool.normalise("/tmp/other/x\n", root) == "/tmp/other/x\n"
 
 
 def test_normalise_program_names():
@@ -173,3 +179,28 @@ def test_normalise_program_names():
 def test_normalise_leaves_everything_else_alone():
     text = "Line 12: finding  RULE-1  (score 0.5)\n  indented\n"
     assert diff_tool.normalise(text, Path("/nowhere")) == text
+
+
+def test_legacy_ref_name_resolved_in_source_consumer(consumer, tmp_path, monkeypatch):
+    repo, sha = consumer
+    older = _git(repo, "rev-parse", "HEAD~1")
+    _git(repo, "branch", "master", older)
+    _git(repo, "update-ref", "refs/remotes/origin/master", sha)
+    heads = tmp_path / "heads.txt"
+    monkeypatch.setenv("STUB_HEAD_FILE", str(heads))
+    body = "import subprocess\nopen(os.environ['STUB_HEAD_FILE'], 'a').write(subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout)\n"
+    body = STUB.replace("print(\"cwd", body + "print(\"cwd", 1)
+    stub = _stub_cmd(tmp_path, "head_stub.py", body)
+    out = tmp_path / "out"
+    proc = _run(repo, "origin/master", out, "--legacy-cmd", stub, "--new-cmd", stub)
+    assert proc.returncode == 0, proc.stderr
+    assert set(heads.read_text().split()) == {sha}
+    assert f"legacy-ref: {sha}" in (out / "summary.txt").read_text()
+
+
+def test_unresolvable_legacy_ref_is_usage_error(consumer, tmp_path):
+    repo, _ = consumer
+    stub = _stub_cmd(tmp_path, "s.py")
+    proc = _run(repo, "no-such-ref", tmp_path / "out", "--legacy-cmd", stub, "--new-cmd", stub)
+    assert proc.returncode == 2
+    assert "no-such-ref" in proc.stderr

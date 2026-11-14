@@ -21,7 +21,6 @@ import tempfile
 
 EXIT_OK, EXIT_DIFF, EXIT_USAGE = 0, 1, 2
 LEGACY_SCRIPTS = {"scan": "scripts/audit/ai_slop_scanner.py", "baseline-integrity": "scripts/audit/test_baseline_integrity.py"}
-_TMP_RE = re.compile(r"(?:/private)?/(?:var/folders|tmp)/[^\s:'\"]+")
 _PROG_RE = re.compile(r"(?<![\w./-])(?:ai_slop_scanner\.py|test_baseline_integrity\.py|guard-core)(?![\w-])")
 
 
@@ -29,13 +28,12 @@ class CaseError(Exception):
     """A case could not be run to completion; always counts as a difference."""
 
 
-def normalise(text: str, root: Path) -> str:
-    """Only three rewrites: clone path -> <ROOT>, other temp paths -> <TMP>, program names -> <PROG>."""
+def normalise(text: str, root: Path, tmp_dirs: list[str] | tuple[str, ...] = ()) -> str:
+    """Only three rewrites, all literal: clone path -> <ROOT>, temp dirs this run created -> <TMP>, program names -> <PROG>."""
     for variant in {str(root), os.path.realpath(root)}:
         text = text.replace(variant, "<ROOT>")
-    text = _TMP_RE.sub("<TMP>", text)
-    tmp = tempfile.gettempdir()
-    text = text.replace(os.path.realpath(tmp), "<TMP>").replace(tmp, "<TMP>")
+    for tmp in sorted({d for t in tmp_dirs for d in (str(t), os.path.realpath(t))}, key=len, reverse=True):
+        text = text.replace(tmp, "<TMP>")
     return _PROG_RE.sub("<PROG>", text)
 
 
@@ -72,7 +70,7 @@ def run_side(side: str, sub: str, args: list[str], opts: argparse.Namespace, clo
         raise CaseError(f"{side} timed out after {exc.timeout}s") from exc
     except OSError as exc:
         raise CaseError(f"{side} could not start {cmd[0]}: {exc}") from exc
-    return proc.returncode, normalise(proc.stdout, clone), normalise(proc.stderr, clone)
+    return proc.returncode, normalise(proc.stdout, clone, [clone.parent]), normalise(proc.stderr, clone, [clone.parent])
 
 
 def _render(result: tuple[int, str, str] | CaseError) -> list[str]:
@@ -129,19 +127,24 @@ def main(argv: list[str] | None = None) -> int:
     if _inside_git_repo(opts.out):
         print(f"differential: refusing --out inside a git repository: {opts.out}", file=sys.stderr)
         return EXIT_USAGE
+    resolved = subprocess.run(["git", "-C", str(opts.consumer), "rev-parse", "--verify", "--quiet", f"{opts.legacy_ref}^{{commit}}"], capture_output=True, text=True)
+    if resolved.returncode != 0:
+        print(f"differential: --legacy-ref {opts.legacy_ref!r} does not resolve to a commit in {opts.consumer}", file=sys.stderr)
+        return EXIT_USAGE
+    legacy_sha = resolved.stdout.strip()
     tmp = Path(tempfile.mkdtemp(prefix="guard-diff-"))
     try:
         clone = tmp / "clone"
         try:
             _git("clone", "--quiet", "--no-hardlinks", str(opts.consumer), str(clone))
-            _git("-C", str(clone), "checkout", "--quiet", "--detach", opts.legacy_ref)
+            _git("-C", str(clone), "checkout", "--quiet", "--detach", legacy_sha)
         except subprocess.CalledProcessError as exc:
             print(f"differential: cannot materialise consumer: {exc.stderr.strip()}", file=sys.stderr)
             return EXIT_USAGE
         opts.out.mkdir(parents=True, exist_ok=True)
         for stale in opts.out.glob("*.diff"):
             stale.unlink()
-        lines, failed = [], 0
+        lines, failed = [f"legacy-ref: {legacy_sha}"], 0
         for name, sub, args in build_cases(opts.commits, opts.extra_scan_args):
             same, diff = run_case(sub, args, opts, clone)
             lines.append(f"{'IDENTICAL' if same else 'DIFFERENT'} {name}: {sub} {' '.join(args)}")

@@ -74,7 +74,9 @@ the installed package.
 
 - The consumer is cloned locally (`--no-hardlinks`) into a temporary directory
   and checked out detached at `--legacy-ref`; the consumer itself is never
-  modified. The temporary clone is always deleted.
+  modified. The temporary clone is always deleted. `--legacy-ref` may be a SHA or
+  any ref name; it is resolved in the consumer itself (read-only) to a SHA, which
+  is recorded in `summary.txt`.
 - Cases: `scan --staged-only`, `scan --commit-range HEAD~N..HEAD`,
   `baseline-integrity --enforce-policy-isolation`, and
   `baseline-integrity --require-base-ref --enforce-policy-isolation --commit-range HEAD~N..HEAD`.
