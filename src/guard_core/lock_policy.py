@@ -188,7 +188,9 @@ def adopted_guard_files(base_prefix: str, target_prefix: str, deleted: Iterable[
         if not isinstance(files, dict):
             return frozenset()
         listed = {p: _read_ref_file_bytes(base_prefix, p, cwd=cwd) for p in deleted if p in files}
-        return frozenset(p for p, blob in listed.items() if blob is not None and files[p] == hashlib.sha256(blob).hexdigest())
+        return frozenset(
+            p for p, blob in listed.items() if blob is not None and isinstance(files[p], str) and files[p].lower() == hashlib.sha256(blob).hexdigest()
+        )
     except (GuardAnalysisError, ValueError, RecursionError):
         return frozenset()
 

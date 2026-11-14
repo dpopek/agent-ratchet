@@ -129,6 +129,19 @@ def test_deeply_nested_manifest_yields_no_exemption(tmp_path: Path, monkeypatch:
     assert adopted_guard_files("HEAD", "", [LISTED], cwd=str(repo)) == frozenset()
 
 
+def test_uppercase_manifest_hex_exempted(tmp_path: Path) -> None:
+    repo = _base_repo(tmp_path, manifest=_manifest({LISTED: _sha256_bytes(_test_src("conformance").encode()).upper()}))
+    _stage_adoption(repo, LISTED)
+    assert adopted_guard_files("HEAD", "", [LISTED], cwd=str(repo)) == frozenset({LISTED})
+
+
+@pytest.mark.parametrize("entry", [None, 1, [LISTED]], ids=["null", "int", "list"])
+def test_non_str_manifest_entry_not_exempted(tmp_path: Path, entry: object) -> None:
+    repo = _base_repo(tmp_path, manifest=_manifest({LISTED: entry}))
+    _stage_adoption(repo, LISTED)
+    assert adopted_guard_files("HEAD", "", [LISTED], cwd=str(repo)) == frozenset()
+
+
 def test_manifest_kept_flagged(tmp_path: Path) -> None:
     repo = _base_repo(tmp_path)
     _stage_adoption(repo, LISTED, drop_manifest=False)
