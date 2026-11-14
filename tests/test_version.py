@@ -61,3 +61,12 @@ def test_installed_sha_none_when_package_missing(monkeypatch) -> None:
 
     monkeypatch.setattr(importlib.metadata, "distribution", _raise)
     assert version.installed_sha() is None
+
+
+def test_build_backend_is_pinned_exactly() -> None:
+    import tomllib
+
+    pyproject = tomllib.loads((SRC_DIR.parent / "pyproject.toml").read_text(encoding="utf-8"))
+    requires = pyproject["build-system"]["requires"]
+    assert len(requires) == 1 and requires[0].startswith("hatchling==")
+    assert all(part.isdigit() for part in requires[0].removeprefix("hatchling==").split("."))
