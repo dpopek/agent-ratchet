@@ -13,6 +13,9 @@ dependencies = []
 [tool.hatch.build.targets.wheel]
 packages = ["src/guard_core"]
 
+[project.scripts]
+guard-core = "guard_core.cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

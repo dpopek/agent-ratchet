@@ -418,7 +418,7 @@ def _evaluate_local_state(explicit_base_ref: str | None, require_base_ref: bool,
     return _check_transition_baselines(anc_base, target_mode, baseline_dir)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     reexec_rc = maybe_reexec_from_index(__file__, require_flag=None)
     if reexec_rc is not None:
         return reexec_rc
@@ -430,7 +430,7 @@ def main() -> int:
     parser.add_argument("--enforce-policy-isolation", action="store_true", help="Reject single commits mixing governance and src/")
     parser.add_argument("--staged-only", action="store_true", help="Evaluate staged Git index instead of worktree")
     parser.add_argument("--commit-range", default=None, help="Commit range <base>..<head> for per-commit + final check")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.test_violation_mock:
         res = evaluate_baseline_diff({"metric": "type_escapes", "ceiling": 100, "exemptions": []}, {"metric": "type_escapes", "ceiling": 150, "exemptions": []})

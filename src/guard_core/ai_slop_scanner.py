@@ -583,7 +583,7 @@ def _report_violations(all_violations: list[SlopViolation]) -> int:
     return 1
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="AI Slop & Anti-Hacking Scanner (2.3.3)")
     parser.add_argument("--staged-only", action="store_true", help="Scan git index against HEAD")
     parser.add_argument("--diff-base", default=None, help="Base commit ref for single diff scan")
@@ -591,7 +591,7 @@ def main() -> int:
     parser.add_argument("--commit-range", default=None, help="Commit range <base>..<head> for per-commit + aggregate scan")
     parser.add_argument("--test-fixtures", action="store_true", help="Run self-test against fixtures")
     parser.add_argument("files", nargs="*", help="Specific files or folders to scan")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.test_fixtures:
         return 0 if run_fixtures_self_test() else 1
