@@ -20,8 +20,9 @@ from guard_core.git_guard_io import (
     count_test_assertions as count_test_assertions, diff_name_status,
     evaluate_loc_transition, git_cat_bytes, git_show_text, head_commit_exists, is_test_filename,
     list_snapshot_files, load_guard_config_for_ref,
-    verify_audit_guard_config_monotonicity, verify_commit_ref, verify_guard_manifest_transition,
+    verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
+from guard_core.lock_policy import LOCK_PATH, check_staged_lock, lock_check_is_local, verify_lock_transition
 from guard_core.source_metrics import (
     _count_ast_assertions, _count_js_top_level_items, _find_balanced_span, _parametrize_multiplier, strip_js_comments,
 )
@@ -450,7 +451,7 @@ def _evaluate_entry_transition(
 
 def _evaluate_transition(
     base_ref: str, target_ref: str | None, cwd: str | None = None, loc_ceilings: dict[str, int] | None = None,
-    check_step_loc: bool = True, allow_multi_hop_manifest: bool = False,
+    check_step_loc: bool = True,
 ) -> list[SlopViolation]:
     target_prefix = target_ref or ""
     has_base = base_ref != "HEAD" or head_commit_exists(cwd)
@@ -462,8 +463,8 @@ def _evaluate_transition(
     if has_base:
         for cfg_err in verify_audit_guard_config_monotonicity(base_ref, target_prefix, cwd=cwd):
             violations.append(SlopViolation("scripts/audit/audit_guard_config.json", 1, "modified_file_loc_buffer", cfg_err, cfg_err[:100]))
-        for man_err in verify_guard_manifest_transition(base_ref, target_prefix, cwd=cwd, allow_multi_hop=allow_multi_hop_manifest):
-            violations.append(SlopViolation("scripts/audit/guard_manifest.json", 1, "unjustified_lint_escape", man_err, man_err[:100]))
+        for lock_err in verify_lock_transition(base_ref, target_prefix, cwd=cwd, local=lock_check_is_local(target_ref)):
+            violations.append(SlopViolation(LOCK_PATH, 1, "unjustified_lint_escape", lock_err, lock_err[:100]))
     should_run_a2 = tuple(base_cfg["import_roots"]) != tuple(cfg["import_roots"])
     for status, old_path, new_path in entries:
         entry_v, a2_flag = _evaluate_entry_transition(status, old_path, new_path, base_ref, target_prefix, cwd, cfg["extra_slop_rules"], cfg["legacy_loc_waivers"], loc_ceilings, check_step_loc)
@@ -508,8 +509,8 @@ def _evaluate_commit_range(range_spec: str, cwd: str | None = None) -> list[Slop
         elif len(parents) > 1:
             for p in parents:
                 violations.extend(SlopViolation("scripts/audit/audit_guard_config.json", 1, "modified_file_loc_buffer", e, e[:100]) for e in verify_audit_guard_config_monotonicity(p, commit_sha, cwd=cwd))
-                violations.extend(SlopViolation("scripts/audit/guard_manifest.json", 1, "unjustified_lint_escape", e, e[:100]) for e in verify_guard_manifest_transition(p, commit_sha, cwd=cwd))
-    violations.extend(_evaluate_transition(base_sha, head_sha, cwd=cwd, loc_ceilings=None, check_step_loc=False, allow_multi_hop_manifest=True))
+                violations.extend(SlopViolation(LOCK_PATH, 1, "unjustified_lint_escape", e, e[:100]) for e in verify_lock_transition(p, commit_sha, cwd=cwd, local=lock_check_is_local(commit_sha)))
+    violations.extend(_evaluate_transition(base_sha, head_sha, cwd=cwd, loc_ceilings=None, check_step_loc=False))
     violations.extend(_check_aggregate_range_loc(base_sha, head_sha, loc_ceilings, cwd))
     return violations
 
@@ -595,6 +596,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.test_fixtures:
         return 0 if run_fixtures_self_test() else 1
+    lock_rc = check_staged_lock() if args.staged_only else None
+    if lock_rc is not None:
+        return lock_rc
 
     try:
         if args.commit_range:

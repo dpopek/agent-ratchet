@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 
@@ -14,12 +13,12 @@ from guard_core.ast_topology_guard import (
     find_import_cycles,
     tarjan_scc,
 )
-from guard_core.git_guard_io import SYNCHRONIZED_GUARD_FILES
+from guard_core.git_guard_io import is_protected_governance_path
 
 
 class TestGuardTopologyConformance(unittest.TestCase):
-    def test_topology_suite_is_synchronized(self) -> None:
-        self.assertIn("tests/ci/test_guard_topology_conformance.py", SYNCHRONIZED_GUARD_FILES)
+    def test_legacy_topology_suite_copy_stays_a_protected_governance_path(self) -> None:
+        self.assertTrue(is_protected_governance_path("tests/ci/test_guard_topology_conformance.py"))
 
     def test_a2_tarjan_blocks_self_loop_new_cycle_expanded_scc_and_import_error_handler_cycle(self) -> None:
         base_files = {

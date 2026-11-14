@@ -60,7 +60,7 @@ def _run_tool(subcommand: str, repo: Path, *args: str, extra_env: dict[str, str]
     env = {**os.environ, **(extra_env or {})}
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(SRC_DIR), env.get("PYTHONPATH", "")]))
     if extra_env is None:
-        env.pop("ALLOW_GUARD_MANIFEST_UPDATE", None)
+        env.pop("ALLOW_GUARD_LOCK_UPDATE", None)
     return subprocess.run([sys.executable, "-m", "guard_core", subcommand, *args], cwd=repo, env=env, capture_output=True, text=True)
 
 

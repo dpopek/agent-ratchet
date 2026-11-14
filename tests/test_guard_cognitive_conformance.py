@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-import sys
 import unittest
 
 from guard_core.cognitive_complexity import (
@@ -11,14 +9,14 @@ from guard_core.cognitive_complexity import (
     COGNITIVE_MODULE_CEILING,
     function_cognitive_scores,
 )
-from guard_core.git_guard_io import RUNTIME_SCANNER_FILES, SYNCHRONIZED_GUARD_FILES, evaluate_loc_transition
+from guard_core.git_guard_io import evaluate_loc_transition, is_protected_governance_path
 from guard_core.refactoring_guard import collect_full_scan_violations
 
 
 class TestGuardCognitiveConformance(unittest.TestCase):
-    def test_cognitive_module_is_a_synchronized_runtime_scanner(self) -> None:
-        self.assertIn("scripts/audit/cognitive_complexity.py", RUNTIME_SCANNER_FILES)
-        self.assertIn("tests/ci/test_guard_cognitive_conformance.py", SYNCHRONIZED_GUARD_FILES)
+    def test_legacy_cognitive_copies_stay_protected_governance_paths(self) -> None:
+        self.assertTrue(is_protected_governance_path("scripts/audit/cognitive_complexity.py"))
+        self.assertTrue(is_protected_governance_path("tests/ci/test_guard_cognitive_conformance.py"))
 
     def test_cognitive_complexity_scores_follow_nesting_increments(self) -> None:
         src = (

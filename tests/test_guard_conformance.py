@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -16,8 +15,6 @@ from guard_core.ai_slop_scanner import (
 )
 from guard_core.cognitive_complexity import COGNITIVE_MODULE_CEILING
 from guard_core.git_guard_io import (
-    RUNTIME_SCANNER_FILES,
-    SYNCHRONIZED_GUARD_FILES,
     count_effective_sloc,
     evaluate_loc_transition,
 )
@@ -506,9 +503,6 @@ class TestGuardAstConformance(unittest.TestCase):
         )
         v = compare_ast_snapshots(base_4_5, swapped_6_4, "src/domain/swap.py")
         self.assertEqual([x.category for x in v], ["excessive_parameter_list"])
-
-    def test_source_metrics_is_a_synchronized_runtime_scanner(self) -> None:
-        self.assertIn("scripts/audit/source_metrics.py", RUNTIME_SCANNER_FILES)
 
     def test_sloc_counter_excludes_python_docstrings_and_comments(self) -> None:
         py_src = (

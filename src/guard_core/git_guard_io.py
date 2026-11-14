@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared Git, index-isolation, file budget (cognitive / LOC transition), and manifest/config I/O for Guard Core 2.3.3."""
+"""Shared Git, index-isolation, file budget (cognitive / LOC transition), and config I/O; rules identical to Guard Core 2.3.3."""
 
 from __future__ import annotations
 
@@ -10,17 +10,17 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import sys
-import tempfile
 from typing import Any, Mapping, NamedTuple, Sequence
 
 from guard_core.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
 from guard_core.source_metrics import (  # noqa: F401 -- lexing primitives re-exported
     JS_LIKE_EXTS as JS_LIKE_EXTS, _count_ast_assertions, _count_js_assertions, count_effective_sloc as count_effective_sloc,
 )
-from guard_core.guard_versions import (  # noqa: F401 -- version constants re-exported
-    AUTHORIZED_GUARD_VERSION_UPGRADES, GUARD_VERSION, KNOWN_GUARD_VERSION_ORDER, RUNTIME_SCANNER_SINCE, default_remote_refs, required_runtime_files,
-)
+
+# Rule-set version: Guard Core 3.0 findings are identical to this release (the package version lives in guard_core.version).
+GUARD_VERSION: str = "2.3.3"
+DEFAULT_BRANCH_CANDIDATES: tuple[str, ...] = ("origin/main", "origin/master")
+_UNREACHABLE_DISTANCE = 1 << 62
 
 MODIFIED_FILE_SOFT_CEILING_LOC: int = 680
 HARD_FILE_CEILING_LOC: int = 800
@@ -61,12 +61,17 @@ def is_test_filename(filename: str) -> bool:
     )
 
 
-RUNTIME_SCANNER_FILES: tuple[str, ...] = tuple(RUNTIME_SCANNER_SINCE)
-SYNCHRONIZED_GUARD_FILES: tuple[str, ...] = RUNTIME_SCANNER_FILES + (
+# Frozen 2.3.3 consumer copies; kept only so these paths stay classified as protected governance paths.
+SYNCHRONIZED_GUARD_FILES: tuple[str, ...] = (
+    "scripts/audit/git_guard_io.py", "scripts/audit/refactoring_guard.py", "scripts/audit/ast_refactoring_delta.py",
+    "scripts/audit/ast_topology_guard.py", "scripts/audit/ai_slop_scanner.py", "scripts/audit/test_baseline_integrity.py",
+    "scripts/audit/cognitive_complexity.py", "scripts/audit/guard_versions.py", "scripts/audit/source_metrics.py",
+    "scripts/audit/query_mutation_rules.py", "scripts/audit/ast_control_flow.py", "scripts/audit/baseline_diff.py",
     "tests/ci/test_guard_conformance.py", "tests/ci/test_guard_git_conformance.py", "tests/ci/test_guard_cognitive_conformance.py",
     "tests/ci/test_guard_topology_conformance.py", "tests/ci/guard_repo_harness.py",
 )
 PROTECTED_GOVERNANCE_FILES: set[str] = set(SYNCHRONIZED_GUARD_FILES) | {
+    "guard.lock", "scripts/guard",
     "scripts/audit/guard_manifest.json", "scripts/audit/audit_guard_config.json",
     "tests/test_architecture_boundaries.py", ".githooks/pre-commit", ".husky/pre-commit", ".gitlab-ci.yml",
 }
@@ -90,7 +95,7 @@ LEGACY_2_0_SLOP_KINDS: frozenset[str] = frozenset({
 
 
 class GuardAnalysisError(RuntimeError):
-    """Raised when AST parsing, Git resolution, or config/manifest validation fails."""
+    """Raised when AST parsing, Git resolution, or config/lock validation fails."""
 
 
 def head_commit_exists(cwd: str | None = None) -> bool:
@@ -234,6 +239,26 @@ def load_guard_config_for_ref(ref_prefix: str, cwd: str | None = None) -> dict[s
     return parse_guard_config_bytes(raw, spec)
 
 
+def _git_out(args: list[str], cwd: str | None) -> str | None:
+    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def _distance_to_head(ref: str, cwd: str | None) -> int:
+    out = _git_out(["rev-list", "--count", f"{ref}..HEAD"], cwd)
+    return int(out) if out and out.isdigit() else _UNREACHABLE_DISTANCE
+
+
+def default_remote_refs(cwd: str | None = None) -> list[str]:
+    """Existing default-branch refs: the declared ``origin/HEAD`` first, then the others closest to HEAD first.
+
+    A stale ``origin/master`` left behind after a rename to ``main`` is many commits behind HEAD, so it loses.
+    """
+    present = [ref for ref in DEFAULT_BRANCH_CANDIDATES if _git_out(["rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd)]
+    declared = _git_out(["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], cwd)
+    return sorted(present, key=lambda ref: (ref != declared, _distance_to_head(ref, cwd), DEFAULT_BRANCH_CANDIDATES.index(ref)))
+
+
 def resolve_trusted_base_ref(cwd: str | None = None) -> str | None:
     for ref in (*default_remote_refs(cwd), "HEAD"):
         if subprocess.run(["git", "rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
@@ -247,130 +272,6 @@ def _read_ref_file_bytes(ref_prefix: str, rel_path: str, cwd: str | None = None)
         return p.read_bytes() if p.exists() else None
     spec = f"{ref_prefix}:{rel_path}" if ref_prefix else f":{rel_path}"
     return git_cat_bytes(spec, cwd=cwd)
-
-
-def load_manifest_for_ref(ref_prefix: str, cwd: str | None = None) -> dict[str, Any] | None:
-    rel = "scripts/audit/guard_manifest.json"
-    raw = _read_ref_file_bytes(ref_prefix, rel, cwd=cwd)
-    if raw is None:
-        return None
-    label = rel if ref_prefix == "WORKTREE" else (f"{ref_prefix}:{rel}" if ref_prefix else f":{rel}")
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise GuardAnalysisError(f"Malformed {label}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise GuardAnalysisError(f"{label} must be a JSON object")
-    return data
-
-
-def _is_authorized_manifest_version_step(b_ver: str, t_ver: str, allow_multi_hop: bool) -> bool:
-    if not allow_multi_hop:
-        return (b_ver, t_ver) in AUTHORIZED_GUARD_VERSION_UPGRADES
-    return b_ver in KNOWN_GUARD_VERSION_ORDER and t_ver in KNOWN_GUARD_VERSION_ORDER and KNOWN_GUARD_VERSION_ORDER.index(b_ver) < KNOWN_GUARD_VERSION_ORDER.index(t_ver)
-
-
-def _validate_manifest_structure(target_manifest: dict[str, Any], base_keys: set[str], target_prefix: str, cwd: str | None, require_current_version: bool) -> list[str]:
-    files_map, t_ver = target_manifest.get("files"), target_manifest.get("guard_version")
-    if not isinstance(files_map, dict) or not isinstance(t_ver, str) or (require_current_version and t_ver != GUARD_VERSION):
-        return [f"Invalid or version-mismatched guard_manifest.json (guard_version={t_ver!r})"]
-    missing = sorted((required_runtime_files(t_ver) | base_keys) - set(files_map))
-    if missing:
-        return [f"guard_manifest.json missing required file entries: {missing}"]
-    for rel, expected_sha in files_map.items():
-        blob = _read_ref_file_bytes(target_prefix, rel, cwd=cwd)
-        if not isinstance(expected_sha, str) or blob is None or hashlib.sha256(blob).hexdigest() != expected_sha:
-            return [f"{rel} SHA-256 does not match guard_manifest.json"]
-    return []
-
-
-def verify_guard_manifest_transition(
-    base_prefix: str | None, target_prefix: str, cwd: str | None = None, require_current_version: bool = False, allow_multi_hop: bool = False
-) -> list[str]:
-    base_manifest = load_manifest_for_ref(base_prefix, cwd=cwd) if base_prefix and (base_prefix != "HEAD" or head_commit_exists(cwd)) else None
-    target_manifest = load_manifest_for_ref(target_prefix, cwd=cwd)
-    if target_manifest is None:
-        return ["scripts/audit/guard_manifest.json was deleted"] if base_manifest is not None else []
-    base_keys = set(base_manifest["files"]) if base_manifest and isinstance(base_manifest.get("files"), dict) else set()
-    errs = _validate_manifest_structure(target_manifest, base_keys, target_prefix, cwd, require_current_version)
-    if errs or base_manifest is None or target_manifest == base_manifest or os.environ.get("ALLOW_GUARD_MANIFEST_UPDATE") == "1":
-        return errs
-    b_ver, t_ver = str(base_manifest.get("guard_version") or ""), str(target_manifest.get("guard_version") or "")
-    if not _is_authorized_manifest_version_step(b_ver, t_ver, allow_multi_hop):
-        return [f"Unauthorized guard_manifest.json change ({b_ver} -> {t_ver}) without ALLOW_GUARD_MANIFEST_UPDATE=1"]
-    return []
-
-
-def _verify_staged_manifest(cwd: str | None = None) -> int | None:
-    try:
-        trusted_ref = resolve_trusted_base_ref(cwd)
-        errs = verify_guard_manifest_transition(trusted_ref, "", cwd=cwd, require_current_version=True)
-        if not errs and head_commit_exists(cwd) and trusted_ref != "HEAD":
-            errs = verify_guard_manifest_transition("HEAD", "", cwd=cwd, require_current_version=True)
-    except GuardAnalysisError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
-    if errs:
-        print(f"ERROR: {errs[0]}", file=sys.stderr)
-        return 2
-    return None
-
-
-def maybe_reexec_from_index(
-    entrypoint_script: str,
-    require_flag: str | None = None,
-) -> int | None:
-    if os.environ.get("_AUDIT_GUARD_MATERIALIZED") == "1" and "audit_guard_idx_" in Path(entrypoint_script).as_posix():
-        return None
-    if require_flag is not None:
-        if require_flag not in sys.argv:
-            return None
-    elif "--commit-range" in sys.argv or "--base-ref" in sys.argv:
-        return None
-    manifest_err = _verify_staged_manifest()
-    if manifest_err is not None:
-        sys.exit(manifest_err)
-
-    tracked_check_paths = RUNTIME_SCANNER_FILES + (
-        "scripts/audit/guard_manifest.json",
-        "scripts/audit/audit_guard_config.json",
-    )
-    drifted = False
-    staged_blobs: dict[str, bytes] = {}
-    for rel in tracked_check_paths:
-        blob = git_cat_bytes(f":{rel}")
-        disk_path = Path(rel)
-        if blob is None:
-            if rel in RUNTIME_SCANNER_FILES:
-                return None
-            if disk_path.exists():
-                drifted = True
-            continue
-        staged_blobs[rel] = blob
-        if not disk_path.exists() or disk_path.read_bytes() != blob:
-            drifted = True
-
-    if not drifted:
-        return None
-
-    with tempfile.TemporaryDirectory(prefix="audit_guard_idx_") as tmp:
-        tmp_root = Path(tmp)
-        (tmp_root / "scripts").mkdir(parents=True, exist_ok=True)
-        (tmp_root / "scripts" / "__init__.py").write_text("", encoding="utf-8")
-        tmp_audit = tmp_root / "scripts" / "audit"
-        tmp_audit.mkdir(parents=True, exist_ok=True)
-        (tmp_audit / "__init__.py").write_text("", encoding="utf-8")
-        for rel, blob in staged_blobs.items():
-            dst = tmp_root / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(blob)
-        env = dict(os.environ)
-        env["_AUDIT_GUARD_MATERIALIZED"] = "1"
-        existing_pp = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = f"{tmp_root}{os.pathsep}{existing_pp}" if existing_pp else str(tmp_root)
-        target_script = tmp_audit / Path(entrypoint_script).name
-        res = subprocess.run([sys.executable, str(target_script), *sys.argv[1:]], env=env)
-        sys.exit(res.returncode)
 
 
 def extract_changed_lines_map(diff_text: str) -> dict[str, set[int]]:

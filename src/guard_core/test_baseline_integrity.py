@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Tamper-Proof Baseline Integrity, Per-Commit DAG Ratchet & Policy Isolation Engine (2.3.3)."""
+"""Tamper-Proof Baseline Integrity, Per-Commit DAG Ratchet & Policy Isolation Engine (2.3.3 rules, guard.lock pin)."""
 
 from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,20 +13,18 @@ import sys
 from typing import Any
 
 from guard_core.git_guard_io import (
-    APP_CODE_PREFIXES, NEW_2_1_SLOP_KINDS,
-    PROTECTED_GOVERNANCE_FILES, PROTECTED_GOVERNANCE_PREFIXES, SELF_SKIP_NAMES, SYNCHRONIZED_GUARD_FILES,
-    GuardAnalysisError, default_remote_refs, diff_name_status, git_cat_bytes, git_show_text, head_commit_exists,
-    is_protected_governance_path as is_protected_governance_path, is_test_filename,
-    list_snapshot_files, load_manifest_for_ref, maybe_reexec_from_index,
-    verify_audit_guard_config_monotonicity, verify_commit_ref, verify_guard_manifest_transition,
+    APP_CODE_PREFIXES,
+    PROTECTED_GOVERNANCE_FILES, PROTECTED_GOVERNANCE_PREFIXES,
+    GuardAnalysisError, default_remote_refs, diff_name_status, git_cat_bytes, head_commit_exists,
+    is_protected_governance_path as is_protected_governance_path,
+    verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
+from guard_core.lock_policy import LOCK_PATH, check_staged_lock, lock_check_is_local, verify_lock_transition
 
 from guard_core.baseline_diff import (
-    BaselineDiffResult as BaselineDiffResult, _check_list_monotonicity, _has_strict_improvement, _is_ceiling_key as _is_ceiling_key,
-    _item_id, _join_ratchet_states, evaluate_baseline_diff as evaluate_baseline_diff,
+    BaselineDiffResult as BaselineDiffResult, _has_strict_improvement, _is_ceiling_key as _is_ceiling_key,
+    _join_ratchet_states, evaluate_baseline_diff as evaluate_baseline_diff,
 )
-
-from guard_core.refactoring_guard import collect_refactoring_slop_entries
 
 BaselineAnalysisError = GuardAnalysisError
 ISOLATED_CODE_PREFIXES: tuple[str, ...] = APP_CODE_PREFIXES + ("tests/", "scripts/")
@@ -91,74 +88,6 @@ def _is_pure_rename_baseline_update(entries: list[tuple[str, str, str]], gov_pat
         if b_data is None or c_data is None or _canonicalize_baseline_paths(b_data, rename_map) != c_data:
             return False
     return True
-
-
-def _verify_2_0_to_2_1_migration_measurements(base_data: dict[str, Any], curr_data: dict[str, Any], target_prefix: str, cwd: str | None) -> bool:
-    base_ex, curr_ex = base_data.get("exemptions", []), curr_data.get("exemptions", [])
-    if not isinstance(base_ex, list) or not isinstance(curr_ex, list):
-        return False
-    curr_legacy = [e for e in curr_ex if isinstance(e, dict) and e.get("kind") not in NEW_2_1_SLOP_KINDS]
-    curr_new = [e for e in curr_ex if isinstance(e, dict) and e.get("kind") in NEW_2_1_SLOP_KINDS]
-    if _check_list_monotonicity("exemptions", base_ex, curr_legacy) is not None:
-        return False
-    scope_raw = curr_data.get("scope")
-    scope_prefixes = tuple(f"{str(s).rstrip('/')}/" for s in scope_raw) if isinstance(scope_raw, list) and scope_raw else APP_CODE_PREFIXES
-    measured_by_id: dict[str, dict[str, Any]] = {}
-    new_occurrences = 0
-    for rel in list_snapshot_files(target_prefix, cwd=cwd):
-        if not rel.endswith(".py") or not rel.startswith(scope_prefixes) or is_test_filename(rel) or os.path.basename(rel) in SELF_SKIP_NAMES:
-            continue
-        spec = f"{target_prefix}:{rel}" if (target_prefix and target_prefix != "WORKTREE") else (f":{rel}" if target_prefix == "" else None)
-        if spec is not None:
-            txt = git_show_text(spec, cwd=cwd)
-        else:
-            p = (Path(cwd) if cwd else Path(".")) / rel
-            txt = p.read_text(encoding="utf-8") if p.exists() else None
-        for entry in (collect_refactoring_slop_entries(txt, rel, allowed_kinds=NEW_2_1_SLOP_KINDS) if txt is not None else ()):
-            measured_by_id[_item_id(entry)] = entry
-            new_occurrences += int(entry.get("occurrences", 1))
-    for entry in curr_new:
-        m_entry = measured_by_id.get(_item_id(entry))
-        if m_entry is None or entry.get("ceiling") != m_entry.get("ceiling") or entry.get("variant_ceilings") != m_entry.get("variant_ceilings"):
-            return False
-    return int(curr_data.get("ceiling", 0)) <= int(base_data.get("ceiling", 0)) + new_occurrences
-
-
-def _is_disallowed_migration_path(p: str) -> bool:
-    if not p:
-        return False
-    if p.startswith(APP_CODE_PREFIXES) or p.startswith("test/"):
-        return True
-    if p.startswith("tests/"):
-        return not (p.startswith("tests/baselines/") or p in SYNCHRONIZED_GUARD_FILES)
-    return p.startswith("scripts/") and not p.startswith("scripts/audit/")
-
-
-def _is_authorized_migration(bf: str, base_raw: bytes, base_data: dict[str, Any], curr_raw: bytes, curr_data: dict[str, Any], entries: list[tuple[str, str, str]], base_prefix: str, target_prefix: str, cwd: str | None = None) -> bool:
-    if any(_is_disallowed_migration_path(old_p) or _is_disallowed_migration_path(new_p) for _, old_p, new_p in entries):
-        return False
-    base_manifest = load_manifest_for_ref(base_prefix, cwd=cwd) if base_prefix else None
-    target_manifest = load_manifest_for_ref(target_prefix, cwd=cwd)
-    if target_manifest is None or not isinstance(target_manifest.get("baseline_migrations", []), list):
-        return False
-    if base_manifest is not None and target_manifest != base_manifest and target_manifest.get("guard_version") == base_manifest.get("guard_version") and os.environ.get("ALLOW_GUARD_MANIFEST_UPDATE") != "1":
-        return False
-    b_sha, c_sha = hashlib.sha256(base_raw).hexdigest(), hashlib.sha256(curr_raw).hexdigest()
-    base_v = str(base_data.get("version") or base_data.get("guard_version") or "")
-    curr_v = str(curr_data.get("version") or curr_data.get("guard_version") or "")
-    for mig in target_manifest.get("baseline_migrations", []):
-        if not (isinstance(mig, dict) and mig.get("file") == bf and mig.get("base_sha256") == b_sha and mig.get("migrated_sha256") == c_sha):
-            continue
-        from_v, to_v = str(mig.get("from_version")), str(mig.get("to_version"))
-        if base_v != from_v or curr_v != to_v:
-            continue
-        if (from_v, to_v) == ("2.0.0", "2.1.0") and curr_data.get("metric") == "refactoring_slop":
-            return _verify_2_0_to_2_1_migration_measurements(base_data, curr_data, target_prefix, cwd=cwd)
-        if (from_v, to_v) in (("2.1.0", "2.2.0"), ("2.2.0", "2.3.0")):
-            comparable = {**base_data, **{k: curr_data[k] for k in ("version", "guard_version") if k in base_data and k in curr_data}}
-            return evaluate_baseline_diff(comparable, curr_data).is_valid
-        return False
-    return False
 
 
 def _is_atomic_baseline_tightening(entries: list[tuple[str, str, str]], gov_paths: list[str], base_ref: str, target_ref: str | None, cwd: str | None) -> bool:
@@ -285,9 +214,6 @@ def _evaluate_single_baseline_transition(bf: str, base_ref: str | None, t_prefix
     if initial or b_data is None:
         _set_ratchet(out_ratchet, bf, c_data)
         return True, (f"OK: {bf} parsed cleanly (initial repository state)." if initial else f"OK: New baseline added: {bf}")
-    if b_raw and b_git_data and c_raw and _is_authorized_migration(bf, b_raw, b_git_data, c_raw, c_data, entries, base_ref or "", t_prefix, cwd=cwd):
-        _set_ratchet(out_ratchet, bf, c_data)
-        return True, f"OK: {bf} authorized analyzer migration {b_git_data.get('version')} -> {c_data.get('version')}."
     canon_base = _canonicalize_baseline_paths(b_data, rename_map)
     res = evaluate_baseline_diff(canon_base, c_data)
     if not res.is_valid:
@@ -296,7 +222,7 @@ def _evaluate_single_baseline_transition(bf: str, base_ref: str | None, t_prefix
     return True, f"OK: {bf} passed baseline integrity check."
 
 
-def _check_transition_baselines(base_ref: str | None, target_ref: str | None, baseline_dir: str | None, parent_ratchet: dict[str, dict[str, Any]] | None = None, out_ratchet: dict[str, dict[str, Any]] | None = None, cwd: str | None = None, allow_multi_hop_manifest: bool = False) -> tuple[bool, list[str]]:
+def _check_transition_baselines(base_ref: str | None, target_ref: str | None, baseline_dir: str | None, parent_ratchet: dict[str, dict[str, Any]] | None = None, out_ratchet: dict[str, dict[str, Any]] | None = None, cwd: str | None = None) -> tuple[bool, list[str]]:
     t_prefix = target_ref or ""
     files = sorted(set(_list_git_baseline_files(t_prefix, baseline_dir, cwd=cwd)) | (set(_list_git_baseline_files(base_ref, baseline_dir, cwd=cwd)) if base_ref else set()) | (set(parent_ratchet) if parent_ratchet else set()))
     has_base = bool(base_ref and (base_ref != "HEAD" or head_commit_exists(cwd)))
@@ -305,7 +231,7 @@ def _check_transition_baselines(base_ref: str | None, target_ref: str | None, ba
     messages: list[str] = []
     if has_base and base_ref and baseline_dir is None:
         messages.extend(f"FAIL: scripts/audit/audit_guard_config.json: {e}" for e in verify_audit_guard_config_monotonicity(base_ref, t_prefix, cwd=cwd))
-        messages.extend(f"FAIL: scripts/audit/guard_manifest.json: {e}" for e in verify_guard_manifest_transition(base_ref, t_prefix, cwd=cwd, allow_multi_hop=allow_multi_hop_manifest))
+        messages.extend(f"FAIL: {LOCK_PATH}: {e}" for e in verify_lock_transition(base_ref, t_prefix, cwd=cwd, local=lock_check_is_local(target_ref)))
     all_ok = not messages
     for bf in files:
         ok, msg = _evaluate_single_baseline_transition(bf, base_ref, t_prefix, entries, rename_map, parent_ratchet.get(bf) if parent_ratchet else None, out_ratchet, cwd)
@@ -340,7 +266,7 @@ def _step_merge_ratchet(c_sha: str, parents: list[str], enforce_isolation: bool,
     if baseline_dir is None:
         for p in parents[1:]:
             extra_errs.extend(f"FAIL: scripts/audit/audit_guard_config.json: {e}" for e in verify_audit_guard_config_monotonicity(p, c_sha))
-            extra_errs.extend(f"FAIL: scripts/audit/guard_manifest.json: {e}" for e in verify_guard_manifest_transition(p, c_sha))
+            extra_errs.extend(f"FAIL: {LOCK_PATH}: {e}" for e in verify_lock_transition(p, c_sha, local=lock_check_is_local(c_sha)))
     c_state: dict[str, dict[str, Any]] = {}
     m_ok, m_msgs = _check_transition_baselines(parents[0], c_sha, baseline_dir, parent_ratchet=joined_parent, out_ratchet=c_state)
     if m_ok and not extra_errs:
@@ -381,7 +307,7 @@ def _evaluate_commit_range(range_spec: str, enforce_isolation: bool, baseline_di
     hist_ok, hist_msgs, ratchet_by_commit = _walk_commit_history(base_sha, head_sha, enforce_isolation, baseline_dir)
     if not hist_ok:
         return False, hist_msgs
-    return _check_transition_baselines(base_sha, head_sha, baseline_dir, parent_ratchet=ratchet_by_commit.get(head_sha, ratchet_by_commit.get(base_sha)), allow_multi_hop_manifest=True)
+    return _check_transition_baselines(base_sha, head_sha, baseline_dir, parent_ratchet=ratchet_by_commit.get(head_sha, ratchet_by_commit.get(base_sha)))
 
 
 def _resolve_merge_base_with_head(base_ref: str) -> tuple[str, str | None]:
@@ -419,9 +345,6 @@ def _evaluate_local_state(explicit_base_ref: str | None, require_base_ref: bool,
 
 
 def main(argv: list[str] | None = None) -> int:
-    reexec_rc = maybe_reexec_from_index(__file__, require_flag=None)
-    if reexec_rc is not None:
-        return reexec_rc
     parser = argparse.ArgumentParser(description="Audit baseline monotonic descent & policy isolation guard (2.3.3)")
     parser.add_argument("--test-violation-mock", action="store_true", help="Simulate baseline violation for meta-testing")
     parser.add_argument("--baseline-dir", default=None, help="Directory containing baseline JSON files")
@@ -438,6 +361,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"FAIL: Simulated baseline violation detected: {res.reason}", file=sys.stderr)
             return 1
         return 0
+    lock_rc = None if (args.commit_range or args.base_ref) else check_staged_lock(require_base_ref=args.require_base_ref)
+    if lock_rc is not None:
+        return lock_rc
     try:
         if args.commit_range:
             ok, msgs = _evaluate_commit_range(args.commit_range, args.enforce_policy_isolation, args.baseline_dir)

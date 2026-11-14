@@ -10,19 +10,11 @@ import sys
 import tempfile
 import unittest
 
-import pytest
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-XFAIL_LOCK_POLICY = pytest.mark.xfail(strict=True, reason="replaced by lock policy in Task 4")
-
 from guard_core.git_guard_io import (
-    RUNTIME_SCANNER_FILES,
-    SYNCHRONIZED_GUARD_FILES,
+    default_remote_refs,
     resolve_trusted_base_ref,
     verify_audit_guard_config_monotonicity,
 )
-from guard_core.guard_versions import default_remote_refs, required_runtime_files
-from guard_core.refactoring_guard import GUARD_VERSION
 from guard_core.test_baseline_integrity import evaluate_baseline_diff
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -47,7 +39,7 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
         grown = {"metric": "refactoring_slop", "version": "2.0.0", "ceiling": 2, "exemptions": [{"file": "src/domain/v.py", "symbol": "build", "kind": "excessive_parameter_list", "ceiling": 8, "variant_ceilings": [8, 8]}]}
         self.assertFalse(evaluate_baseline_diff(base, grown).is_valid)
 
-    def test_partial_stage_isolates_code_config_baseline_and_guard_scripts_from_dirty_worktree(self) -> None:
+    def test_partial_stage_isolates_code_config_baseline_and_guard_lock_from_dirty_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _init_guard_repo(tmp)
             _commit_files(repo, "chore: initial", {
@@ -60,29 +52,31 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
                 "src/domain/svc.py": "def broken(a,b,c,d,e,f,g,h,i:\n",
                 "scripts/audit/audit_guard_config.json": "{corrupt_json",
                 "tests/baselines/refactoring_slop.json": _json_bytes({"metric": "refactoring_slop", "version": "2.0.0", "ceiling": 999, "exemptions": []}),
-                "scripts/audit/refactoring_guard.py": "raise RuntimeError('unstaged guard sabotage')\n",
+                "guard.lock": "NOT-A-SHA\r\n",
+                "scripts/guard": "#!/bin/sh\nexit 0\n",
             })
             r_scan = _run_scanner(repo, "--staged-only")
             self.assertEqual(r_scan.returncode, 0, r_scan.stderr + r_scan.stdout)
             r_base = _run_baseline_guard(repo, "--enforce-policy-isolation")
             self.assertEqual(r_base.returncode, 0, r_base.stderr + r_base.stdout)
 
-    def test_staged_only_isolates_dirty_worktree_guard_script_config_and_unstaged_app_edits(self) -> None:
+    def test_staged_only_isolates_dirty_tracked_guard_lock_shim_config_and_unstaged_app_edits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _init_guard_repo(tmp)
             _commit_files(repo, "chore: initial", {
                 "src/domain/svc.py": "def ok(x):\n    return x\n",
                 "tests/baselines/refactoring_slop.json": _json_bytes({"metric": "refactoring_slop", "version": "2.2.0", "ceiling": 0, "exemptions": []}),
+                "guard.lock": "1" * 40 + "\n",
+                "scripts/guard": "#!/bin/sh\nexec uvx guard-core \"$@\"\n",
             }, include_guards=True)
             _write_files(repo, {"src/domain/svc.py": "def ok(x: int) -> int:\n    return x + 1\n"})
             _git(repo, "add", "src/domain/svc.py")
-            sabotage = (
-                "from pathlib import Path; import sys; sys.path.insert(0, str(Path(__file__).resolve().parents[2]))\n"
-                "from guard_core.git_guard_io import maybe_reexec_from_index\nmaybe_reexec_from_index(__file__)\nraise RuntimeError('dirty worktree executed')\n"
-            )
-            for rel in ("scripts/audit/ai_slop_scanner.py", "scripts/audit/test_baseline_integrity.py", "scripts/audit/ast_topology_guard.py"):
-                (repo / rel).write_text(sabotage, encoding="utf-8")
-            _write_files(repo, {"scripts/audit/audit_guard_config.json": "{corrupt", "src/domain/svc.py": "import os\ndef bad(): return os.environ['X']\n"})
+            _write_files(repo, {
+                "guard.lock": "2" * 40 + "\n",
+                "scripts/guard": "#!/bin/sh\nexit 0\n",
+                "scripts/audit/audit_guard_config.json": "{corrupt",
+                "src/domain/svc.py": "import os\ndef bad(): return os.environ['X']\n",
+            })
             self.assertEqual(_run_scanner(repo, "--staged-only").returncode, 0)
             self.assertEqual(_run_baseline_guard(repo, "--enforce-policy-isolation").returncode, 0)
 
@@ -134,23 +128,16 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
             self.assertEqual(_run_scanner(repo, "--commit-range", f"{c0}..{c1}").returncode, 0)
             self.assertEqual(_run_baseline_guard(repo, "--require-base-ref", "--enforce-policy-isolation", "--commit-range", f"{c0}..{c1}").returncode, 0)
 
-    @XFAIL_LOCK_POLICY
-    def test_commit_range_allows_stage_a_b_c_sequence_blocks_mixed_a_b_commit_and_catches_8_to_7_to_8(self) -> None:
+    def test_commit_range_allows_fix_then_ratchet_sequence_blocks_mixed_commit_and_catches_8_to_7_to_8(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _init_guard_repo(tmp, guard_version="2.0.0")
+            repo = _init_guard_repo(tmp)
             ex_param = {"file": "src/domain/pred.py", "symbol": "evaluate", "kind": "excessive_parameter_list", "ceiling": 8}
             ex_imp = {"file": "src/domain/pred.py", "symbol": "evaluate", "kind": "domain_impurity", "ceiling": 1}
-            v20_bytes = _json_bytes({"metric": "refactoring_slop", "version": "2.0.0", "ceiling": 1, "exemptions": [ex_param]})
-            base_sha = _commit_files(repo, "chore: base v2.0.0", {
-                "src/domain/pred.py": "import time\ndef evaluate(a, b, c, d, e, f, g, h):\n    return time.time() + a\n",
-                "tests/baselines/refactoring_slop.json": v20_bytes,
-            }, include_guards=True)
-
             stage_a_bytes = _json_bytes({"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 2, "exemptions": [ex_imp, ex_param]})
-            (repo / "tests" / "baselines" / "refactoring_slop.json").write_bytes(stage_a_bytes)
-            _write_manifest(repo, migrations=[{"file": "tests/baselines/refactoring_slop.json", "from_version": "2.0.0", "to_version": "2.1.0", "base_sha256": _sha256_bytes(v20_bytes), "migrated_sha256": _sha256_bytes(stage_a_bytes)}], guard_version="2.1.0")
-            _git(repo, "add", "tests/baselines/refactoring_slop.json", "scripts/audit/guard_manifest.json")
-            _git(repo, "commit", "-q", "-m", "ci(audit): stage A")
+            base_sha = _commit_files(repo, "chore: base v2.1.0", {
+                "src/domain/pred.py": "import time\ndef evaluate(a, b, c, d, e, f, g, h):\n    return time.time() + a\n",
+                "tests/baselines/refactoring_slop.json": stage_a_bytes,
+            }, include_guards=True)
 
             _write_files(repo, {"src/domain/pred.py": "def evaluate(a, b, c, d, e, f, g, h):\n    return a\n"})
             _git(repo, "add", "src/domain/pred.py")
@@ -180,6 +167,29 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
                 "scripts/audit/audit_guard_config.json": json.dumps({"extra_slop_rules": [], "legacy_loc_waivers": []}, indent=4) + "\n",
             })
             self.assertEqual(_run_baseline_guard(repo, "--require-base-ref", "--enforce-policy-isolation", "--commit-range", f"{reg_sha}..{mixed_sha}").returncode, 1)
+
+    def test_baseline_version_bump_is_rejected_without_a_migration_catalogue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_guard_repo(tmp)
+            bf_rel = "tests/baselines/refactoring_slop.json"
+            ex_leg6 = {"file": "src/domain/svc.py", "symbol": "legacy_fn", "kind": "excessive_parameter_list", "ceiling": 6}
+            ex_imp1 = {"file": "src/domain/svc.py", "symbol": "legacy_fn", "kind": "domain_impurity", "ceiling": 1}
+            base_sha = _commit_files(repo, "chore: base 2.0.0", {
+                "src/domain/svc.py": "import time\ndef legacy_fn(a, b, c, d, e, f):\n    return time.time()\n",
+                bf_rel: _json_bytes({"metric": "refactoring_slop", "version": "2.0.0", "ceiling": 1, "exemptions": [ex_leg6]}),
+            }, include_guards=True)
+            for bumped in (
+                {"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 2, "exemptions": [ex_imp1, ex_leg6]},
+                {"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 1, "exemptions": [ex_leg6]},
+                {"metric": "refactoring_slop", "version": "9.9.9", "ceiling": 0, "exemptions": []},
+            ):
+                _git(repo, "reset", "-q", "--hard", base_sha)
+                _write_files(repo, {bf_rel: _json_bytes(bumped)})
+                _git(repo, "add", bf_rel)
+                res = _run_baseline_guard(repo, "--base-ref", base_sha)
+                self.assertEqual(res.returncode, 1, res.stderr + res.stdout)
+                _git(repo, "commit", "-q", "-m", "chore: bump baseline version")
+                self.assertEqual(_run_baseline_guard(repo, "--require-base-ref", "--commit-range", f"{base_sha}..HEAD").returncode, 1)
 
     def test_analysis_failures_return_exit_code_2_never_silent_pass(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -221,24 +231,18 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
             self.assertEqual(range_del.returncode, 1)
             self.assertIn("baseline_deleted", range_del.stderr)
 
-    @XFAIL_LOCK_POLICY
     def test_commit_range_enforces_running_ratchet_and_merge_commit_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _init_guard_repo(tmp, guard_version="2.0.0")
+            repo = _init_guard_repo(tmp)
             bf_rel = "tests/baselines/refactoring_slop.json"
             ex_imp = {"file": "src/domain/svc.py", "symbol": "ok", "kind": "domain_impurity", "ceiling": 1}
-            base_b_bytes = _json_bytes({"metric": "refactoring_slop", "version": "2.0.0", "ceiling": 0, "exemptions": []})
             mig_b_bytes = _json_bytes({"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 1, "exemptions": [ex_imp]})
             ratcheted_b_bytes = _json_bytes({"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 0, "exemptions": []})
 
-            master_base = _commit_files(repo, "chore: master base", {"src/domain/svc.py": "import time\ndef ok(a):\n    return time.time()\n", bf_rel: base_b_bytes}, include_guards=True)
+            master_base = _commit_files(repo, "chore: master base", {"src/domain/svc.py": "import time\ndef ok(a):\n    return time.time()\n", bf_rel: mig_b_bytes}, include_guards=True)
 
             _git(repo, "checkout", "-q", "-b", "feat/multi-stage")
-            (repo / bf_rel).write_bytes(mig_b_bytes)
-            _write_manifest(repo, migrations=[{"file": bf_rel, "from_version": "2.0.0", "to_version": "2.1.0", "base_commit": master_base, "base_sha256": _sha256_bytes(base_b_bytes), "migrated_sha256": _sha256_bytes(mig_b_bytes)}], guard_version="2.1.0")
-            _git(repo, "add", bf_rel, "scripts/audit/guard_manifest.json")
-            _git(repo, "commit", "-q", "-m", "ci: stage a")
-            stage_a = _git(repo, "rev-parse", "HEAD")
+            stage_a = _commit_files(repo, "docs: stage a", {"docs/notes.md": "stage a\n"})
 
             _commit_files(repo, "refactor: stage b", {"src/domain/svc.py": "def ok(a):\n    return a + 1\n"})
             stage_c = _commit_files(repo, "chore: stage c", {bf_rel: ratcheted_b_bytes})
@@ -295,37 +299,6 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
                 res_ok = _run_baseline_guard(repo, "--require-base-ref", "--commit-range", f"{o_sha}..HEAD")
                 self.assertEqual(res_ok.returncode, 0, res_ok.stderr)
 
-    @XFAIL_LOCK_POLICY
-    def test_migration_2_0_to_2_1_propagates_into_ratchet_linearly_across_2_0_merge_and_blocks_post_migration_reintroduction(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = _init_guard_repo(tmp, guard_version="2.0.0")
-            bf_rel = "tests/baselines/refactoring_slop.json"
-            b20_bytes = _json_bytes({"metric": "refactoring_slop", "version": "2.0.0", "ceiling": 0, "exemptions": []})
-            o_sha = _commit_files(repo, "chore: O v2.0.0", {"src/domain/imp.py": "import time\ndef f():\n    return time.time()\n", bf_rel: b20_bytes}, include_guards=True)
-
-            _git(repo, "checkout", "-q", "-b", "side-20", o_sha)
-            s_sha = _commit_files(repo, "feat: side 2.0", {"src/domain/clean.py": "def c(x):\n    return x\n"})
-
-            _git(repo, "checkout", "-q", "-b", "mig-21", o_sha)
-            imp_ex = {"file": "src/domain/imp.py", "symbol": "f", "kind": "domain_impurity", "ceiling": 1}
-            b21_bytes = _json_bytes({"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 1, "exemptions": [imp_ex]})
-            (repo / bf_rel).write_bytes(b21_bytes)
-            _write_manifest(repo, migrations=[{"file": bf_rel, "from_version": "2.0.0", "to_version": "2.1.0", "base_commit": o_sha, "base_sha256": _sha256_bytes(b20_bytes), "migrated_sha256": _sha256_bytes(b21_bytes)}], guard_version="2.1.0")
-            _git(repo, "add", bf_rel, "scripts/audit/guard_manifest.json")
-            _git(repo, "commit", "-q", "-m", "ci: migrate 2.0.0 -> 2.1.0")
-            a_sha = _git(repo, "rev-parse", "HEAD")
-
-            _git(repo, "merge", "--no-ff", "-q", s_sha, "-m", "Merge side-20 into mig-21")
-            m_sha = _git(repo, "rev-parse", "HEAD")
-            res_merge = _run_baseline_guard(repo, "--require-base-ref", "--enforce-policy-isolation", "--commit-range", f"{o_sha}..{m_sha}")
-            self.assertEqual(res_merge.returncode, 0, res_merge.stderr)
-
-            r_sha = _commit_files(repo, "chore: ratchet down to 0", {bf_rel: _json_bytes({"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 0, "exemptions": []})})
-            self.assertEqual(_run_baseline_guard(repo, "--require-base-ref", "--commit-range", f"{o_sha}..{r_sha}").returncode, 0)
-
-            _commit_files(repo, "chore: illegal reintroduction", {bf_rel: b21_bytes})
-            self.assertEqual(_run_baseline_guard(repo, "--require-base-ref", "--commit-range", f"{a_sha}..HEAD").returncode, 1)
-
     def test_unborn_head_initial_commit_and_added_deleted_files_do_not_raise_analysis_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _init_guard_repo(tmp)
@@ -365,51 +338,6 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
             self.assertEqual(r_range.returncode, 1)
             self.assertIn("import_cycle", r_range.stderr)
 
-    @XFAIL_LOCK_POLICY
-    def test_authorized_migration_rejects_raised_legacy_limits_and_inflated_new_ceilings_even_when_sha256_matches(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = _init_guard_repo(tmp, guard_version="2.0.0")
-            bf_rel = "tests/baselines/refactoring_slop.json"
-            ex_leg6 = {"file": "src/domain/svc.py", "symbol": "legacy_fn", "kind": "excessive_parameter_list", "ceiling": 6}
-            ex_leg7 = {"file": "src/domain/svc.py", "symbol": "legacy_fn", "kind": "excessive_parameter_list", "ceiling": 7}
-            ex_imp1 = {"file": "src/domain/svc.py", "symbol": "legacy_fn", "kind": "domain_impurity", "ceiling": 1}
-            ex_imp2 = {"file": "src/domain/svc.py", "symbol": "legacy_fn", "kind": "domain_impurity", "ceiling": 2}
-            base_20 = _json_bytes({"metric": "refactoring_slop", "version": "2.0.0", "ceiling": 1, "exemptions": [ex_leg6]})
-            base_sha = _commit_files(repo, "chore: base 2.0.0", {"src/domain/svc.py": "import time\ndef legacy_fn(a, b, c, d, e, f):\n    return time.time()\n", bf_rel: base_20}, include_guards=True)
-
-            for bad_payload in (
-                {"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 2, "exemptions": [ex_imp1, ex_leg7]},
-                {"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 2, "exemptions": [ex_imp2, ex_leg6]},
-            ):
-                bad_bytes = _json_bytes(bad_payload)
-                (repo / bf_rel).write_bytes(bad_bytes)
-                _write_manifest(repo, migrations=[{"file": bf_rel, "from_version": "2.0.0", "to_version": "2.1.0", "base_commit": base_sha, "base_sha256": _sha256_bytes(base_20), "migrated_sha256": _sha256_bytes(bad_bytes)}], guard_version="2.1.0")
-                _git(repo, "add", bf_rel, "scripts/audit/guard_manifest.json")
-                self.assertEqual(_run_baseline_guard(repo, "--base-ref", base_sha).returncode, 1)
-
-            good_mig = _json_bytes({"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 2, "exemptions": [ex_imp1, ex_leg6]})
-            (repo / bf_rel).write_bytes(good_mig)
-            _write_manifest(repo, migrations=[{"file": bf_rel, "from_version": "2.0.0", "to_version": "2.1.0", "base_commit": base_sha, "base_sha256": _sha256_bytes(base_20), "migrated_sha256": _sha256_bytes(good_mig)}], guard_version="2.1.0")
-            _git(repo, "add", bf_rel, "scripts/audit/guard_manifest.json")
-            res_good = _run_baseline_guard(repo, "--base-ref", base_sha)
-            self.assertEqual(res_good.returncode, 0, res_good.stderr)
-
-    @XFAIL_LOCK_POLICY
-    def test_staged_manifest_verifies_conformance_test_file_against_tampering(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = _init_guard_repo(tmp)
-            conf_rel = "tests/ci/test_guard_conformance.py"
-            _write_files(repo, {conf_rel: "import unittest\n"})
-            _write_manifest(repo)
-            _stage_guard_files(repo, conf_rel)
-            _git(repo, "commit", "-q", "-m", "chore: init with conformance")
-
-            _write_files(repo, {conf_rel: "import unittest\n# tampered\n"})
-            _git(repo, "add", conf_rel)
-            res = _run_scanner(repo, "--staged-only")
-            self.assertEqual(res.returncode, 2)
-            self.assertIn(conf_rel, res.stderr)
-
     def test_worktree_scan_loads_extra_slop_rules_and_fails_closed_on_corrupt_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _init_guard_repo(tmp)
@@ -446,75 +374,6 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
             r_loc = _run_scanner(repo, "--staged-only")
             self.assertEqual(r_loc.returncode, 1)
             self.assertIn("modified_file_loc_buffer", r_loc.stderr)
-
-    @XFAIL_LOCK_POLICY
-    def test_self_signed_manifest_and_unknown_guard_version_pair_rejected_against_base_ref(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = _init_guard_repo(tmp)
-            bf_rel = "tests/baselines/refactoring_slop.json"
-            base_23 = _json_bytes({"metric": "refactoring_slop", "version": "2.3.0", "ceiling": 1, "exemptions": []})
-            base_sha = _commit_files(repo, "chore: trusted 2.3.0 base", {bf_rel: base_23}, include_guards=True)
-            _git(repo, "update-ref", "refs/remotes/origin/main", base_sha)
-
-            scanner_file = repo / "scripts" / "audit" / "ai_slop_scanner.py"
-            scanner_file.write_text(scanner_file.read_text(encoding="utf-8") + "\n# self-signed edit\n", encoding="utf-8")
-            _write_manifest(repo)
-            _git(repo, "add", "scripts/audit/ai_slop_scanner.py", "scripts/audit/guard_manifest.json")
-            self.assertEqual(_run_scanner(repo, "--staged-only").returncode, 2)
-            self.assertEqual(_run_baseline_guard(repo).returncode, 2)
-            self.assertEqual(_run_scanner(repo, "--staged-only", extra_env={"ALLOW_GUARD_MANIFEST_UPDATE": "1"}).returncode, 0)
-            _git(repo, "reset", "--hard", base_sha)
-
-            fake_99 = _json_bytes({"metric": "refactoring_slop", "version": "9.9.9", "ceiling": 5, "exemptions": []})
-            (repo / bf_rel).write_bytes(fake_99)
-            _write_manifest(repo, migrations=[{"file": bf_rel, "from_version": "2.3.0", "to_version": "9.9.9", "base_sha256": _sha256_bytes(base_23), "migrated_sha256": _sha256_bytes(fake_99)}])
-            _git(repo, "add", bf_rel, "scripts/audit/guard_manifest.json")
-            self.assertEqual(_run_baseline_guard(repo, "--base-ref", base_sha).returncode, 1)
-
-        with tempfile.TemporaryDirectory() as tmp2:
-            repo2 = _init_guard_repo(tmp2, guard_version="2.1.0")
-            base_21 = _json_bytes({"metric": "refactoring_slop", "version": "2.1.0", "ceiling": 1, "exemptions": []})
-            b21_sha = _commit_files(repo2, "chore: 2.1.0 base", {bf_rel: base_21}, include_guards=True)
-            base_22 = _json_bytes({"metric": "refactoring_slop", "version": "2.2.0", "ceiling": 1, "exemptions": []})
-            bad_22 = _json_bytes({"metric": "refactoring_slop", "version": "2.2.0", "ceiling": 2, "exemptions": []})
-            (repo2 / bf_rel).write_bytes(bad_22)
-            _write_manifest(repo2, migrations=[{"file": bf_rel, "from_version": "2.1.0", "to_version": "2.2.0", "base_sha256": _sha256_bytes(base_21), "migrated_sha256": _sha256_bytes(bad_22)}], guard_version="2.2.0")
-            _git(repo2, "add", bf_rel, "scripts/audit/guard_manifest.json")
-            self.assertEqual(_run_baseline_guard(repo2, "--base-ref", b21_sha).returncode, 1)
-            (repo2 / bf_rel).write_bytes(base_22)
-            _write_manifest(repo2, migrations=[{"file": bf_rel, "from_version": "2.1.0", "to_version": "2.2.0", "base_sha256": _sha256_bytes(base_21), "migrated_sha256": _sha256_bytes(base_22)}], guard_version="2.2.0")
-            _git(repo2, "add", bf_rel, "scripts/audit/guard_manifest.json")
-            self.assertEqual(_run_baseline_guard(repo2, "--base-ref", b21_sha).returncode, 0)
-
-    @XFAIL_LOCK_POLICY
-    def test_manifest_deletion_missing_keys_and_commit_range_tampering_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = _init_guard_repo(tmp, guard_version="2.2.0")
-            bf_rel = "tests/baselines/refactoring_slop.json"
-            base_sha = _commit_files(repo, "chore: base", {bf_rel: _json_bytes({"metric": "refactoring_slop", "version": "2.2.0", "ceiling": 0, "exemptions": []})}, include_guards=True)
-            _git(repo, "update-ref", "refs/remotes/origin/main", base_sha)
-
-            _git(repo, "rm", "-q", "scripts/audit/guard_manifest.json")
-            self.assertEqual(_run_scanner(repo, "--staged-only").returncode, 2)
-            self.assertEqual(_run_baseline_guard(repo).returncode, 2)
-            _git(repo, "commit", "-q", "-m", "chore: delete manifest")
-            self.assertNotEqual(_run_baseline_guard(repo, "--require-base-ref", "--commit-range", f"{base_sha}..HEAD").returncode, 0)
-            self.assertNotEqual(_run_scanner(repo, "--commit-range", f"{base_sha}..HEAD").returncode, 0)
-
-            for ver, drop_key in (("2.2.0", True), ("9.9.9", False), ("2.1.0", False), ("2.2.0", False)):
-                _git(repo, "reset", "--hard", base_sha)
-                s_p = repo / "scripts/audit/ai_slop_scanner.py"
-                s_p.write_text(s_p.read_text(encoding="utf-8") + "\n# tamper\n", encoding="utf-8")
-                _write_manifest(repo, guard_version=ver)
-                if drop_key:
-                    m = json.loads((repo / "scripts/audit/guard_manifest.json").read_text(encoding="utf-8"))
-                    m["files"].pop("scripts/audit/ai_slop_scanner.py", None)
-                    (repo / "scripts/audit/guard_manifest.json").write_bytes(_json_bytes(m))
-                _git(repo, "add", "scripts/audit/ai_slop_scanner.py", "scripts/audit/guard_manifest.json")
-                self.assertEqual(_run_scanner(repo, "--staged-only").returncode, 2)
-                _git(repo, "commit", "-q", "-m", f"tamper {ver}")
-                self.assertNotEqual(_run_baseline_guard(repo, "--require-base-ref", "--commit-range", f"{base_sha}..HEAD").returncode, 0)
-                self.assertNotEqual(_run_scanner(repo, "--commit-range", f"{base_sha}..HEAD").returncode, 0)
 
     def test_audit_guard_config_loc_waiver_expansion_rejected_against_base_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -585,7 +444,6 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
             res_range = _run_baseline_guard(repo, "--require-base-ref", "--enforce-policy-isolation", "--commit-range", f"{base_sha}..HEAD")
             self.assertEqual(res_range.returncode, 0, res_range.stderr)
 
-    @XFAIL_LOCK_POLICY
     def test_policy_isolation_blocks_baseline_loosening_and_protected_governance_prefixes(self) -> None:
         self.assertFalse(evaluate_baseline_diff({"scope": ["src/domain", "src/application"], "ceiling": 1}, {"scope": ["src/domain"], "ceiling": 1}).is_valid)
         self.assertTrue(evaluate_baseline_diff({"ceiling": 0}, {"ceiling": 0, "double_cast_ceiling": 71}).is_valid)
@@ -620,54 +478,14 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
             self.assertEqual(_run_baseline_guard(repo, "--enforce-policy-isolation").returncode, 1)
 
         with tempfile.TemporaryDirectory() as tmp2:
-            repo2 = _init_guard_repo(tmp2, guard_version="2.1.0")
+            repo2 = _init_guard_repo(tmp2)
             b21 = _json_bytes({"metric": "refactoring_slop", "version": "2.1.0", "scope": ["src/domain", "src/application"], "ceiling": 1, "exemptions": []})
             b21_sha = _commit_files(repo2, "chore: base 2.1", {bf_rel: b21, "scripts/helper.py": "X = 1\n"}, include_guards=True)
             _write_files(repo2, {"scripts/helper.py": "X = 2\n", bf_rel: b22})
-            _write_manifest(repo2, migrations=[{"file": bf_rel, "from_version": "2.1.0", "to_version": "2.2.0", "base_sha256": _sha256_bytes(b21), "migrated_sha256": _sha256_bytes(b22)}], guard_version="2.2.0")
-            _git(repo2, "add", "scripts/helper.py", bf_rel, "scripts/audit/guard_manifest.json")
+            _git(repo2, "add", "scripts/helper.py", bf_rel)
             r2 = _run_baseline_guard(repo2, "--base-ref", b21_sha, "--enforce-policy-isolation")
             self.assertEqual(r2.returncode, 1)
             self.assertIn("Policy isolation violation", r2.stderr)
-
-    @XFAIL_LOCK_POLICY
-    def test_guard_manifest_sha256_matches_core_files(self) -> None:
-        manifest_path = AUDIT_DIR / "guard_manifest.json"
-        self.assertTrue(manifest_path.exists(), "scripts/audit/guard_manifest.json must exist")
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(data["guard_version"], GUARD_VERSION)
-        self.assertEqual(set(data["files"].keys()), set(SYNCHRONIZED_GUARD_FILES))
-        for rel, recorded_sha in data["files"].items():
-            path = REPO_ROOT / rel
-            loc = len(path.read_text(encoding="utf-8").splitlines())
-            ceiling = 680 if rel in RUNTIME_SCANNER_FILES else 750
-            self.assertLessEqual(loc, ceiling, f"{rel} has {loc} LOC (> {ceiling} ceiling)")
-            actual_sha = _sha256_bytes(path.read_bytes())
-            self.assertEqual(actual_sha, recorded_sha, f"SHA-256 drift for {rel}")
-
-    def test_required_runtime_files_follow_manifest_version_and_fail_closed_on_unknown(self) -> None:
-        self.assertEqual(required_runtime_files(GUARD_VERSION), set(RUNTIME_SCANNER_FILES))
-        self.assertEqual(required_runtime_files("9.9.9"), set(RUNTIME_SCANNER_FILES))
-        old = required_runtime_files("2.2.0")
-        self.assertIn("scripts/audit/git_guard_io.py", old)
-        self.assertNotIn("scripts/audit/cognitive_complexity.py", old)
-        self.assertNotIn("scripts/audit/git_guard_io.py", required_runtime_files("2.0.0"))
-
-    @XFAIL_LOCK_POLICY
-    def test_commit_range_accepts_history_whose_manifests_list_only_their_own_version_files(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = _init_guard_repo(tmp)
-            manifest_path = repo / "scripts" / "audit" / "guard_manifest.json"
-            full = json.loads(manifest_path.read_text(encoding="utf-8"))["files"]
-            for ver in ("2.2.0", "2.3.0"):
-                files = {rel: sha for rel, sha in full.items() if rel in required_runtime_files(ver) or not rel.startswith("scripts/")}
-                manifest_path.write_bytes(_json_bytes({"guard_version": ver, "files": files, "baseline_migrations": []}))
-                if ver == "2.2.0":
-                    base_sha = _commit_files(repo, "chore: 2.2.0 base", {"src/domain/svc.py": "A = 1\n"}, include_guards=True)
-                    _commit_files(repo, "feat: change under 2.2.0", {"src/domain/svc.py": "A = 2\n"})
-            head_sha = _commit_files(repo, "chore: upgrade guard to 2.3.0", {}, include_guards=True)
-            r = _run_baseline_guard(repo, "--commit-range", f"{base_sha}..{head_sha}", "--enforce-policy-isolation")
-            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
     def test_base_ref_prefers_origin_head_then_the_default_branch_closest_to_head(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
