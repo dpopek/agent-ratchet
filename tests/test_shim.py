@@ -213,7 +213,12 @@ def test_shim_rejects_unmerged_index_lock(tmp_path: Path) -> None:
     _commit_lock(repo, SHA2 + "\n")
     _git(repo, "checkout", "-q", "main")
     _commit_lock(repo, "1" * 40 + "\n")
-    subprocess.run(["git", "merge", "-q", "other"], cwd=repo, capture_output=True, env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull})
+    merge = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "merge", "-q", "other"],
+        cwd=repo, capture_output=True, text=True,
+        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+    )
+    assert merge.returncode != 0 and _git(repo, "ls-files", "-u", "--", "guard.lock"), merge.stderr
     (repo / "guard.lock").write_text(SHA + "\n")
     proc, argv = _run(repo, tmp_path, "scan", "--staged-only")
     assert proc.returncode == 3 and "index" in proc.stderr and argv == []
