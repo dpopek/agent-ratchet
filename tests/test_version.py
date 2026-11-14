@@ -70,3 +70,10 @@ def test_build_backend_is_pinned_exactly() -> None:
     requires = pyproject["build-system"]["requires"]
     assert len(requires) == 1 and requires[0].startswith("hatchling==")
     assert all(part.isdigit() for part in requires[0].removeprefix("hatchling==").split("."))
+
+
+def test_pyproject_version_matches_guard_version() -> None:
+    import tomllib
+
+    pyproject = tomllib.loads((SRC_DIR.parent / "pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["project"]["version"] == version.GUARD_VERSION
