@@ -429,6 +429,35 @@ def test_mode_only_change_counts_as_change(tmp_path: Path, remote: Remote) -> No
     ]
 
 
+def test_commit_range_x_z_x_judges_every_hop(tmp_path: Path, remote: Remote, monkeypatch: pytest.MonkeyPatch) -> None:
+    """X -> unreleased Z -> X nets to no change, so only the per-commit hops can reject it (T4-c)."""
+    from guard_core import ai_slop_scanner, test_baseline_integrity
+
+    repo, base = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
+    hop_z = _commit_files(repo, "chore: bump to unreleased", {LOCK_PATH: remote.c3 + "\n"})
+    head = _commit_files(repo, "chore: back to release", {LOCK_PATH: remote.c1 + "\n"})
+    judged: list[tuple[str | None, str]] = []
+
+    def _recording(base_prefix: str | None, target_prefix: str, cwd: str | None = None, *, local: bool) -> list[str]:
+        judged.append((base_prefix, target_prefix))
+        return verify_lock_transition(base_prefix, target_prefix, cwd=cwd, local=local, repo_url=remote.url)
+
+    monkeypatch.setattr(ai_slop_scanner, "verify_lock_transition", _recording)
+    monkeypatch.setattr(test_baseline_integrity, "verify_lock_transition", _recording)
+    assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=remote.url) == []
+
+    errors = [v.message for v in ai_slop_scanner._evaluate_commit_range(f"{base}..{head}", cwd=str(repo)) if v.file == LOCK_PATH]
+    assert {(base, hop_z), (hop_z, head), (base, head)} <= set(judged)
+    assert any(remote.c3 in e and "annotated" in e for e in errors), errors
+    assert any(remote.c3 in e and "descendant" in e for e in errors), errors
+
+    judged.clear()
+    monkeypatch.chdir(repo)
+    ok, msgs = test_baseline_integrity._evaluate_commit_range(f"{base}..{head}", False, None)
+    assert not ok and (base, hop_z) in judged
+    assert any(remote.c3 in m and "annotated" in m for m in msgs), msgs
+
+
 def _invalid_base_lock_msg(mode: str) -> str:
     return f"guard.lock in the base is not a regular file (mode {mode}); a lock transition cannot be verified"
 
