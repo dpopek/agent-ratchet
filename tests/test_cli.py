@@ -73,6 +73,25 @@ def test_scan_passes_argv_through() -> None:
     assert "usage:" in cli_out
 
 
+def test_file_scan_states_its_limited_scope_on_stderr(tmp_path, monkeypatch, capsys) -> None:
+    (tmp_path / "clean.py").write_text("def f(x):\n    return x\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert ai_slop_scanner.main(["clean.py"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "✅ Scanned files — zero slop violations detected.\n"
+    assert captured.err == (
+        "note: file scan runs text rules and syntax checks only; use --staged-only, --diff-base or --commit-range "
+        "for AST, topology and test-integrity checks\n"
+    )
+
+
+@pytest.mark.parametrize("sub", ["scan", "baseline-integrity"])
+def test_help_carries_no_stale_version(sub: str) -> None:
+    rc, out = _capture_help(cli.main, [sub, "--help"])
+    assert rc == 0
+    assert "2.3.3" not in out
+
+
 def test_unknown_subcommand_is_rejected() -> None:
     with pytest.raises(SystemExit) as exc:
         cli.main(["bogus"])
