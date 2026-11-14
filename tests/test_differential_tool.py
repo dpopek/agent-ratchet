@@ -144,13 +144,25 @@ def test_temp_clone_removed_and_source_repo_untouched(consumer, tmp_path):
     assert _git(repo, "worktree", "list").count("\n") == 0
 
 
-def test_temp_clone_removed_on_failure(consumer, tmp_path):
-    repo, _ = consumer
+def test_temp_clone_removed_on_failure(consumer, tmp_path, monkeypatch):
+    repo, sha = consumer
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     stub = _stub_cmd(tmp_path, "s.py")
-    proc = _run(repo, "0" * 40, tmp_path / "out", "--legacy-cmd", stub, "--new-cmd", stub, tmpdir=scratch)
-    assert proc.returncode == 2
+    real_git = diff_tool._git
+    clones: list[Path] = []
+
+    def _checkout_fails(*args: str) -> None:
+        if "checkout" in args:
+            clones.extend(p for p in scratch.glob("*/clone") if (p / ".git").is_dir())
+            raise subprocess.CalledProcessError(128, ["git", *args], stderr="fatal: checkout failed")
+        real_git(*args)
+
+    monkeypatch.setattr(diff_tool, "_git", _checkout_fails)
+    monkeypatch.setattr(diff_tool.tempfile, "tempdir", str(scratch))
+    argv = ["--consumer", str(repo), "--legacy-ref", sha, "--guard-sha", sha, "--commits", "1", "--out", str(tmp_path / "out"), "--legacy-cmd", stub, "--new-cmd", stub]
+    assert diff_tool.main(argv) == 2
+    assert clones, "the clone must exist when the failure happens"
     assert list(scratch.iterdir()) == []
 
 
