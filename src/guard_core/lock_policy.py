@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -11,6 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from typing import Iterable
 
 from guard_core.git_guard_io import GuardAnalysisError, _git_out, _read_ref_file_bytes, head_commit_exists, trusted_base_candidates
 
@@ -167,6 +170,27 @@ def _legacy_manifest_errors(base_manifest: bytes | None, target_manifest: bytes 
     if target_manifest is None:
         return [LEGACY_DELETED_MSG]
     return [LEGACY_CHANGED_MSG] if target_manifest != base_manifest else []
+
+
+def adopted_guard_files(base_prefix: str, target_prefix: str, deleted: Iterable[str], cwd: str | None = None) -> frozenset[str]:
+    """Deleted 2.x guard files that the diff retires by adopting ``guard.lock``.
+
+    Only when base has the legacy manifest and no lock, target has a valid regular lock and no manifest, and the
+    deleted blob in base is byte-identical to its manifest sha256. Any malformed input yields no exemption.
+    """
+    try:
+        if entry_mode(base_prefix, LOCK_PATH, cwd) is not None or entry_mode(target_prefix, LOCK_PATH, cwd) != "100644":
+            return frozenset()
+        if read_lock(target_prefix, cwd=cwd) is None or _read_ref_file_bytes(target_prefix, LEGACY_MANIFEST_PATH, cwd=cwd) is not None:
+            return frozenset()
+        manifest = json.loads(_read_ref_file_bytes(base_prefix, LEGACY_MANIFEST_PATH, cwd=cwd) or b"null")
+        files = manifest.get("files") if isinstance(manifest, dict) else None
+        if not isinstance(files, dict):
+            return frozenset()
+        listed = {p: _read_ref_file_bytes(base_prefix, p, cwd=cwd) for p in deleted if p in files}
+        return frozenset(p for p, blob in listed.items() if blob is not None and files[p] == hashlib.sha256(blob).hexdigest())
+    except (GuardAnalysisError, ValueError):
+        return frozenset()
 
 
 def verify_lock_transition(

@@ -53,6 +53,13 @@ an unchanged legacy manifest, the 2.3.3 findings "SHA-256 does not match
 guard_manifest.json" and "version-mismatched" no longer appear, because the
 manifest is superseded by `guard.lock`.
 
+The change that adopts `guard.lock` may also delete the vendored guard files
+listed in the manifest, including their tests, without a Test Tamper Guard
+finding. A deleted file is exempt only when the base has the manifest and no
+`guard.lock`, the target has a valid `guard.lock` and no manifest, and the
+file's base blob matches its SHA-256 in the manifest. Any other deletion,
+including one in a malformed manifest, is judged as before.
+
 ## CI: judge a pull request with the trusted base
 
 A pull request can change `scripts/guard` and `guard.lock`, so CI must not run

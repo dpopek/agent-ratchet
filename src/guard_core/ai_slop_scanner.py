@@ -22,7 +22,7 @@ from guard_core.git_guard_io import (
     list_snapshot_files, load_guard_config_for_ref,
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
-from guard_core.lock_policy import LOCK_PATH, check_staged_lock, lock_check_is_local, verify_lock_transition
+from guard_core.lock_policy import LOCK_PATH, adopted_guard_files, check_staged_lock, lock_check_is_local, verify_lock_transition
 from guard_core.source_metrics import (
     _count_ast_assertions, _count_js_top_level_items, _find_balanced_span, _parametrize_multiplier, strip_js_comments,
 )
@@ -344,9 +344,11 @@ def _check_transition_test_tampering(entries: list[tuple[str, str, str]], base_p
     total_base, total_target = 0, 0
     deleted_files: list[str] = []
     reduced_files: list[tuple[str, int, int]] = []
+    deleted_tests = [old for st, old, _ in entries if st.startswith("D") and is_test_filename(old)]
+    retired = adopted_guard_files(base_prefix, target_prefix, deleted_tests, cwd=cwd) if deleted_tests else frozenset()
     for status, old_path, new_path in entries:
         old_is_test, new_is_test = is_test_filename(old_path), is_test_filename(new_path)
-        if not old_is_test and not new_is_test:
+        if (not old_is_test and not new_is_test) or (status.startswith("D") and old_path in retired):
             continue
         b_txt = git_show_text(f"{base_prefix}:{old_path}", cwd) if (old_is_test and not status.startswith("A")) else None
         t_txt = git_show_text(f"{target_prefix}:{new_path}" if target_prefix else f":{new_path}", cwd) if (new_is_test and not status.startswith("D")) else None
