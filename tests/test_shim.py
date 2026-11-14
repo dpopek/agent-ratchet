@@ -162,3 +162,58 @@ def test_shim_rejects_non_regular_lock_entry_in_ref(tmp_path: Path) -> None:
     proc, argv = _run(repo, tmp_path, "--lock-from", "main", "scan")
     assert proc.returncode == 3 and "regular file" in proc.stderr and argv == []
     assert BOOTSTRAP not in proc.stderr
+
+
+def test_shim_takes_lock_from_index_not_unstaged_worktree_edit(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _commit_lock(repo, SHA + "\n")
+    (repo / "guard.lock").write_text(SHA2 + "\n")  # unstaged pin edit
+    for args in (("scan", "--staged-only"), ("baseline-integrity", "--enforce-policy-isolation")):
+        proc, argv = _run(repo, tmp_path, *args)
+        assert proc.returncode == 0 and proc.stderr == ""
+        assert argv[:5] == ["--from", f"{URL}@{SHA}", "guard-core", "--expect-sha", SHA]
+    _, argv = _run(repo, tmp_path, "exec", "--", "pytest")
+    assert argv[3] == f"{URL}@{SHA}"
+
+
+def test_shim_staged_lock_wins_over_head(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _commit_lock(repo, SHA + "\n")
+    (repo / "guard.lock").write_text(SHA2 + "\n")
+    _git(repo, "add", "guard.lock")
+    (repo / "guard.lock").unlink()  # worktree copy is not needed when the index has the lock
+    proc, argv = _run(repo, tmp_path, "scan", "--staged-only")
+    assert proc.returncode == 0 and argv[1] == f"{URL}@{SHA2}"
+
+
+def test_shim_rejects_symlink_lock_in_index(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    (repo / "real.lock").write_text(SHA + "\n")
+    (repo / "guard.lock").symlink_to("real.lock")
+    _git(repo, "add", "real.lock", "guard.lock")
+    (repo / "guard.lock").unlink()
+    (repo / "guard.lock").write_text(SHA + "\n")  # regular worktree file must not mask the index entry
+    proc, argv = _run(repo, tmp_path, "scan", "--staged-only")
+    assert proc.returncode == 3 and "index" in proc.stderr and argv == []
+
+
+def test_shim_rejects_malformed_index_lock_despite_valid_worktree(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    (repo / "guard.lock").write_text(SHA[:39] + "\n")
+    _git(repo, "add", "guard.lock")
+    (repo / "guard.lock").write_text(SHA + "\n")
+    proc, argv = _run(repo, tmp_path, "scan", "--staged-only")
+    assert proc.returncode == 3 and "malformed" in proc.stderr and argv == []
+
+
+def test_shim_rejects_unmerged_index_lock(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _commit_lock(repo, SHA + "\n")
+    _git(repo, "checkout", "-q", "-b", "other")
+    _commit_lock(repo, SHA2 + "\n")
+    _git(repo, "checkout", "-q", "main")
+    _commit_lock(repo, "1" * 40 + "\n")
+    subprocess.run(["git", "merge", "-q", "other"], cwd=repo, capture_output=True, env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull})
+    (repo / "guard.lock").write_text(SHA + "\n")
+    proc, argv = _run(repo, tmp_path, "scan", "--staged-only")
+    assert proc.returncode == 3 and "index" in proc.stderr and argv == []

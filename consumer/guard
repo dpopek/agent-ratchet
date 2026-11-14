@@ -3,6 +3,9 @@
 # Copy to scripts/guard; it must stay byte-identical to consumer/guard at the locked SHA.
 #   scripts/guard [--lock-from REF] <guard-core args...>
 #   scripts/guard exec [--lock-from REF] -- <cmd...>
+# Without --lock-from the lock is read from the index (as committed next), so an unstaged
+# edit cannot change which guard judges the index; the work tree is used only when the
+# index has no guard.lock (bootstrap).
 set -eu
 LC_ALL=C
 export LC_ALL
@@ -10,6 +13,7 @@ export LC_ALL
 URL="git+https://github.com/dpopek/guard-core"
 NL='
 '
+TAB=$(printf '\t')
 
 die() {
     printf 'guard: %s\n' "$1" >&2
@@ -40,10 +44,12 @@ fi
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git work tree"
 
-# Prints the raw lock bytes of the chosen source ("wt" worktree, "ref" git object).
+# Prints the raw lock bytes of the chosen source ("wt" worktree, "ref" git object, "index" blob).
 emit_lock() {
     if [ "$src" = "ref" ]; then
         git -C "$ROOT" cat-file blob "$ref:guard.lock"
+    elif [ "$src" = "index" ]; then
+        git -C "$ROOT" cat-file blob "$blob"
     else
         cat "$ROOT/guard.lock"
     fi
@@ -57,6 +63,23 @@ if [ -n "$ref" ]; then
         [ "${entry%% *}" = "100644" ] || die "guard.lock in $ref is not a regular file"
     else
         printf 'guard: bootstrap, %s has no guard.lock\n' "$ref" >&2
+    fi
+else
+    entry=$(git -C "$ROOT" ls-files -s -- guard.lock) || die "cannot read the index"
+    if [ -n "$entry" ]; then
+        case "$entry" in
+            *"$NL"*) die "guard.lock in the index is unmerged or not a single file" ;;
+        esac
+        meta=${entry%%"$TAB"*}
+        [ "${entry#*"$TAB"}" = "guard.lock" ] || die "guard.lock in the index is not a regular file"
+        [ "${meta%% *}" = "100644" ] || die "guard.lock in the index is not a regular file"
+        rest=${meta#* }
+        blob=${rest%% *}
+        [ "${rest#* }" = "0" ] || die "guard.lock in the index is unmerged"
+        case "$blob" in
+            "" | *[!0-9a-f]*) die "cannot read guard.lock from the index" ;;
+        esac
+        src=index
     fi
 fi
 
