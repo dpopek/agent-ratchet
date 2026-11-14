@@ -338,6 +338,30 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
             self.assertEqual(r_range.returncode, 1)
             self.assertIn("import_cycle", r_range.stderr)
 
+    def test_removing_a_custom_import_root_is_a_monotonicity_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_guard_repo(tmp)
+            cfg = {"extra_slop_rules": [], "legacy_loc_waivers": []}
+            base_sha = _commit_files(repo, "chore: custom root", {
+                "src/custom_root/pkg/__init__.py": "",
+                "scripts/audit/audit_guard_config.json": _json_bytes({**cfg, "import_roots": [".", "src", "src/custom_root/"]}),
+                "tests/baselines/refactoring_slop.json": _json_bytes({"metric": "refactoring_slop", "version": "2.2.0", "ceiling": 0, "exemptions": []}),
+            }, include_guards=True)
+
+            for roots in ([".", "src"], ["src"]):
+                _write_files(repo, {"scripts/audit/audit_guard_config.json": _json_bytes({**cfg, "import_roots": roots})})
+                _git(repo, "add", "scripts/audit/audit_guard_config.json")
+                errors = verify_audit_guard_config_monotonicity(base_sha, "", cwd=str(repo))
+                self.assertEqual(errors, ["import_roots entry removed: 'src/custom_root' (narrows import-cycle detection)"])
+                r = _run_scanner(repo, "--staged-only")
+                self.assertEqual(r.returncode, 1)
+                self.assertIn("import_roots entry removed", r.stderr)
+
+            for roots in (["src/custom_root"], ["src/custom_root", "backend", "extra"], ["src", ".", "/src/custom_root"]):
+                _write_files(repo, {"scripts/audit/audit_guard_config.json": _json_bytes({**cfg, "import_roots": roots})})
+                _git(repo, "add", "scripts/audit/audit_guard_config.json")
+                self.assertEqual(verify_audit_guard_config_monotonicity(base_sha, "", cwd=str(repo)), [], roots)
+
     def test_worktree_scan_loads_extra_slop_rules_and_fails_closed_on_corrupt_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _init_guard_repo(tmp)
