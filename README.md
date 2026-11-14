@@ -155,3 +155,7 @@ named below differ:
 
 Both disappear once a consumer has adopted `guard.lock` and its ranges no
 longer contain 2.x manifest commits. Any other differing line is a regression.
+
+## License
+
+MIT, see `LICENSE`.
