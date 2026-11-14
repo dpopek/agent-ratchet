@@ -80,10 +80,16 @@ PROTECTED_GOVERNANCE_PREFIXES: tuple[str, ...] = (
     "tests/baselines/", "tests/meta_guards/",
     ".githooks/", ".husky/", ".github/workflows/",
 )
+# A case variant shadows the real pin file on case-insensitive filesystems.
+_CASE_FOLDED_PIN_FILES: frozenset[str] = frozenset({"guard.lock", "scripts/guard"})
 
 
 def is_protected_governance_path(rel_path: str) -> bool:
-    return rel_path in PROTECTED_GOVERNANCE_FILES or rel_path.startswith(PROTECTED_GOVERNANCE_PREFIXES)
+    return (
+        rel_path in PROTECTED_GOVERNANCE_FILES
+        or rel_path.startswith(PROTECTED_GOVERNANCE_PREFIXES)
+        or rel_path.casefold() in _CASE_FOLDED_PIN_FILES
+    )
 
 
 NEW_2_1_SLOP_KINDS: frozenset[str] = frozenset({"domain_impurity", "excessive_nesting_depth", "query_mutation_side_effect"})

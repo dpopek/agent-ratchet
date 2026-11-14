@@ -289,6 +289,13 @@ def test_guard_lock_is_protected_governance_path(tmp_path: Path) -> None:
     assert "Policy isolation violation" in res.stderr and LOCK_PATH in res.stderr
 
 
+def test_case_variants_of_pin_files_are_governance() -> None:
+    for variant in ("Guard.lock", "GUARD.LOCK", "Scripts/Guard", "scripts/GUARD"):
+        assert is_protected_governance_path(variant), variant
+    assert not is_protected_governance_path("Scripts/Audit/guard_manifest.json")
+    assert not is_protected_governance_path("guard.lock.bak")
+
+
 def test_malformed_staged_lock_is_analysis_error(tmp_path: Path) -> None:
     repo, _ = _consumer(tmp_path, {})
     _stage(repo, {LOCK_PATH: "not-a-sha\n"})
