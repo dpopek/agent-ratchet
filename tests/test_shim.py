@@ -55,7 +55,7 @@ def test_shim_passes_pinned_url_and_args(tmp_path: Path) -> None:
     (repo / "guard.lock").write_text(SHA + "\n")
     proc, argv = _run(repo, tmp_path, "scan", "--staged", rc=0)
     assert proc.returncode == 0 and proc.stderr == ""
-    assert argv == ["--from", f"{URL}@{SHA}", "guard-core", "--expect-sha", SHA, "scan", "--staged"]
+    assert argv == ["--no-config", "--from", f"{URL}@{SHA}", "guard-core", "--expect-sha", SHA, "scan", "--staged"]
     proc, _ = _run(repo, tmp_path, "scan", rc=7)
     assert proc.returncode == 7
 
@@ -73,7 +73,7 @@ def test_shim_accepts_lf_or_no_newline(tmp_path: Path, content: str) -> None:
     repo = _repo(tmp_path)
     (repo / "guard.lock").write_bytes(content.encode())
     proc, argv = _run(repo, tmp_path, "version")
-    assert proc.returncode == 0 and argv[4] == SHA
+    assert proc.returncode == 0 and argv[5] == SHA
 
 
 def test_shim_missing_lock_exits_3(tmp_path: Path) -> None:
@@ -109,7 +109,7 @@ def test_shim_lock_from_ref_reads_base_lock(tmp_path: Path) -> None:
     (repo / "guard.lock").write_text(SHA2 + "\n")  # worktree differs from the base
     proc, argv = _run(repo, tmp_path, "--lock-from", "main", "scan")
     assert proc.returncode == 0 and proc.stderr == ""
-    assert argv[:5] == ["--from", f"{URL}@{SHA}", "guard-core", "--expect-sha", SHA] and argv[5:] == ["scan"]
+    assert argv[:6] == ["--no-config", "--from", f"{URL}@{SHA}", "guard-core", "--expect-sha", SHA] and argv[6:] == ["scan"]
 
 
 def test_shim_lock_from_ref_bootstrap_falls_back_with_notice(tmp_path: Path) -> None:
@@ -120,7 +120,7 @@ def test_shim_lock_from_ref_bootstrap_falls_back_with_notice(tmp_path: Path) -> 
     (repo / "guard.lock").write_text(SHA2 + "\n")
     proc, argv = _run(repo, tmp_path, "--lock-from", "main", "scan")
     assert proc.returncode == 0 and proc.stderr == BOOTSTRAP + "\n"
-    assert argv[1] == f"{URL}@{SHA2}"
+    assert argv[2] == f"{URL}@{SHA2}"
 
 
 def test_shim_runs_from_subdirectory_with_spaces(tmp_path: Path) -> None:
@@ -137,10 +137,10 @@ def test_shim_exec_uses_uv_run_with(tmp_path: Path) -> None:
     (repo / "guard.lock").write_text(SHA + "\n")
     proc, argv = _run(repo, tmp_path, "exec", "--", "python", "-m", "pytest", rc=5)
     assert proc.returncode == 5
-    assert argv == ["run", "--no-project", "--with", f"{URL}@{SHA}", "--", "python", "-m", "pytest"]
+    assert argv == ["run", "--no-config", "--no-project", "--with", f"{URL}@{SHA}", "--", "python", "-m", "pytest"]
     _commit_lock(repo, SHA2 + "\n")
     _, argv = _run(repo, tmp_path, "exec", "--lock-from", "main", "--", "pytest")
-    assert argv[3] == f"{URL}@{SHA2}"
+    assert argv[4] == f"{URL}@{SHA2}"
 
 
 def test_shim_rejects_symlinked_worktree_lock(tmp_path: Path) -> None:
@@ -171,9 +171,9 @@ def test_shim_takes_lock_from_index_not_unstaged_worktree_edit(tmp_path: Path) -
     for args in (("scan", "--staged-only"), ("baseline-integrity", "--enforce-policy-isolation")):
         proc, argv = _run(repo, tmp_path, *args)
         assert proc.returncode == 0 and proc.stderr == ""
-        assert argv[:5] == ["--from", f"{URL}@{SHA}", "guard-core", "--expect-sha", SHA]
+        assert argv[:6] == ["--no-config", "--from", f"{URL}@{SHA}", "guard-core", "--expect-sha", SHA]
     _, argv = _run(repo, tmp_path, "exec", "--", "pytest")
-    assert argv[3] == f"{URL}@{SHA}"
+    assert argv[4] == f"{URL}@{SHA}"
 
 
 def test_shim_staged_lock_wins_over_head(tmp_path: Path) -> None:
@@ -183,7 +183,7 @@ def test_shim_staged_lock_wins_over_head(tmp_path: Path) -> None:
     _git(repo, "add", "guard.lock")
     (repo / "guard.lock").unlink()  # worktree copy is not needed when the index has the lock
     proc, argv = _run(repo, tmp_path, "scan", "--staged-only")
-    assert proc.returncode == 0 and argv[1] == f"{URL}@{SHA2}"
+    assert proc.returncode == 0 and argv[2] == f"{URL}@{SHA2}"
 
 
 def test_shim_rejects_symlink_lock_in_index(tmp_path: Path) -> None:

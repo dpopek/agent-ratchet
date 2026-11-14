@@ -118,6 +118,6 @@ fi
 command -v "$tool" >/dev/null 2>&1 || die "$tool not found on PATH; install uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
 
 if [ "$mode" = "exec" ]; then
-    exec uv run --no-project --with "$URL@$SHA" -- "$@"
+    exec uv run --no-config --no-project --with "$URL@$SHA" -- "$@"
 fi
-exec uvx --from "$URL@$SHA" guard-core --expect-sha "$SHA" "$@"
+exec uvx --no-config --from "$URL@$SHA" guard-core --expect-sha "$SHA" "$@"
