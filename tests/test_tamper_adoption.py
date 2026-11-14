@@ -7,8 +7,9 @@ import sys
 
 import pytest
 
-from guard_core import ai_slop_scanner
+from guard_core import ai_slop_scanner, lock_policy
 from guard_core.ai_slop_scanner import _evaluate_commit_range, _evaluate_transition, check_staged_test_tampering
+from guard_core.lock_policy import adopted_guard_files
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from guard_repo_harness import _commit_files, _git, _init_guard_repo, _json_bytes, _sha256_bytes
@@ -114,6 +115,18 @@ def test_malformed_manifest_flagged(tmp_path: Path, manifest: bytes) -> None:
     repo = _base_repo(tmp_path, manifest=manifest)
     _stage_adoption(repo, LISTED)
     assert _tamper_paths(check_staged_test_tampering(cwd=str(repo))) == {LISTED}
+
+
+def test_deeply_nested_manifest_yields_no_exemption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Python <= 3.14 raises RecursionError on deep nesting; 3.15 parses iteratively, so the raise is forced here."""
+    repo = _base_repo(tmp_path, manifest=b"[" * 100000 + b"]" * 100000)
+    _stage_adoption(repo, LISTED)
+
+    def _deep(_raw: bytes) -> object:
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+
+    monkeypatch.setattr(lock_policy.json, "loads", _deep)
+    assert adopted_guard_files("HEAD", "", [LISTED], cwd=str(repo)) == frozenset()
 
 
 def test_manifest_kept_flagged(tmp_path: Path) -> None:
