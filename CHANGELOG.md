@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.0.1
+
+### Fixed
+
+- The change that adopts `guard.lock` can delete the vendored guard files
+  listed in `scripts/audit/guard_manifest.json`, including their tests, when
+  each deleted file still matches its manifest SHA-256. Other test deletions
+  are judged as before.
+
 ## 3.0.0
 
 First release as an installable package.

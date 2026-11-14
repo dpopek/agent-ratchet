@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.metadata
 import json
 
-GUARD_VERSION: str = "3.0.0"
+GUARD_VERSION: str = "3.0.1"
 _DISTRIBUTION_NAME = "guard-core"
 
 
