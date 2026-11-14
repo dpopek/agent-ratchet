@@ -2,8 +2,8 @@
 
 Shared quality and refactoring guards for Python repositories: the AI-slop
 scanner and the test-baseline integrity check, extracted from the in-repo guard
-(2.3.3) that consumers used to vendor under `scripts/audit/`. Version 3.0.0
-ships it as one installable package with no runtime dependencies.
+(2.3.3) that consumers used to vendor under `scripts/audit/`. guard-core ships
+it as one installable package with no runtime dependencies.
 
 ## Commands
 
@@ -32,9 +32,21 @@ that commit (read from the PEP 610 `direct_url.json` record).
    "CI: judge a pull request with the trusted base" below.
 
 The shim reads `guard.lock` and runs
-`uvx --from git+https://github.com/dpopek/guard-core@SHA guard-core --expect-sha SHA ...`.
+`uvx --no-config --from git+https://github.com/dpopek/guard-core@SHA guard-core --expect-sha SHA ...`.
 `uv` must be on `PATH`. `scripts/guard exec -- <cmd...>` runs a command inside
-an environment that has the locked guard-core installed.
+an environment that has the locked guard-core installed
+(`uv run --no-config --no-project --with ...`). `--no-config` keeps a
+repository `uv.toml` or `[tool.uv]` table from redirecting the index or
+sources.
+
+Run the shim from the repository root. It finds `guard.lock` from the root
+wherever it is called, but the guard-core arguments, including relative paths
+and the default scan roots, are resolved against the current directory.
+
+If `uv` or `uvx` itself fails, for example because the pinned SHA cannot be
+fetched or the machine is offline, the shim exits with uv's own exit code. That
+code can be 1 or 2, the same as a guard result; it is not mapped to 3. The run
+still fails closed.
 
 The lock source is chosen as follows:
 
@@ -58,7 +70,9 @@ listed in the manifest, including their tests, without a Test Tamper Guard
 finding. A deleted file is exempt only when the base has the manifest and no
 `guard.lock`, the target has a valid `guard.lock` and no manifest, and the
 file's base blob matches its SHA-256 in the manifest. Any other deletion,
-including one in a malformed manifest, is judged as before.
+including one in a malformed manifest, is judged as before. Do not add
+look-alike files in the adoption change: git's rename detection (`-M`) can pair
+a deleted guard test with a similar new file, and a renamed test is not exempt.
 
 ## CI: judge a pull request with the trusted base
 
@@ -87,17 +101,29 @@ proven to install and run before it lands:
         scripts/guard scan --commit-range origin/main..HEAD
     fi
 
-Make both steps required checks. Only the adoption pull request, whose base has
-no `scripts/guard` yet, has to run its own shim; review it by hand.
+Make both steps required checks.
+
+On the adoption pull request the base has no `scripts/guard` yet, so
+`git show origin/main:scripts/guard` fails. That pull request bootstraps: run
+its own `scripts/guard` with `--lock-from origin/main`. The base has no
+`guard.lock` either, so the shim prints the bootstrap notice and uses the pull
+request's lock. Review the adoption pull request by hand.
 
 ## Changing the lock: `ALLOW_GUARD_LOCK_UPDATE`
 
 A change to `guard.lock` is a change to the code that every hook and CI job
 executes, so it is gated.
 
-- Locally, `ALLOW_GUARD_LOCK_UPDATE=1` permits one thing: a lock change between
-  HEAD and the index. It is for the repository operator only. Agents and
-  automation never set it, and it is never set in CI.
+- Locally, `ALLOW_GUARD_LOCK_UPDATE=1` permits a change of `guard.lock` or
+  `scripts/guard` in an uncommitted target: HEAD to the index, or the work
+  tree. It is for the repository operator only. Agents and automation never set
+  it, and it is never set in CI.
+- The variable never skips the remote checks. A changed lock must still be
+  peeled from an annotated `v3.*` release tag of guard-core and descend from
+  the previous locked SHA. A changed `scripts/guard` must equal
+  `consumer/guard` at the locked SHA.
+- A committed bump that is not yet on the trusted base is verified against
+  guard-core again on every pre-commit run.
 - In CI, a lock change is accepted only when the new SHA is peeled from an
   annotated `v3.*` release tag of guard-core and is a descendant of the
   previous locked SHA.
@@ -109,7 +135,14 @@ executes, so it is gated.
    push it. Record the SHA the tag peels to (`git rev-parse v3.x.y^{commit}`).
 3. In each consumer, open a lock-bump pull request that sets `guard.lock` to
    that SHA (and refreshes `scripts/guard` if `consumer/guard` changed).
-4. Before bumping, run the differential tool below against the consumer.
+4. Before bumping, run the differential tool below against the consumer. Once
+   a consumer has adopted `guard.lock` it no longer has `scripts/audit/*`, so
+   compare the old pin with the new one:
+   `--legacy-cmd "uvx --quiet --from git+https://github.com/dpopek/guard-core@OLD guard-core --expect-sha OLD"`,
+   where `OLD` is the SHA currently in the consumer's `guard.lock`.
+
+Never move or delete a `v3.*` tag and never rewrite `main`: every pinned SHA
+must stay fetchable.
 
 ## Differential acceptance tool
 
@@ -126,6 +159,9 @@ the installed package.
   modified. The temporary clone is always deleted. `--legacy-ref` may be a SHA or
   any ref name; it is resolved in the consumer itself (read-only) to a SHA, which
   is recorded in `summary.txt`.
+- The clone's `origin/*` refs mirror the consumer's remote-tracking refs as
+  last fetched, and the `--require-base-ref` case judges against them. Fetch
+  the consumer first.
 - Cases: `scan --staged-only`, `scan --commit-range HEAD~N..HEAD`,
   `baseline-integrity --enforce-policy-isolation`, and
   `baseline-integrity --require-base-ref --enforce-policy-isolation --commit-range HEAD~N..HEAD`.
