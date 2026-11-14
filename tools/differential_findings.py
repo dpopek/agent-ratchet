@@ -156,6 +156,9 @@ def main(argv: list[str] | None = None) -> int:
     if _inside_git_repo(opts.out):
         print(f"differential: refusing --out inside a git repository: {opts.out}", file=sys.stderr)
         return EXIT_USAGE
+    if opts.legacy_ref.startswith("-"):
+        print(f"differential: --legacy-ref must not start with '-': {opts.legacy_ref!r}", file=sys.stderr)
+        return EXIT_USAGE
     resolved = subprocess.run(["git", "-C", str(opts.consumer), "rev-parse", "--verify", "--quiet", f"{opts.legacy_ref}^{{commit}}"], capture_output=True, text=True)
     if resolved.returncode != 0:
         print(f"differential: --legacy-ref {opts.legacy_ref!r} does not resolve to a commit in {opts.consumer}", file=sys.stderr)
@@ -170,6 +173,10 @@ def main(argv: list[str] | None = None) -> int:
             mirrored = mirror_origin_refs(opts.consumer, clone)
         except subprocess.CalledProcessError as exc:
             print(f"differential: cannot materialise consumer: {(exc.stderr or '').strip()}", file=sys.stderr)
+            return EXIT_USAGE
+        base = f"HEAD~{opts.commits}"
+        if subprocess.run(["git", "-C", str(clone), "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"], capture_output=True).returncode != 0:
+            print(f"differential: {base} does not exist at {legacy_sha} (history too short); lower --commits", file=sys.stderr)
             return EXIT_USAGE
         opts.out.mkdir(parents=True, exist_ok=True)
         for stale in opts.out.glob("*.diff"):

@@ -233,3 +233,26 @@ def test_clone_mirrors_consumer_origin_refs(consumer, tmp_path, monkeypatch):
     summary = (out / "summary.txt").read_text()
     assert f"mirrored refs/remotes/origin/master: {tip}" in summary
     assert not (repo / "FETCH_HEAD").exists() and not (repo / ".git" / "FETCH_HEAD").exists()
+
+
+def test_range_beyond_history_is_usage_error_and_clone_removed(consumer, tmp_path):
+    repo, sha = consumer
+    stub = _stub_cmd(tmp_path, "stub.py")
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    out = tmp_path / "out"
+    proc = _run(repo, sha, out, "--legacy-cmd", stub, "--new-cmd", stub, "--commits", "5", tmpdir=scratch)
+    assert proc.returncode == 2
+    assert "HEAD~5" in proc.stderr and "history" in proc.stderr
+    assert not (out / "summary.txt").exists()
+    assert list(scratch.iterdir()) == []
+
+
+@pytest.mark.parametrize("ref", ["-x", "--help"])
+def test_legacy_ref_with_leading_dash_is_usage_error(consumer, tmp_path, ref):
+    repo, sha = consumer
+    stub = _stub_cmd(tmp_path, "stub.py")
+    argv = [sys.executable, str(TOOL), "--consumer", str(repo), f"--legacy-ref={ref}", "--guard-sha", sha, "--commits", "1", "--out", str(tmp_path / "out"), "--legacy-cmd", stub, "--new-cmd", stub]
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    assert proc.returncode == 2
+    assert "--legacy-ref" in proc.stderr and "'-'" in proc.stderr
