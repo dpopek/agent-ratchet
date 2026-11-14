@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.0.3
+
+### Fixed
+
+- Removing a custom (non-default) entry from `import_roots` in
+  `audit_guard_config.json` is a monotonicity violation; it narrowed
+  import-cycle detection unnoticed.
+
+### Changed
+
+- A plain file `scan` prints a note on stderr that it runs text rules and
+  syntax checks only; the diff modes run the full checks.
+- `--help` of `scan` and `baseline-integrity` no longer shows a stale version.
+
 ## 3.0.2
 
 ### Fixed
