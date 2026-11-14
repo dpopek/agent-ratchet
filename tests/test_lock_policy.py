@@ -139,20 +139,21 @@ def test_local_change_without_env_rejected(tmp_path: Path, remote: Remote) -> No
 
 def test_local_change_with_env_and_tag_ok(tmp_path: Path, remote: Remote, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, _ = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
-    _stage(repo, {LOCK_PATH: remote.c2 + "\n"})
+    _stage(repo, {LOCK_PATH: remote.c2 + "\n", SHIM_PATH: _shim("c2")})
     monkeypatch.setenv("ALLOW_GUARD_LOCK_UPDATE", "1")
     assert verify_lock_transition("HEAD", "", cwd=str(repo), local=True, repo_url=remote.url) == []
     _stage(repo, {LOCK_PATH: remote.c3 + "\n"})
     assert verify_lock_transition("HEAD", "", cwd=str(repo), local=True, repo_url=remote.url) != []
 
 
-def _committed_bump(tmp_path: Path, old: str, new: str) -> tuple[Path, str, str]:
+def _committed_bump(tmp_path: Path, old: str, new: str, new_shim: str = "c1") -> tuple[Path, str, str]:
+    """Lock bump that also syncs scripts/guard to consumer/guard at the new SHA (tag ``new_shim``)."""
     repo, base = _consumer(tmp_path, {LOCK_PATH: old + "\n", SHIM_PATH: _shim("c1")})
-    return repo, base, _commit_files(repo, "chore: bump guard", {LOCK_PATH: new + "\n"})
+    return repo, base, _commit_files(repo, "chore: bump guard", {LOCK_PATH: new + "\n", SHIM_PATH: _shim(new_shim)})
 
 
 def test_ci_descendant_annotated_tag_ok(tmp_path: Path, remote: Remote) -> None:
-    repo, base, head = _committed_bump(tmp_path, remote.c1, remote.c2)
+    repo, base, head = _committed_bump(tmp_path, remote.c1, remote.c2, "c2")
     assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=remote.url) == []
     assert released_descendant_error(remote.c1, remote.c2, repo_url=remote.url) is None
     assert released_descendant_error(None, remote.c1, repo_url=remote.url) is None
@@ -165,7 +166,7 @@ def test_downgrade_rejected(tmp_path: Path, remote: Remote) -> None:
 
 
 def test_lightweight_tag_rejected(tmp_path: Path, remote: Remote) -> None:
-    repo, base, head = _committed_bump(tmp_path, remote.c2, remote.c3)
+    repo, base, head = _committed_bump(tmp_path, remote.c2, remote.c3, "c3")
     errs = verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=remote.url)
     assert len(errs) == 1 and "annotated" in errs[0]
 
@@ -173,7 +174,7 @@ def test_lightweight_tag_rejected(tmp_path: Path, remote: Remote) -> None:
 def test_lock_sha_absent_from_remote_rejected(tmp_path: Path, remote: Remote) -> None:
     repo, base, head = _committed_bump(tmp_path, remote.c1, ABSENT_SHA)
     errs = verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=remote.url)
-    assert len(errs) == 1 and ABSENT_SHA in errs[0]
+    assert errs and f"{ABSENT_SHA} is not a commit in guard-core" in errs[0]
     unreachable = (tmp_path / "no-such-remote.git").as_uri()
     reason = released_descendant_error(remote.c1, remote.c2, repo_url=unreachable)
     assert isinstance(reason, str) and reason
@@ -242,6 +243,15 @@ def test_unreadable_canonical_shim_reported_distinctly(tmp_path: Path, remote: R
     assert errs == [f"cannot read consumer/guard at guard-core {remote.c2}: fatal: could not fetch blob"]
 
 
+def test_lock_only_bump_requires_shim_to_match_new_sha(tmp_path: Path, remote: Remote) -> None:
+    repo, base = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
+    stale = _commit_files(repo, "chore: bump guard only", {LOCK_PATH: remote.c2 + "\n"})
+    mismatch = f"scripts/guard does not match consumer/guard at guard-core {remote.c2}"
+    assert verify_lock_transition(base, stale, cwd=str(repo), local=False, repo_url=remote.url) == [mismatch]
+    synced = _commit_files(repo, "build: sync shim", {SHIM_PATH: _shim("c2")})
+    assert verify_lock_transition(base, synced, cwd=str(repo), local=False, repo_url=remote.url) == []
+
+
 def test_shim_without_lock_rejected(tmp_path: Path, remote: Remote) -> None:
     repo, _ = _consumer(tmp_path, {})
     _stage(repo, {SHIM_PATH: _shim("c1")})
@@ -250,11 +260,11 @@ def test_shim_without_lock_rejected(tmp_path: Path, remote: Remote) -> None:
 
 
 def test_locally_committed_bump_does_not_block_later_commits(tmp_path: Path, remote: Remote) -> None:
-    repo, base, _ = _committed_bump(tmp_path, remote.c1, remote.c2)
+    repo, base, _ = _committed_bump(tmp_path, remote.c1, remote.c2, "c2")
     _git(repo, "update-ref", "refs/remotes/origin/main", base)
     _stage(repo, {"src/app.py": "A = 3\n"})
     assert staged_lock_errors(str(repo), repo_url=remote.url) == []
-    _stage(repo, {LOCK_PATH: remote.c1 + "\n"})
+    _stage(repo, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
     assert staged_lock_errors(str(repo), repo_url=remote.url) == [ENV_MSG]
 
 

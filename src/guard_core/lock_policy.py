@@ -230,7 +230,7 @@ def verify_lock_transition(
         return [ENV_REQUIRED_MSG]
     if target_lock is None:
         return [_shim_mismatch_msg(None)]
-    return list(_remote_errors(repo_url, base_lock, target_lock, lock_changed, target_shim, shim_changed))
+    return list(_remote_errors(repo_url, base_lock, target_lock, lock_changed, target_shim, lock_changed or shim_changed))
 
 
 def _trusted_fork_point(cwd: str | None) -> str | None:
