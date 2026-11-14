@@ -204,3 +204,32 @@ def test_unresolvable_legacy_ref_is_usage_error(consumer, tmp_path):
     proc = _run(repo, "no-such-ref", tmp_path / "out", "--legacy-cmd", stub, "--new-cmd", stub)
     assert proc.returncode == 2
     assert "no-such-ref" in proc.stderr
+
+
+def test_default_new_command_is_quiet_before_from():
+    opts = diff_tool.parse_args(["--consumer", "c", "--legacy-ref", "r", "--guard-sha", "a" * 40, "--out", "o"])
+    argv = diff_tool._command("new", "scan", ["--staged-only"], opts, Path("/nowhere"))
+    assert argv[:2] == ["uvx", "--quiet"]
+    assert argv.index("--quiet") < argv.index("--from")
+
+
+def test_clone_mirrors_consumer_origin_refs(consumer, tmp_path, monkeypatch):
+    repo, sha = consumer
+    older = _git(repo, "rev-parse", "HEAD~1")
+    _git(repo, "branch", "master", older)
+    # Remote-tracking tip that no branch reaches, so the plain clone does not carry its objects.
+    tree = _git(repo, "rev-parse", "HEAD^{tree}")
+    tip = _git(repo, "commit-tree", tree, "-p", sha, "-m", "remote only")
+    _git(repo, "update-ref", "refs/remotes/origin/master", tip)
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+    heads = tmp_path / "heads.txt"
+    monkeypatch.setenv("STUB_HEAD_FILE", str(heads))
+    body = "import subprocess\nopen(os.environ['STUB_HEAD_FILE'], 'a').write(subprocess.run(['git', 'rev-parse', 'origin/master', 'origin/HEAD'], capture_output=True, text=True).stdout)\n"
+    stub = _stub_cmd(tmp_path, "origin_stub.py", STUB.replace('print("cwd', body + 'print("cwd', 1))
+    out = tmp_path / "out"
+    proc = _run(repo, sha, out, "--legacy-cmd", stub, "--new-cmd", stub)
+    assert proc.returncode == 0, proc.stderr
+    assert set(heads.read_text().split()) == {tip}
+    summary = (out / "summary.txt").read_text()
+    assert f"mirrored refs/remotes/origin/master: {tip}" in summary
+    assert not (repo / "FETCH_HEAD").exists() and not (repo / ".git" / "FETCH_HEAD").exists()

@@ -59,7 +59,7 @@ def _command(side: str, sub: str, args: list[str], opts: argparse.Namespace, clo
         if not (clone / script).is_file():
             raise CaseError(f"legacy script missing at {opts.legacy_ref}: {script}")
         return ["python3", script, *args]
-    return ["uvx", "--from", opts.new_from, "guard-core", "--expect-sha", opts.guard_sha, sub, *args]
+    return ["uvx", "--quiet", "--from", opts.new_from, "guard-core", "--expect-sha", opts.guard_sha, sub, *args]
 
 
 def run_side(side: str, sub: str, args: list[str], opts: argparse.Namespace, clone: Path) -> tuple[int, str, str]:
@@ -105,6 +105,35 @@ def _git(*args: str) -> None:
     subprocess.run(["git", *args], check=True, capture_output=True, text=True)
 
 
+def _out(*args: str) -> str:
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def mirror_origin_refs(consumer: Path, clone: Path) -> list[str]:
+    """Make the clone's refs/remotes/origin/* equal the consumer's (read-only on the consumer)."""
+    old = _out("-C", str(clone), "for-each-ref", "--format=%(refname)", "refs/remotes/origin")
+    subprocess.run(["git", "-C", str(clone), "symbolic-ref", "--delete", "-q", "refs/remotes/origin/HEAD"], capture_output=True)
+    for ref in old.splitlines():
+        if ref != "refs/remotes/origin/HEAD":
+            _git("-C", str(clone), "update-ref", "-d", ref)
+    listing = _out("-C", str(consumer), "for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes/origin")
+    head = subprocess.run(["git", "-C", str(consumer), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"], capture_output=True, text=True)
+    mirrored = []
+    for line in listing.splitlines():
+        ref, sha = line.split()
+        if ref == "refs/remotes/origin/HEAD" and head.returncode == 0:
+            continue
+        if subprocess.run(["git", "-C", str(clone), "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True).returncode != 0:
+            _git("-C", str(clone), "fetch", "--quiet", str(consumer), ref)
+        _git("-C", str(clone), "update-ref", ref, sha)
+        mirrored.append(f"mirrored {ref}: {sha}")
+    if head.returncode == 0:
+        target = head.stdout.strip()
+        _git("-C", str(clone), "symbolic-ref", "refs/remotes/origin/HEAD", target)
+        mirrored.append(f"mirrored refs/remotes/origin/HEAD -> {target}")
+    return mirrored
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--consumer", required=True, type=Path, help="Path of the consumer git checkout (never modified)")
@@ -138,13 +167,14 @@ def main(argv: list[str] | None = None) -> int:
         try:
             _git("clone", "--quiet", "--no-hardlinks", str(opts.consumer), str(clone))
             _git("-C", str(clone), "checkout", "--quiet", "--detach", legacy_sha)
+            mirrored = mirror_origin_refs(opts.consumer, clone)
         except subprocess.CalledProcessError as exc:
-            print(f"differential: cannot materialise consumer: {exc.stderr.strip()}", file=sys.stderr)
+            print(f"differential: cannot materialise consumer: {(exc.stderr or '').strip()}", file=sys.stderr)
             return EXIT_USAGE
         opts.out.mkdir(parents=True, exist_ok=True)
         for stale in opts.out.glob("*.diff"):
             stale.unlink()
-        lines, failed = [f"legacy-ref: {legacy_sha}"], 0
+        lines, failed = [f"legacy-ref: {legacy_sha}", *mirrored], 0
         for name, sub, args in build_cases(opts.commits, opts.extra_scan_args):
             same, diff = run_case(sub, args, opts, clone)
             lines.append(f"{'IDENTICAL' if same else 'DIFFERENT'} {name}: {sub} {' '.join(args)}")
