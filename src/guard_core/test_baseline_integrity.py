@@ -15,7 +15,7 @@ from typing import Any
 from guard_core.git_guard_io import (
     APP_CODE_PREFIXES,
     PROTECTED_GOVERNANCE_FILES, PROTECTED_GOVERNANCE_PREFIXES,
-    GuardAnalysisError, default_remote_refs, diff_name_status, git_cat_bytes, head_commit_exists,
+    GuardAnalysisError, diff_name_status, git_cat_bytes, head_commit_exists, trusted_base_candidates,
     is_protected_governance_path as is_protected_governance_path,
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
@@ -148,13 +148,7 @@ def _check_merge_commit_policy_isolation(commit_sha: str, parents: list[str], cw
 def resolve_base_ref(explicit_ref: str | None = None, require: bool = False) -> str | None:
     if explicit_ref:
         return verify_commit_ref(explicit_ref)
-    ci_target = os.environ.get("CI_MERGE_REQUEST_TARGET_BRANCH_NAME")
-    candidates: list[str] = [f"origin/{ci_target}"] if ci_target else []
-    before_sha = os.environ.get("CI_COMMIT_BEFORE_SHA", "")
-    if before_sha and set(before_sha) != {"0"}:
-        candidates.append(before_sha)
-    candidates.extend([*default_remote_refs(), "HEAD"])
-    for ref in candidates:
+    for ref in (*trusted_base_candidates(), "HEAD"):
         try:
             return verify_commit_ref(ref)
         except BaselineAnalysisError:

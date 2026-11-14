@@ -259,6 +259,16 @@ def default_remote_refs(cwd: str | None = None) -> list[str]:
     return sorted(present, key=lambda ref: (ref != declared, _distance_to_head(ref, cwd), DEFAULT_BRANCH_CANDIDATES.index(ref)))
 
 
+def trusted_base_candidates(cwd: str | None = None) -> list[str]:
+    """CI-declared bases (MR target branch, push-before SHA), then the default remote refs; HEAD is never trusted."""
+    ci_target = os.environ.get("CI_MERGE_REQUEST_TARGET_BRANCH_NAME")
+    candidates: list[str] = [f"origin/{ci_target}"] if ci_target else []
+    before_sha = os.environ.get("CI_COMMIT_BEFORE_SHA", "")
+    if before_sha and set(before_sha) != {"0"}:
+        candidates.append(before_sha)
+    return [*candidates, *default_remote_refs(cwd)]
+
+
 def resolve_trusted_base_ref(cwd: str | None = None) -> str | None:
     for ref in (*default_remote_refs(cwd), "HEAD"):
         if subprocess.run(["git", "rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:

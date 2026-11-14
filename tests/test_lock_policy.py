@@ -307,3 +307,130 @@ def test_baseline_integrity_help_runs_argparse_outside_a_repo(tmp_path: Path) ->
     res = _run_baseline_guard(tmp_path, "--help")
     assert res.returncode == 0, res.stderr
     assert "--require-base-ref" in res.stdout
+
+
+# --- Fix round 1 -------------------------------------------------------------
+
+
+def _detached_clone(tmp_path: Path, files: dict[str, str]) -> tuple[Path, str]:
+    origin, base = _consumer(tmp_path / "origin", files)
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True)
+    _git(clone, "config", "core.hooksPath", "/dev/null")
+    _git(clone, "remote", "remove", "origin")
+    return clone, base
+
+
+def test_require_base_ref_without_pin_keeps_2_3_3_behaviour(tmp_path: Path) -> None:
+    clone, _ = _detached_clone(tmp_path, {})
+    assert staged_lock_errors(str(clone), require_base_ref=True) == []
+    for args in (("--require-base-ref",), ("--require-base-ref", "--staged-only")):
+        res = _run_baseline_guard(clone, *args)
+        assert res.returncode == 0, res.stderr + res.stdout
+        assert LOCK_PATH not in res.stderr
+    _stage(clone, {SHIM_PATH: _shim("c1")})
+    with pytest.raises(GuardAnalysisError):
+        staged_lock_errors(str(clone), require_base_ref=True)
+
+
+def test_trusted_base_follows_ci_candidates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clone, base = _detached_clone(tmp_path, {LOCK_PATH: "1" * 40 + "\n"})
+    _git(clone, "update-ref", "refs/remotes/origin/release", base)
+    res = _run_baseline_guard(clone, "--require-base-ref", extra_env={"CI_MERGE_REQUEST_TARGET_BRANCH_NAME": "release"})
+    assert res.returncode == 0, res.stderr + res.stdout
+    _git(clone, "update-ref", "-d", "refs/remotes/origin/release")
+    res = _run_baseline_guard(clone, "--require-base-ref", extra_env={"CI_COMMIT_BEFORE_SHA": base})
+    assert res.returncode == 0, res.stderr + res.stdout
+    monkeypatch.setenv("CI_COMMIT_BEFORE_SHA", base)
+    assert staged_lock_errors(str(clone), require_base_ref=True) == []
+
+
+def _symlink(repo: Path, rel: str, target: str) -> None:
+    path = repo / rel
+    if path.exists() or path.is_symlink():
+        path.unlink()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to(target)
+
+
+def test_symlinked_lock_in_commit_range_rejected(tmp_path: Path, remote: Remote) -> None:
+    repo, base = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
+    _symlink(repo, LOCK_PATH, remote.c1)
+    _write_files(repo, {remote.c1: remote.c3 + "\n"})
+    _git(repo, "add", LOCK_PATH, remote.c1)
+    _git(repo, "commit", "-q", "-m", "chore: link lock")
+    msg = "guard.lock must be a regular file (mode 100644), not mode 120000"
+    assert verify_lock_transition(base, "HEAD", cwd=str(repo), local=False, repo_url=remote.url) == [msg]
+    res = _run_scanner(repo, "--commit-range", f"{base}..HEAD")
+    assert res.returncode == 1 and msg in res.stderr
+
+
+def test_symlinked_lock_in_index_rejected(tmp_path: Path, remote: Remote) -> None:
+    repo, _ = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
+    _symlink(repo, LOCK_PATH, remote.c1)
+    _write_files(repo, {remote.c1: remote.c3 + "\n"})
+    _git(repo, "add", LOCK_PATH, remote.c1)
+    msg = "guard.lock must be a regular file (mode 100644), not mode 120000"
+    for local in (True, False):
+        assert verify_lock_transition("HEAD", "", cwd=str(repo), local=local, repo_url=remote.url) == [msg]
+    assert verify_lock_transition("HEAD", "WORKTREE", cwd=str(repo), local=True, repo_url=remote.url) == [msg]
+    res = _run_scanner(repo, "--staged-only")
+    assert res.returncode == 2 and msg in res.stderr
+
+
+def test_symlinked_shim_rejected(tmp_path: Path, remote: Remote) -> None:
+    repo, base = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
+    _write_files(repo, {"tools/guard": _shim("c1")})
+    _symlink(repo, SHIM_PATH, "../tools/guard")
+    _git(repo, "add", SHIM_PATH, "tools/guard")
+    msg = "scripts/guard must be a regular file (mode 100644 or 100755), not mode 120000"
+    assert verify_lock_transition("HEAD", "", cwd=str(repo), local=False, repo_url=remote.url) == [msg]
+    head = _commit_files(repo, "chore: link shim", {})
+    assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=remote.url) == [msg]
+
+
+def test_mode_only_change_counts_as_change(tmp_path: Path, remote: Remote) -> None:
+    repo, base = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
+    _git(repo, "update-index", "--chmod=+x", SHIM_PATH)
+    assert verify_lock_transition("HEAD", "", cwd=str(repo), local=True, repo_url=remote.url) == [ENV_MSG]
+    head = _commit_files(repo, "chore: chmod shim", {})
+    unreachable = (tmp_path / "missing.git").as_uri()
+    assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=unreachable) != []
+    assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=remote.url) == []
+    _git(repo, "update-index", "--chmod=+x", LOCK_PATH)
+    assert verify_lock_transition("HEAD", "", cwd=str(repo), local=False, repo_url=remote.url) == [
+        "guard.lock must be a regular file (mode 100644), not mode 100755"
+    ]
+
+
+def test_remote_checks_ignore_inherited_git_env(tmp_path: Path, remote: Remote, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, _ = _consumer(tmp_path, {})
+    _git(repo, "fetch", "-q", remote.url, remote.c3)
+    _git(repo, "tag", "-a", "v3.9.9", "-m", "local", remote.c3)
+    bogus = (tmp_path / "bogus.git").as_uri()
+    monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{bogus}.insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", remote.url)
+    lock_policy._remote_errors.cache_clear()
+    try:
+        assert released_descendant_error(remote.c1, remote.c2, repo_url=remote.url) is None
+        reason = released_descendant_error(remote.c2, remote.c3, repo_url=remote.url)
+        assert reason is not None and "annotated" in reason
+    finally:
+        lock_policy._remote_errors.cache_clear()
+
+
+def test_staged_check_uses_merge_base_with_trusted_ref(tmp_path: Path, remote: Remote, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, base = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
+    bumped = _commit_files(repo, "chore: bump guard", {LOCK_PATH: remote.c2 + "\n", SHIM_PATH: _shim("c2")})
+    _git(repo, "update-ref", "refs/remotes/origin/main", bumped)
+    _git(repo, "reset", "-q", "--hard", base)
+    _stage(repo, {"src/app.py": "A = 3\n"})
+
+    def _no_clone(*_args: object) -> tuple[str | None, str | None]:
+        raise AssertionError("no guard-core clone expected for an unchanged lock")
+
+    monkeypatch.setattr(lock_policy, "_clone", _no_clone)
+    lock_policy._remote_errors.cache_clear()
+    assert staged_lock_errors(str(repo), repo_url=remote.url) == []

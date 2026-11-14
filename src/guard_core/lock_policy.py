@@ -5,12 +5,14 @@ from __future__ import annotations
 
 from functools import lru_cache
 import os
+from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tempfile
 
-from guard_core.git_guard_io import GuardAnalysisError, _read_ref_file_bytes, default_remote_refs
+from guard_core.git_guard_io import GuardAnalysisError, _git_out, _read_ref_file_bytes, head_commit_exists, trusted_base_candidates
 
 GUARD_CORE_URL: str = "https://github.com/dpopek/guard-core"
 LOCK_PATH = "guard.lock"
@@ -23,7 +25,8 @@ RELEASE_TAG_PATTERN = "refs/tags/v3.*"
 _LOCK_RE = re.compile(rb"\A[0-9a-f]{40}\n?\Z")
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _GIT_TIMEOUT_S = 120
-_GIT_ENV = {"LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0"}
+_ISOLATED_GIT_ENV = {"LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+_ALLOWED_MODES: dict[str, tuple[str, ...]] = {LOCK_PATH: ("100644",), SHIM_PATH: ("100644", "100755")}
 
 ENV_REQUIRED_MSG = f"{LOCK_PATH}/{SHIM_PATH} change requires {LOCK_UPDATE_ENV}=1"
 LOCK_DELETED_MSG = f"{LOCK_PATH} was deleted"
@@ -36,6 +39,10 @@ def _shim_mismatch_msg(sha: str | None) -> str:
     return f"{SHIM_PATH} does not match {CANONICAL_SHIM_PATH} at guard-core {sha or '(no guard.lock)'}"
 
 
+def _mode_msg(rel_path: str, mode: str) -> str:
+    return f"{rel_path} must be a regular file (mode {' or '.join(_ALLOWED_MODES[rel_path])}), not mode {mode}"
+
+
 def lock_check_is_local(target_prefix: str | None) -> bool:
     """The operator env gate applies to uncommitted targets (index or worktree); committed history is judged by the remote alone."""
     return not target_prefix or target_prefix == "WORKTREE"
@@ -43,6 +50,38 @@ def lock_check_is_local(target_prefix: str | None) -> bool:
 
 def _snapshot_bytes(ref_prefix: str | None, rel_path: str, cwd: str | None) -> bytes | None:
     return None if ref_prefix is None else _read_ref_file_bytes(ref_prefix, rel_path, cwd=cwd)
+
+
+def _worktree_mode(path: Path) -> str | None:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(st.st_mode):
+        return "120000"
+    if stat.S_ISREG(st.st_mode):
+        return "100755" if st.st_mode & 0o111 else "100644"
+    return "040000" if stat.S_ISDIR(st.st_mode) else oct(stat.S_IFMT(st.st_mode))[2:]
+
+
+def entry_mode(ref_prefix: str | None, rel_path: str, cwd: str | None = None) -> str | None:
+    """Git tree-entry mode of ``rel_path`` in a commit, the index (``""``) or the worktree; None when absent."""
+    if ref_prefix is None or (ref_prefix == "HEAD" and not head_commit_exists(cwd)):
+        return None
+    if ref_prefix == "WORKTREE":
+        return _worktree_mode((Path(cwd) if cwd else Path(".")) / rel_path)
+    if ref_prefix == "":
+        cmd = ["git", "ls-files", "-s", "-z", "--", f":(top,literal){rel_path}"]
+    else:
+        cmd = ["git", "ls-tree", "-z", "--full-tree", ref_prefix, "--", rel_path]
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True)
+    if res.returncode != 0:
+        raise GuardAnalysisError(f"Cannot read the tree entry of {rel_path} at {ref_prefix or 'INDEX'}: {res.stderr.decode('utf-8', errors='replace').strip()}")
+    for record in res.stdout.split(b"\0"):
+        meta, _, path = record.partition(b"\t")
+        if meta:
+            return meta.split(b" ", 1)[0].decode("ascii") if path.decode("utf-8", errors="replace") == rel_path else "040000"
+    return None
 
 
 def read_lock(ref_prefix: str, cwd: str | None = None) -> str | None:
@@ -54,15 +93,21 @@ def read_lock(ref_prefix: str, cwd: str | None = None) -> str | None:
     return raw[:40].decode("ascii")
 
 
-def _git(args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, timeout=_GIT_TIMEOUT_S, env={**os.environ, **_GIT_ENV})
+def _isolated_env() -> dict[str, str]:
+    """Environment for guard-core clone calls: no inherited GIT_* (hook GIT_DIR, GIT_CONFIG_* insteadOf), no system/global config."""
+    return {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")}, **_ISOLATED_GIT_ENV}
+
+
+def _git(args: list[str], git_dir: str | None = None, cwd: str | None = None) -> subprocess.CompletedProcess[bytes]:
+    prefix = [f"--git-dir={git_dir}"] if git_dir else []
+    return subprocess.run(["git", *prefix, *args], cwd=cwd or git_dir, capture_output=True, timeout=_GIT_TIMEOUT_S, env=_isolated_env())
 
 
 def _clone(repo_url: str, dest: str) -> tuple[str | None, str | None]:
     """Bare clone, partial when the server allows it, else full; returns (git_dir, None) or (None, failure reason)."""
     reason = ""
     for name, extra in (("partial.git", ["--filter=blob:none"]), ("full.git", [])):
-        res = _git(["clone", "--bare", "--quiet", *extra, "--", repo_url, f"{dest}/{name}"])
+        res = _git(["clone", "--bare", "--quiet", *extra, "--", repo_url, f"{dest}/{name}"], cwd=dest)
         if res.returncode == 0:
             return f"{dest}/{name}", None
         reason = res.stderr.decode("utf-8", errors="replace").strip()
@@ -70,26 +115,26 @@ def _clone(repo_url: str, dest: str) -> tuple[str | None, str | None]:
 
 
 def _release_error(git_dir: str, old_sha: str | None, new_sha: str) -> str | None:
-    if _git(["cat-file", "-e", f"{new_sha}^{{commit}}"], cwd=git_dir).returncode != 0:
+    if _git(["cat-file", "-e", f"{new_sha}^{{commit}}"], git_dir=git_dir).returncode != 0:
         return f"{LOCK_PATH} SHA {new_sha} is not a commit in guard-core"
     if old_sha is not None:
-        rc = _git(["merge-base", "--is-ancestor", old_sha, new_sha], cwd=git_dir).returncode
+        rc = _git(["merge-base", "--is-ancestor", old_sha, new_sha], git_dir=git_dir).returncode
         if rc != 0:
             return f"{LOCK_PATH} {new_sha} is not a descendant of {old_sha} in guard-core"
-    refs = _git(["for-each-ref", "--format=%(refname)", RELEASE_TAG_PATTERN], cwd=git_dir)
+    refs = _git(["for-each-ref", "--format=%(refname)", RELEASE_TAG_PATTERN], git_dir=git_dir)
     if refs.returncode != 0:
         return f"cannot list guard-core release tags: {refs.stderr.decode('utf-8', errors='replace').strip()}"
     for ref in refs.stdout.decode("utf-8", errors="replace").split():
-        if _git(["cat-file", "-t", ref], cwd=git_dir).stdout.strip() != b"tag":
+        if _git(["cat-file", "-t", ref], git_dir=git_dir).stdout.strip() != b"tag":
             continue
-        peeled = _git(["rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd=git_dir)
+        peeled = _git(["rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], git_dir=git_dir)
         if peeled.returncode == 0 and peeled.stdout.strip().decode("ascii", errors="replace") == new_sha:
             return None
     return f"{LOCK_PATH} {new_sha} carries no annotated v3.x.y release tag in guard-core"
 
 
 def _shim_error(git_dir: str, sha: str, shim: bytes | None) -> str | None:
-    canonical = _git(["cat-file", "blob", f"{sha}:{CANONICAL_SHIM_PATH}"], cwd=git_dir)
+    canonical = _git(["cat-file", "blob", f"{sha}:{CANONICAL_SHIM_PATH}"], git_dir=git_dir)
     if canonical.returncode != 0 or shim is None or canonical.stdout != shim:
         return _shim_mismatch_msg(sha)
     return None
@@ -127,11 +172,19 @@ def _legacy_manifest_errors(base_manifest: bytes | None, target_manifest: bytes 
 def verify_lock_transition(
     base_prefix: str | None, target_prefix: str, cwd: str | None = None, *, local: bool, repo_url: str = GUARD_CORE_URL
 ) -> list[str]:
-    base_lock = read_lock(base_prefix, cwd=cwd) if base_prefix is not None else None
+    target_modes = {p: entry_mode(target_prefix, p, cwd) for p in _ALLOWED_MODES}
+    for rel_path, mode in target_modes.items():
+        if mode is not None and mode not in _ALLOWED_MODES[rel_path]:
+            return [_mode_msg(rel_path, mode)]
+    base_modes = {p: entry_mode(base_prefix, p, cwd) for p in _ALLOWED_MODES}
+    base_valid = {p: m in _ALLOWED_MODES[p] for p, m in base_modes.items()}
+    base_lock = read_lock(base_prefix, cwd=cwd) if base_prefix is not None and base_valid[LOCK_PATH] else None
     target_lock = read_lock(target_prefix, cwd=cwd)
-    base_shim, target_shim = _snapshot_bytes(base_prefix, SHIM_PATH, cwd), _snapshot_bytes(target_prefix, SHIM_PATH, cwd)
+    base_shim = _snapshot_bytes(base_prefix, SHIM_PATH, cwd) if base_valid[SHIM_PATH] else None
+    target_shim = _snapshot_bytes(target_prefix, SHIM_PATH, cwd)
     target_manifest = _snapshot_bytes(target_prefix, LEGACY_MANIFEST_PATH, cwd)
-    lock_changed, shim_changed = base_lock != target_lock, base_shim != target_shim
+    lock_changed = base_lock != target_lock or base_modes[LOCK_PATH] != target_modes[LOCK_PATH]
+    shim_changed = base_shim != target_shim or base_modes[SHIM_PATH] != target_modes[SHIM_PATH]
     if base_lock is not None and target_lock is None:
         return [LOCK_DELETED_MSG]
     if base_lock is None and target_lock is not None and target_manifest is not None:
@@ -149,12 +202,25 @@ def verify_lock_transition(
     return list(_remote_errors(repo_url, base_lock, target_lock, lock_changed, target_shim, shim_changed))
 
 
+def _trusted_fork_point(cwd: str | None) -> str | None:
+    """merge-base(trusted, HEAD) for the first resolvable CI/default-branch candidate (as ``resolve_base_ref``, minus HEAD)."""
+    for ref in trusted_base_candidates(cwd):
+        sha = _git_out(["rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], cwd)
+        if sha:
+            return (_git_out(["merge-base", sha, "HEAD"], cwd) or sha) if head_commit_exists(cwd) else sha
+    return None
+
+
+def _pin_present(cwd: str | None) -> bool:
+    return any(entry_mode(ref, p, cwd) is not None for ref in ("", "HEAD") for p in _ALLOWED_MODES)
+
+
 def staged_lock_errors(cwd: str | None = None, *, require_base_ref: bool = False, repo_url: str = GUARD_CORE_URL) -> list[str]:
-    """Pre-commit check of the index: trusted base -> index by the remote alone, then HEAD -> index with the operator env gate."""
-    trusted = default_remote_refs(cwd)
-    if not trusted and require_base_ref:
-        raise GuardAnalysisError(f"--require-base-ref: no origin/<default> ref to judge {LOCK_PATH} against")
-    errs = verify_lock_transition(trusted[0], "", cwd=cwd, local=False, repo_url=repo_url) if trusted else []
+    """Pre-commit check of the index: fork point with the trusted base -> index by the remote alone, then HEAD -> index with the env gate."""
+    base = _trusted_fork_point(cwd)
+    if base is None and require_base_ref and _pin_present(cwd):
+        raise GuardAnalysisError(f"--require-base-ref: no trusted base ref to judge {LOCK_PATH}/{SHIM_PATH} against")
+    errs = verify_lock_transition(base, "", cwd=cwd, local=False, repo_url=repo_url) if base else []
     return errs or verify_lock_transition("HEAD", "", cwd=cwd, local=True, repo_url=repo_url)
 
 
