@@ -50,6 +50,21 @@ def test_expect_sha_match_proceeds(monkeypatch, capsys) -> None:
     assert capsys.readouterr().out == "a" * 40 + "\n"
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--expect-sha", "a" * 40, "version", "--expect-sha", "b" * 40],
+        ["--expect-sha", "a" * 40, "scan", f"--expect-sha={'b' * 40}"],
+        [f"--expect-sha={'a' * 40}", f"--expect-sha={'a' * 40}", "version"],
+    ],
+    ids=["space_after_subcommand", "equals_after_subcommand", "equals_twice"],
+)
+def test_expect_sha_given_twice_exits_3(monkeypatch, capsys, argv: list[str]) -> None:
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: _FakeDistribution("b" * 40))
+    assert cli.main(argv) == 3
+    assert capsys.readouterr().err.strip() == "guard-core: --expect-sha given more than once"
+
+
 def test_scan_passes_argv_through() -> None:
     direct_rc, direct_out = _capture_help(ai_slop_scanner.main, ["--help"])
     cli_rc, cli_out = _capture_help(cli.main, ["scan", "--help"])

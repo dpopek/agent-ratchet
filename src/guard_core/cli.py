@@ -39,7 +39,11 @@ def _version(rest: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args, rest = _build_parser().parse_known_args(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else argv
+    if sum(1 for a in argv if a == "--expect-sha" or a.startswith("--expect-sha=")) > 1:
+        print("guard-core: --expect-sha given more than once", file=sys.stderr)
+        return EXIT_SHA_MISMATCH
+    args, rest = _build_parser().parse_known_args(argv)
     if args.expect_sha is not None:
         sha = installed_sha()
         if sha is None or sha != args.expect_sha:
