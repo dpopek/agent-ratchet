@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.0.2
+
+### Fixed
+
+- A `guard.lock` in the base that is not a regular file now fails the lock
+  check instead of being treated as absent.
+- Case variants of `guard.lock` and `scripts/guard` are governance paths.
+- `--expect-sha` given more than once exits 3.
+- An unreadable `consumer/guard` in guard-core is reported as such, not as a
+  shim mismatch.
+- Adoption exemptions accept uppercase manifest hashes and no longer crash on a
+  deeply nested manifest.
+
+### Changed
+
+- The shim passes `--no-config` to `uv run` and `uvx`, so repository uv
+  configuration does not affect the guard install.
+- A `guard.lock` change now also requires `scripts/guard` to match
+  `consumer/guard` at the new SHA, not only a shim change.
+- Upgrade: 3.0.2 changes the shim (`--no-config`), so copy `consumer/guard` to
+  `scripts/guard` in the bump pull request.
+- README: lock gate, CI bootstrap, release steps and shim usage clarified.
+
 ## 3.0.1
 
 ### Fixed

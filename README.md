@@ -120,8 +120,9 @@ executes, so it is gated.
   it, and it is never set in CI.
 - The variable never skips the remote checks. A changed lock must still be
   peeled from an annotated `v3.*` release tag of guard-core and descend from
-  the previous locked SHA. A changed `scripts/guard` must equal
-  `consumer/guard` at the locked SHA.
+  the previous locked SHA. On every change of `guard.lock` or `scripts/guard`,
+  `scripts/guard` must equal `consumer/guard` at the locked SHA, so copy
+  `consumer/guard` to `scripts/guard` whenever you bump the lock.
 - A committed bump that is not yet on the trusted base is verified against
   guard-core again on every pre-commit run.
 - In CI, a lock change is accepted only when the new SHA is peeled from an

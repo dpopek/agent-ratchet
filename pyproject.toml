@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "guard-core"
-version = "3.0.1"
+version = "3.0.2"
 description = "Shared quality and refactoring guards for Python repositories."
 readme = "README.md"
 license = "MIT"
