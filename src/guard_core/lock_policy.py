@@ -203,6 +203,9 @@ def verify_lock_transition(
         if mode is not None and mode not in _ALLOWED_MODES[rel_path]:
             return [_mode_msg(rel_path, mode)]
     base_modes = {p: entry_mode(base_prefix, p, cwd) for p in _ALLOWED_MODES}
+    base_lock_mode = base_modes[LOCK_PATH]
+    if base_lock_mode is not None and base_lock_mode not in _ALLOWED_MODES[LOCK_PATH]:
+        return [f"{LOCK_PATH} in the base is not a regular file (mode {base_lock_mode}); a lock transition cannot be verified"]
     base_valid = {p: m in _ALLOWED_MODES[p] for p, m in base_modes.items()}
     base_lock = read_lock(base_prefix, cwd=cwd) if base_prefix is not None and base_valid[LOCK_PATH] else None
     target_lock = read_lock(target_prefix, cwd=cwd)

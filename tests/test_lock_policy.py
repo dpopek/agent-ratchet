@@ -403,6 +403,35 @@ def test_mode_only_change_counts_as_change(tmp_path: Path, remote: Remote) -> No
     ]
 
 
+def _invalid_base_lock_msg(mode: str) -> str:
+    return f"guard.lock in the base is not a regular file (mode {mode}); a lock transition cannot be verified"
+
+
+def test_symlinked_base_lock_fails_closed(tmp_path: Path, remote: Remote, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, _ = _consumer(tmp_path, {SHIM_PATH: _shim("c1"), remote.c1: remote.c2 + "\n"})
+    _symlink(repo, LOCK_PATH, remote.c1)
+    _git(repo, "add", LOCK_PATH)
+    base = _commit_files(repo, "chore: link lock", {})
+    _git(repo, "rm", "-q", "--cached", LOCK_PATH)
+    (repo / LOCK_PATH).unlink()
+    head = _commit_files(repo, "chore: regular lock", {LOCK_PATH: remote.c2 + "\n"})
+    assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=remote.url) == [_invalid_base_lock_msg("120000")]
+    monkeypatch.setenv("ALLOW_GUARD_LOCK_UPDATE", "1")
+    _stage(repo, {"src/app.py": "A = 2\n"})
+    assert verify_lock_transition(base, "", cwd=str(repo), local=True, repo_url=remote.url) == [_invalid_base_lock_msg("120000")]
+
+
+def test_executable_base_lock_fails_closed(tmp_path: Path, remote: Remote) -> None:
+    repo, _ = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
+    _git(repo, "update-index", "--chmod=+x", LOCK_PATH)
+    base = _commit_files(repo, "chore: chmod lock", {})
+    _git(repo, "update-index", "--chmod=-x", LOCK_PATH)
+    head = _commit_files(repo, "chore: bump guard", {LOCK_PATH: remote.c2 + "\n"})
+    assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=remote.url) == [_invalid_base_lock_msg("100755")]
+    unreachable = (tmp_path / "missing.git").as_uri()
+    assert verify_lock_transition(head, head, cwd=str(repo), local=False, repo_url=unreachable) == []
+
+
 def test_remote_checks_ignore_inherited_git_env(tmp_path: Path, remote: Remote, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, _ = _consumer(tmp_path, {})
     _git(repo, "fetch", "-q", remote.url, remote.c3)
