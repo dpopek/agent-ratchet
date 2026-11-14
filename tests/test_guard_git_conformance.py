@@ -10,12 +10,12 @@ import sys
 import tempfile
 import unittest
 
-from guard_core.git_guard_io import (
+from agent_ratchet.git_guard_io import (
     default_remote_refs,
     resolve_trusted_base_ref,
     verify_audit_guard_config_monotonicity,
 )
-from guard_core.test_baseline_integrity import evaluate_baseline_diff
+from agent_ratchet.test_baseline_integrity import evaluate_baseline_diff
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from guard_repo_harness import (
@@ -67,7 +67,7 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
                 "src/domain/svc.py": "def ok(x):\n    return x\n",
                 "tests/baselines/refactoring_slop.json": _json_bytes({"metric": "refactoring_slop", "version": "2.2.0", "ceiling": 0, "exemptions": []}),
                 "guard.lock": "1" * 40 + "\n",
-                "scripts/guard": "#!/bin/sh\nexec uvx guard-core \"$@\"\n",
+                "scripts/guard": "#!/bin/sh\nexec uvx agent-ratchet \"$@\"\n",
             }, include_guards=True)
             _write_files(repo, {"src/domain/svc.py": "def ok(x: int) -> int:\n    return x + 1\n"})
             _git(repo, "add", "src/domain/svc.py")
@@ -521,7 +521,7 @@ class TestGuardGitCiAndBaselineConformance(unittest.TestCase):
             self.assertEqual(default_remote_refs(str(repo)), ["origin/main", "origin/master"])
             self.assertEqual(resolve_trusted_base_ref(str(repo)), "origin/main")
             env = {k: v for k, v in os.environ.items() if not k.startswith("CI_")}
-            probe = "from guard_core.test_baseline_integrity import resolve_base_ref; print(resolve_base_ref())"
+            probe = "from agent_ratchet.test_baseline_integrity import resolve_base_ref; print(resolve_base_ref())"
             out = subprocess.run([sys.executable, "-c", probe], cwd=repo, env=env, capture_output=True, text=True, check=True).stdout.strip()
             self.assertEqual(out, fresh)
             _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")

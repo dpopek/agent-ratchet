@@ -12,12 +12,12 @@ import re
 import subprocess
 from typing import Any, Mapping, NamedTuple, Sequence
 
-from guard_core.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
-from guard_core.source_metrics import (  # noqa: F401 -- lexing primitives re-exported
+from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
+from agent_ratchet.source_metrics import (  # noqa: F401 -- lexing primitives re-exported
     JS_LIKE_EXTS as JS_LIKE_EXTS, _count_ast_assertions, _count_js_assertions, count_effective_sloc as count_effective_sloc,
 )
 
-# Rule-set version: Guard Core 3.0 findings are identical to this release (the package version lives in guard_core.version).
+# Rule-set version: agent-ratchet 3.0 findings are identical to this release (the package version lives in agent_ratchet.version).
 GUARD_VERSION: str = "2.3.3"
 DEFAULT_BRANCH_CANDIDATES: tuple[str, ...] = ("origin/main", "origin/master")
 _UNREACHABLE_DISTANCE = 1 << 62

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard Core 3 pin protection: ``guard.lock`` and ``scripts/guard`` transition rules (successor of the 2.x SHA manifest)."""
+"""agent-ratchet 3 pin protection: ``guard.lock`` and ``scripts/guard`` transition rules (successor of the 2.x SHA manifest)."""
 
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ import sys
 import tempfile
 from typing import Iterable
 
-from guard_core.git_guard_io import GuardAnalysisError, _git_out, _read_ref_file_bytes, head_commit_exists, trusted_base_candidates
+from agent_ratchet.git_guard_io import GuardAnalysisError, _git_out, _read_ref_file_bytes, head_commit_exists, trusted_base_candidates
 
-GUARD_CORE_URL: str = "https://github.com/dpopek/guard-core"
+GUARD_CORE_URL: str = "https://github.com/dpopek/agent-ratchet"
 LOCK_PATH = "guard.lock"
 SHIM_PATH = "scripts/guard"
 LEGACY_MANIFEST_PATH = "scripts/audit/guard_manifest.json"
@@ -35,11 +35,11 @@ ENV_REQUIRED_MSG = f"{LOCK_PATH}/{SHIM_PATH} change requires {LOCK_UPDATE_ENV}=1
 LOCK_DELETED_MSG = f"{LOCK_PATH} was deleted"
 LEFTOVER_MANIFEST_MSG = f"remove {LEGACY_MANIFEST_PATH} when adopting {LOCK_PATH}"
 LEGACY_DELETED_MSG = f"{LEGACY_MANIFEST_PATH} was deleted without adopting {LOCK_PATH}"
-LEGACY_CHANGED_MSG = f"{LEGACY_MANIFEST_PATH} changed; Guard Core 3 is pinned by {LOCK_PATH}"
+LEGACY_CHANGED_MSG = f"{LEGACY_MANIFEST_PATH} changed; agent-ratchet 3 is pinned by {LOCK_PATH}"
 
 
 def _shim_mismatch_msg(sha: str | None) -> str:
-    return f"{SHIM_PATH} does not match {CANONICAL_SHIM_PATH} at guard-core {sha or '(no guard.lock)'}"
+    return f"{SHIM_PATH} does not match {CANONICAL_SHIM_PATH} at agent-ratchet {sha or '(no guard.lock)'}"
 
 
 def _mode_msg(rel_path: str, mode: str) -> str:
@@ -97,7 +97,7 @@ def read_lock(ref_prefix: str, cwd: str | None = None) -> str | None:
 
 
 def _isolated_env() -> dict[str, str]:
-    """Environment for guard-core clone calls: no inherited GIT_* (hook GIT_DIR, GIT_CONFIG_* insteadOf), no system/global config."""
+    """Environment for agent-ratchet clone calls: no inherited GIT_* (hook GIT_DIR, GIT_CONFIG_* insteadOf), no system/global config."""
     return {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")}, **_ISOLATED_GIT_ENV}
 
 
@@ -114,32 +114,32 @@ def _clone(repo_url: str, dest: str) -> tuple[str | None, str | None]:
         if res.returncode == 0:
             return f"{dest}/{name}", None
         reason = res.stderr.decode("utf-8", errors="replace").strip()
-    return None, f"cannot clone guard-core from {repo_url}: {reason}"
+    return None, f"cannot clone agent-ratchet from {repo_url}: {reason}"
 
 
 def _release_error(git_dir: str, old_sha: str | None, new_sha: str) -> str | None:
     if _git(["cat-file", "-e", f"{new_sha}^{{commit}}"], git_dir=git_dir).returncode != 0:
-        return f"{LOCK_PATH} SHA {new_sha} is not a commit in guard-core"
+        return f"{LOCK_PATH} SHA {new_sha} is not a commit in agent-ratchet"
     if old_sha is not None:
         rc = _git(["merge-base", "--is-ancestor", old_sha, new_sha], git_dir=git_dir).returncode
         if rc != 0:
-            return f"{LOCK_PATH} {new_sha} is not a descendant of {old_sha} in guard-core"
+            return f"{LOCK_PATH} {new_sha} is not a descendant of {old_sha} in agent-ratchet"
     refs = _git(["for-each-ref", "--format=%(refname)", RELEASE_TAG_PATTERN], git_dir=git_dir)
     if refs.returncode != 0:
-        return f"cannot list guard-core release tags: {refs.stderr.decode('utf-8', errors='replace').strip()}"
+        return f"cannot list agent-ratchet release tags: {refs.stderr.decode('utf-8', errors='replace').strip()}"
     for ref in refs.stdout.decode("utf-8", errors="replace").split():
         if _git(["cat-file", "-t", ref], git_dir=git_dir).stdout.strip() != b"tag":
             continue
         peeled = _git(["rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], git_dir=git_dir)
         if peeled.returncode == 0 and peeled.stdout.strip().decode("ascii", errors="replace") == new_sha:
             return None
-    return f"{LOCK_PATH} {new_sha} carries no annotated v3.x.y release tag in guard-core"
+    return f"{LOCK_PATH} {new_sha} carries no annotated v3.x.y release tag in agent-ratchet"
 
 
 def _shim_error(git_dir: str, sha: str, shim: bytes | None) -> str | None:
     canonical = _git(["cat-file", "blob", f"{sha}:{CANONICAL_SHIM_PATH}"], git_dir=git_dir)
     if canonical.returncode != 0:
-        return f"cannot read {CANONICAL_SHIM_PATH} at guard-core {sha}: {canonical.stderr.decode('utf-8', errors='replace').strip()}"
+        return f"cannot read {CANONICAL_SHIM_PATH} at agent-ratchet {sha}: {canonical.stderr.decode('utf-8', errors='replace').strip()}"
     if shim is None or canonical.stdout != shim:
         return _shim_mismatch_msg(sha)
     return None
@@ -149,16 +149,16 @@ def _shim_error(git_dir: str, sha: str, shim: bytes | None) -> str | None:
 def _remote_errors(repo_url: str, old_sha: str | None, new_sha: str, check_release: bool, shim: bytes | None, check_shim: bool) -> tuple[str, ...]:
     """Release (descendant + annotated tag) and shim checks against one temporary clone; any failure is a reason, never an exception."""
     if not _SHA_RE.match(new_sha) or (old_sha is not None and not _SHA_RE.match(old_sha)):
-        return (f"invalid guard-core SHA ({old_sha!r} -> {new_sha!r})",)
+        return (f"invalid agent-ratchet SHA ({old_sha!r} -> {new_sha!r})",)
     try:
-        with tempfile.TemporaryDirectory(prefix="guard_core_clone_") as tmp:
+        with tempfile.TemporaryDirectory(prefix="agent_ratchet_clone_") as tmp:
             git_dir, clone_err = _clone(repo_url, tmp)
             if git_dir is None:
-                return (clone_err or f"cannot clone guard-core from {repo_url}",)
+                return (clone_err or f"cannot clone agent-ratchet from {repo_url}",)
             errs = [_release_error(git_dir, old_sha, new_sha) if check_release else None, _shim_error(git_dir, new_sha, shim) if check_shim else None]
             return tuple(e for e in errs if e is not None)
     except (OSError, subprocess.SubprocessError) as exc:
-        return (f"cannot verify guard-core {new_sha} against {repo_url}: {exc}",)
+        return (f"cannot verify agent-ratchet {new_sha} against {repo_url}: {exc}",)
 
 
 def released_descendant_error(old_sha: str | None, new_sha: str, repo_url: str = GUARD_CORE_URL) -> str | None:

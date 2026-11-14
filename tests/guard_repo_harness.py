@@ -1,4 +1,4 @@
-"""Guard Core conformance harness: throwaway Git repositories exercised through `python -m guard_core`."""
+"""agent-ratchet conformance harness: throwaway Git repositories exercised through `python -m agent_ratchet`."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def _run_tool(subcommand: str, repo: Path, *args: str, extra_env: dict[str, str]
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(SRC_DIR), env.get("PYTHONPATH", "")]))
     if extra_env is None:
         env.pop("ALLOW_GUARD_LOCK_UPDATE", None)
-    return subprocess.run([sys.executable, "-m", "guard_core", subcommand, *args], cwd=repo, env=env, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "agent_ratchet", subcommand, *args], cwd=repo, env=env, capture_output=True, text=True)
 
 
 def _run_scanner(repo: Path, *args: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:

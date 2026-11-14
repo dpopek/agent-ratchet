@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import AbstractSet, Mapping, Sequence
 
-from guard_core.git_guard_io import (
+from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES,
     SELF_SKIP_NAMES,
     GuardAnalysisError,

@@ -6,7 +6,7 @@ import importlib.metadata
 import json
 
 GUARD_VERSION: str = "3.0.3"
-_DISTRIBUTION_NAME = "guard-core"
+_DISTRIBUTION_NAME = "agent-ratchet"
 
 
 def installed_sha() -> str | None:

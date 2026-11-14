@@ -7,12 +7,12 @@ from contextlib import redirect_stderr, redirect_stdout
 
 import pytest
 
-from guard_core import ai_slop_scanner, cli
+from agent_ratchet import ai_slop_scanner, cli
 
 
 class _FakeDistribution:
     def __init__(self, commit: str) -> None:
-        self._payload = json.dumps({"url": "https://example.invalid/guard-core", "vcs_info": {"vcs": "git", "commit_id": commit}})
+        self._payload = json.dumps({"url": "https://example.invalid/agent-ratchet", "vcs_info": {"vcs": "git", "commit_id": commit}})
 
     def read_text(self, filename: str) -> str | None:
         return self._payload if filename == "direct_url.json" else None
@@ -32,7 +32,7 @@ def test_expect_sha_mismatch_exits_3(monkeypatch, capsys) -> None:
     monkeypatch.setattr(importlib.metadata, "distribution", lambda name: _FakeDistribution("a" * 40))
     rc = cli.main(["--expect-sha", "b" * 40, "version"])
     assert rc == 3
-    assert capsys.readouterr().err.strip() == f"guard-core: installed {'a' * 40} != lock {'b' * 40}"
+    assert capsys.readouterr().err.strip() == f"agent-ratchet: installed {'a' * 40} != lock {'b' * 40}"
 
 
 def test_expect_sha_without_vcs_install_exits_3(monkeypatch, capsys) -> None:
@@ -62,7 +62,7 @@ def test_expect_sha_match_proceeds(monkeypatch, capsys) -> None:
 def test_expect_sha_given_twice_exits_3(monkeypatch, capsys, argv: list[str]) -> None:
     monkeypatch.setattr(importlib.metadata, "distribution", lambda name: _FakeDistribution("b" * 40))
     assert cli.main(argv) == 3
-    assert capsys.readouterr().err.strip() == "guard-core: --expect-sha given more than once"
+    assert capsys.readouterr().err.strip() == "agent-ratchet: --expect-sha given more than once"
 
 
 def test_scan_passes_argv_through() -> None:

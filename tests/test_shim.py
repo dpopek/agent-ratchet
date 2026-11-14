@@ -1,4 +1,4 @@
-"""Consumer shim (consumer/guard): resolves guard.lock and execs the pinned guard-core."""
+"""Consumer shim (consumer/guard): resolves guard.lock and execs the pinned agent-ratchet."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 SHIM = Path(__file__).resolve().parent.parent / "consumer" / "guard"
 SHA = "0123456789abcdef0123456789abcdef01234567"
 SHA2 = "fedcba9876543210fedcba9876543210fedcba98"
-URL = "git+https://github.com/dpopek/guard-core"
+URL = "git+https://github.com/dpopek/agent-ratchet"
 BOOTSTRAP = "guard: bootstrap, main has no guard.lock"
 
 FAKE = '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a" >> "$FAKE_OUT"; done\nexit "${FAKE_RC:-0}"\n'
@@ -55,7 +55,7 @@ def test_shim_passes_pinned_url_and_args(tmp_path: Path) -> None:
     (repo / "guard.lock").write_text(SHA + "\n")
     proc, argv = _run(repo, tmp_path, "scan", "--staged", rc=0)
     assert proc.returncode == 0 and proc.stderr == ""
-    assert argv == ["--no-config", "--from", f"{URL}@{SHA}", "guard-core", "--expect-sha", SHA, "scan", "--staged"]
+    assert argv == ["--no-config", "--from", f"{URL}@{SHA}", "agent-ratchet", "--expect-sha", SHA, "scan", "--staged"]
     proc, _ = _run(repo, tmp_path, "scan", rc=7)
     assert proc.returncode == 7
 
@@ -109,7 +109,7 @@ def test_shim_lock_from_ref_reads_base_lock(tmp_path: Path) -> None:
     (repo / "guard.lock").write_text(SHA2 + "\n")  # worktree differs from the base
     proc, argv = _run(repo, tmp_path, "--lock-from", "main", "scan")
     assert proc.returncode == 0 and proc.stderr == ""
-    assert argv[:6] == ["--no-config", "--from", f"{URL}@{SHA}", "guard-core", "--expect-sha", SHA] and argv[6:] == ["scan"]
+    assert argv[:6] == ["--no-config", "--from", f"{URL}@{SHA}", "agent-ratchet", "--expect-sha", SHA] and argv[6:] == ["scan"]
 
 
 def test_shim_lock_from_ref_bootstrap_falls_back_with_notice(tmp_path: Path) -> None:
@@ -171,7 +171,7 @@ def test_shim_takes_lock_from_index_not_unstaged_worktree_edit(tmp_path: Path) -
     for args in (("scan", "--staged-only"), ("baseline-integrity", "--enforce-policy-isolation")):
         proc, argv = _run(repo, tmp_path, *args)
         assert proc.returncode == 0 and proc.stderr == ""
-        assert argv[:6] == ["--no-config", "--from", f"{URL}@{SHA}", "guard-core", "--expect-sha", SHA]
+        assert argv[:6] == ["--no-config", "--from", f"{URL}@{SHA}", "agent-ratchet", "--expect-sha", SHA]
     _, argv = _run(repo, tmp_path, "exec", "--", "pytest")
     assert argv[4] == f"{URL}@{SHA}"
 

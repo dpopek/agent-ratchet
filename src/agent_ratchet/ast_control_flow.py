@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import ast
 
-import guard_core.ast_refactoring_delta as _delta
-from guard_core.ast_refactoring_delta import (
+import agent_ratchet.ast_refactoring_delta as _delta
+from agent_ratchet.ast_refactoring_delta import (
     BranchKind, ExitKind, ScopeKind, _FlowState, _check_try_statement_rules, _is_top_level_optional_import_try,
     _is_version_or_platform_guard, _join_flow_states, _restore_flow_state, _snapshot_flow_state,
 )

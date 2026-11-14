@@ -13,7 +13,7 @@ import subprocess
 import sys
 from typing import Any, Mapping, Sequence
 
-from guard_core.git_guard_io import (
+from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES, CODE_SCAN_EXTS, JS_LIKE_EXTS,
     SELF_SKIP_NAMES, GuardAnalysisError as GuardAnalysisError,
     SlopViolation as SlopViolation, check_staged_file_size_buffer as check_staged_file_size_buffer,
@@ -22,13 +22,13 @@ from guard_core.git_guard_io import (
     list_snapshot_files, load_guard_config_for_ref,
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
-from guard_core.lock_policy import LOCK_PATH, adopted_guard_files, check_staged_lock, lock_check_is_local, verify_lock_transition
-from guard_core.source_metrics import (
+from agent_ratchet.lock_policy import LOCK_PATH, adopted_guard_files, check_staged_lock, lock_check_is_local, verify_lock_transition
+from agent_ratchet.source_metrics import (
     _count_ast_assertions, _count_js_top_level_items, _find_balanced_span, _parametrize_multiplier, strip_js_comments,
 )
 
-from guard_core.ast_topology_guard import build_snapshot_import_graph, compare_import_cycles, extract_module_import_facts
-from guard_core.refactoring_guard import compare_ast_snapshots, scan_ast_for_refactoring_slop as scan_ast_for_refactoring_slop
+from agent_ratchet.ast_topology_guard import build_snapshot_import_graph, compare_import_cycles, extract_module_import_facts
+from agent_ratchet.refactoring_guard import compare_ast_snapshots, scan_ast_for_refactoring_slop as scan_ast_for_refactoring_slop
 
 __all__ = [
     "GuardAnalysisError", "SlopViolation", "check_staged_file_size_buffer", "check_staged_test_tampering",

@@ -7,8 +7,8 @@ import ast
 import os
 from typing import Any, Mapping, Sequence
 
-import guard_core.ast_refactoring_delta as _delta
-from guard_core.ast_refactoring_delta import (
+import agent_ratchet.ast_refactoring_delta as _delta
+from agent_ratchet.ast_refactoring_delta import (
     DUMPING_GROUND_FILENAME_RE as DUMPING_GROUND_FILENAME_RE, FORBIDDEN_DOMAIN_CALL_TARGETS, FORBIDDEN_DOMAIN_IMPORT_MODULES,
     FORBIDDEN_DOMAIN_LAYER_SEGMENTS, FORBIDDEN_PATH_DISK_METHODS,
     BranchKind as BranchKind, ExitKind as ExitKind, FunctionVariantMetrics as FunctionVariantMetrics, ModuleAstSnapshot as ModuleAstSnapshot,
@@ -19,9 +19,9 @@ from guard_core.ast_refactoring_delta import (
     extract_changed_lines_map as extract_changed_lines_map, git_show_text as git_show_text, is_domain_file, is_query_function_name,
     is_safe_local_container_allocation, is_valid_deterministic_random_seed_call, register_snapshot_extractor
 )
-from guard_core.ast_control_flow import ControlFlowVisitorMixin
-from guard_core.query_mutation_rules import query_call_mutation_message, query_target_mutation_message
-from guard_core.git_guard_io import (
+from agent_ratchet.ast_control_flow import ControlFlowVisitorMixin
+from agent_ratchet.query_mutation_rules import query_call_mutation_message, query_target_mutation_message
+from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES as APP_CODE_PREFIXES, GUARD_VERSION as GUARD_VERSION, HARD_FILE_CEILING_LOC as HARD_FILE_CEILING_LOC,
     MAX_CONTROL_NESTING_DEPTH, MAX_FUNCTION_ARGS, MODIFIED_FILE_SOFT_CEILING_LOC as MODIFIED_FILE_SOFT_CEILING_LOC,
     SELF_SKIP_NAMES, GuardAnalysisError as GuardAnalysisError, SlopViolation, git_show_bytes as git_show_bytes, is_test_filename

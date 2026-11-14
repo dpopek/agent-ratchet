@@ -22,7 +22,7 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 
 @pytest.mark.parametrize("name", MODULES)
 def test_every_module_imports(name):
-    importlib.import_module(f"guard_core.{name}")
+    importlib.import_module(f"agent_ratchet.{name}")
 
 
 def test_no_scripts_audit_imports():

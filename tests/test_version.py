@@ -7,14 +7,14 @@ from pathlib import Path
 import subprocess
 import sys
 
-from guard_core import version
+from agent_ratchet import version
 
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "PYTHONPATH": str(SRC_DIR)}
-    return subprocess.run([sys.executable, "-m", "guard_core", *args], capture_output=True, text=True, env=env)
+    return subprocess.run([sys.executable, "-m", "agent_ratchet", *args], capture_output=True, text=True, env=env)
 
 
 class _FakeDistribution:
@@ -40,11 +40,11 @@ def test_version_sha_without_vcs_metadata_exits_3(monkeypatch) -> None:
 def test_version_sha_subprocess_without_vcs_metadata_exits_3() -> None:
     result = _run_cli("version", "--sha")
     assert result.returncode == 3
-    assert "guard-core:" in result.stderr
+    assert "agent-ratchet:" in result.stderr
 
 
 def test_installed_sha_reads_direct_url(monkeypatch) -> None:
-    payload = json.dumps({"url": "https://example.invalid/guard-core", "vcs_info": {"vcs": "git", "commit_id": "a" * 40}})
+    payload = json.dumps({"url": "https://example.invalid/agent-ratchet", "vcs_info": {"vcs": "git", "commit_id": "a" * 40}})
     monkeypatch.setattr(importlib.metadata, "distribution", lambda name: _FakeDistribution(payload))
     assert version.installed_sha() == "a" * 40
 
