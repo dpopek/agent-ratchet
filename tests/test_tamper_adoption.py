@@ -7,9 +7,9 @@ import sys
 
 import pytest
 
-from guard_core import ai_slop_scanner, lock_policy
-from guard_core.ai_slop_scanner import _evaluate_commit_range, _evaluate_transition, check_staged_test_tampering
-from guard_core.lock_policy import adopted_guard_files
+from agent_ratchet import ai_slop_scanner, lock_policy
+from agent_ratchet.ai_slop_scanner import _evaluate_commit_range, _evaluate_transition, check_staged_test_tampering
+from agent_ratchet.lock_policy import adopted_guard_files
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from guard_repo_harness import _commit_files, _git, _init_guard_repo, _json_bytes, _sha256_bytes

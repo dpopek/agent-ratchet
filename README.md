@@ -1,15 +1,21 @@
-# guard-core
+# agent-ratchet
 
 Shared quality and refactoring guards for Python repositories: the AI-slop
 scanner and the test-baseline integrity check, extracted from the in-repo guard
-(2.3.3) that consumers used to vendor under `scripts/audit/`. guard-core ships
+(2.3.3) that consumers used to vendor under `scripts/audit/`. agent-ratchet ships
 it as one installable package with no runtime dependencies.
+
+Renamed from `guard-core` in 3.1.0 (the PyPI name belongs to an unrelated
+project). Until 4.0 the old names keep working: `import guard_core.X` gives the
+`agent_ratchet.X` module, `python -m guard_core` and the `guard-core` command run
+the same CLI, and the old GitHub URL redirects. See the 3.1.0 upgrade notes in
+`CHANGELOG.md`.
 
 ## Commands
 
-    guard-core [--expect-sha SHA] scan ...
-    guard-core [--expect-sha SHA] baseline-integrity ...
-    guard-core [--expect-sha SHA] version [--sha]
+    agent-ratchet [--expect-sha SHA] scan ...
+    agent-ratchet [--expect-sha SHA] baseline-integrity ...
+    agent-ratchet [--expect-sha SHA] version [--sha]
 
 `scan` takes the arguments of the legacy `ai_slop_scanner.py`, and
 `baseline-integrity` those of the legacy `test_baseline_integrity.py`.
@@ -19,7 +25,7 @@ that commit (read from the PEP 610 `direct_url.json` record).
 ## Consumer integration
 
 1. Add `guard.lock` at the repository root: the full 40-character lowercase
-   release SHA of guard-core, optionally followed by one newline. It must be a
+   release SHA of agent-ratchet, optionally followed by one newline. It must be a
    regular file, not a symlink.
 2. Copy `consumer/guard` from this repository to `scripts/guard`,
    byte-identical, with git mode `100755`.
@@ -32,15 +38,15 @@ that commit (read from the PEP 610 `direct_url.json` record).
    "CI: judge a pull request with the trusted base" below.
 
 The shim reads `guard.lock` and runs
-`uvx --no-config --from git+https://github.com/dpopek/guard-core@SHA guard-core --expect-sha SHA ...`.
+`uvx --no-config --from git+https://github.com/dpopek/agent-ratchet@SHA agent-ratchet --expect-sha SHA ...`.
 `uv` must be on `PATH`. `scripts/guard exec -- <cmd...>` runs a command inside
-an environment that has the locked guard-core installed
+an environment that has the locked agent-ratchet installed
 (`uv run --no-config --no-project --with ...`). `--no-config` keeps a
 repository `uv.toml` or `[tool.uv]` table from redirecting the index or
 sources.
 
 Run the shim from the repository root. It finds `guard.lock` from the root
-wherever it is called, but the guard-core arguments, including relative paths
+wherever it is called, but the agent-ratchet arguments, including relative paths
 and the default scan roots, are resolved against the current directory.
 
 If `uv` or `uvx` itself fails, for example because the pinned SHA cannot be
@@ -119,19 +125,19 @@ executes, so it is gated.
   tree. It is for the repository operator only. Agents and automation never set
   it, and it is never set in CI.
 - The variable never skips the remote checks. A changed lock must still be
-  peeled from an annotated `v3.*` release tag of guard-core and descend from
+  peeled from an annotated `v3.*` release tag of agent-ratchet and descend from
   the previous locked SHA. On every change of `guard.lock` or `scripts/guard`,
   `scripts/guard` must equal `consumer/guard` at the locked SHA, so copy
   `consumer/guard` to `scripts/guard` whenever you bump the lock.
 - A committed bump that is not yet on the trusted base is verified against
-  guard-core again on every pre-commit run.
+  agent-ratchet again on every pre-commit run.
 - In CI, a lock change is accepted only when the new SHA is peeled from an
-  annotated `v3.*` release tag of guard-core and is a descendant of the
+  annotated `v3.*` release tag of agent-ratchet and is a descendant of the
   previous locked SHA.
 
 ## Release procedure
 
-1. Merge the change into `main` of guard-core and wait for green CI.
+1. Merge the change into `main` of agent-ratchet and wait for green CI.
 2. Create an annotated tag `v3.x.y` on `main` (`git tag -a v3.x.y -m ...`) and
    push it. Record the SHA the tag peels to (`git rev-parse v3.x.y^{commit}`).
 3. In each consumer, open a lock-bump pull request that sets `guard.lock` to
@@ -139,8 +145,9 @@ executes, so it is gated.
 4. Before bumping, run the differential tool below against the consumer. Once
    a consumer has adopted `guard.lock` it no longer has `scripts/audit/*`, so
    compare the old pin with the new one:
-   `--legacy-cmd "uvx --quiet --from git+https://github.com/dpopek/guard-core@OLD guard-core --expect-sha OLD"`,
-   where `OLD` is the SHA currently in the consumer's `guard.lock`.
+   `--legacy-cmd "uvx --quiet --from git+https://github.com/dpopek/agent-ratchet@OLD guard-core --expect-sha OLD"`,
+   where `OLD` is the SHA currently in the consumer's `guard.lock`. Use the
+   `guard-core` command here: a 3.0.x pin has no `agent-ratchet` command.
 
 Never move or delete a `v3.*` tag and never rewrite `main`: every pinned SHA
 must stay fetchable.
@@ -167,9 +174,9 @@ the installed package.
   `baseline-integrity --enforce-policy-isolation`, and
   `baseline-integrity --require-base-ref --enforce-policy-isolation --commit-range HEAD~N..HEAD`.
   Add path-scan cases with a repeatable `--extra-scan-args "<args>"`.
-- Legacy runs `python3 scripts/audit/<script>.py`; guard-core runs via
-  `uvx --from <new-from> guard-core --expect-sha <guard-sha>`. Override
-  `--new-from` with any uvx spec, for example `git+file:///path/to/guard-core@<sha>`
+- Legacy runs `python3 scripts/audit/<script>.py`; agent-ratchet runs via
+  `uvx --from <new-from> agent-ratchet --expect-sha <guard-sha>`. Override
+  `--new-from` with any uvx spec, for example `git+file:///path/to/agent-ratchet@<sha>`
   for a pre-release run.
 - `(rc, stdout, stderr)` are compared after only three normalisations: the
   clone path becomes `<ROOT>`, other temporary paths `<TMP>`, and program names
@@ -191,7 +198,7 @@ named below differ:
 - **Manifest sync commits in a range.** When `scan --commit-range` covers
   historical commits that synchronised `scripts/audit/guard_manifest.json`,
   2.3.3 reports one finding and 3.0 reports one finding per such commit,
-  `scripts/audit/guard_manifest.json changed; Guard Core 3 is pinned by guard.lock`.
+  `scripts/audit/guard_manifest.json changed; agent-ratchet 3 is pinned by guard.lock`.
 - **Baseline version bumps.** A baseline version change that relied on a
   manifest-based migration is now reported as
   `Baseline version changed without authorized migration`, because those

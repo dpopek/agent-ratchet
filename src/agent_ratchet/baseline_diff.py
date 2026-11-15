@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
-from guard_core.git_guard_io import LEGACY_2_0_SLOP_KINDS, NEW_2_1_SLOP_KINDS
+from agent_ratchet.git_guard_io import LEGACY_2_0_SLOP_KINDS, NEW_2_1_SLOP_KINDS
 
 
 @dataclass

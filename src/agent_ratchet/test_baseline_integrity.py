@@ -12,16 +12,16 @@ import subprocess
 import sys
 from typing import Any
 
-from guard_core.git_guard_io import (
+from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES,
     PROTECTED_GOVERNANCE_FILES, PROTECTED_GOVERNANCE_PREFIXES,
     GuardAnalysisError, diff_name_status, git_cat_bytes, head_commit_exists, trusted_base_candidates,
     is_protected_governance_path as is_protected_governance_path,
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
-from guard_core.lock_policy import LOCK_PATH, check_staged_lock, lock_check_is_local, verify_lock_transition
+from agent_ratchet.lock_policy import LOCK_PATH, check_staged_lock, lock_check_is_local, verify_lock_transition
 
-from guard_core.baseline_diff import (
+from agent_ratchet.baseline_diff import (
     BaselineDiffResult as BaselineDiffResult, _has_strict_improvement, _is_ceiling_key as _is_ceiling_key,
     _join_ratchet_states, evaluate_baseline_diff as evaluate_baseline_diff,
 )
@@ -55,7 +55,7 @@ def _diff_entries(base_ref: str, target_ref: str | None, cwd: str | None = None)
         res = subprocess.run(["git", "diff", "-M", "-z", "--name-status", base_ref], cwd=cwd, capture_output=True)
         if res.returncode != 0:
             raise BaselineAnalysisError("git diff WORKTREE failed")
-        from guard_core.git_guard_io import parse_name_status_z
+        from agent_ratchet.git_guard_io import parse_name_status_z
         return parse_name_status_z(res.stdout)
     return diff_name_status(base_ref, target_ref, cwd=cwd)
 

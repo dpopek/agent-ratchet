@@ -6,14 +6,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from guard_core.ast_topology_guard import (
+from agent_ratchet.ast_topology_guard import (
     build_snapshot_import_graph,
     compare_import_cycles,
     extract_module_import_facts,
     find_import_cycles,
     tarjan_scc,
 )
-from guard_core.git_guard_io import is_protected_governance_path
+from agent_ratchet.git_guard_io import is_protected_governance_path
 
 
 class TestGuardTopologyConformance(unittest.TestCase):

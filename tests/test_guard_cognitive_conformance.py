@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import unittest
 
-from guard_core.cognitive_complexity import (
+from agent_ratchet.cognitive_complexity import (
     COGNITIVE_FUNCTION_CEILING,
     COGNITIVE_MODULE_CEILING,
     function_cognitive_scores,
 )
-from guard_core.git_guard_io import evaluate_loc_transition, is_protected_governance_path
-from guard_core.refactoring_guard import collect_full_scan_violations
+from agent_ratchet.git_guard_io import evaluate_loc_transition, is_protected_governance_path
+from agent_ratchet.refactoring_guard import collect_full_scan_violations
 
 
 class TestGuardCognitiveConformance(unittest.TestCase):

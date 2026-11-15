@@ -3,8 +3,8 @@ requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "guard-core"
-version = "3.0.3"
+name = "agent-ratchet"
+version = "3.1.0"
 description = "Shared quality and refactoring guards for Python repositories."
 readme = "README.md"
 license = "MIT"
@@ -13,10 +13,11 @@ requires-python = ">=3.11"
 dependencies = []
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/guard_core"]
+packages = ["src/agent_ratchet", "src/guard_core"]
 
 [project.scripts]
-guard-core = "guard_core.cli:main"
+agent-ratchet = "agent_ratchet.cli:main"
+guard-core = "agent_ratchet.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

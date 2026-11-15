@@ -5,8 +5,8 @@ from __future__ import annotations
 import importlib.metadata
 import json
 
-GUARD_VERSION: str = "3.0.3"
-_DISTRIBUTION_NAME = "guard-core"
+GUARD_VERSION: str = "3.1.0"
+_DISTRIBUTION_NAME = "agent-ratchet"
 
 
 def installed_sha() -> str | None:

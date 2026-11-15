@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from guard_core.cli import main
+from agent_ratchet.cli import main
 
 if __name__ == "__main__":
     sys.exit(main())

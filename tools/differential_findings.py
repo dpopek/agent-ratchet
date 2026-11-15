@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Differential acceptance: guard-core findings must equal the legacy vendored guard's, case by case.
+"""Differential acceptance: agent-ratchet findings must equal the legacy vendored guard's, case by case.
 
 Materialises a throwaway local clone of a consumer at `--legacy-ref`, runs each case with the legacy
-in-repo scripts and with guard-core, and compares (rc, stdout, stderr) after minimal normalisation.
+in-repo scripts and with agent-ratchet, and compares (rc, stdout, stderr) after minimal normalisation.
 Stdlib only; lives outside the installed package.
 """
 
@@ -21,7 +21,7 @@ import tempfile
 
 EXIT_OK, EXIT_DIFF, EXIT_USAGE = 0, 1, 2
 LEGACY_SCRIPTS = {"scan": "scripts/audit/ai_slop_scanner.py", "baseline-integrity": "scripts/audit/test_baseline_integrity.py"}
-_PROG_RE = re.compile(r"(?<![\w./-])(?:ai_slop_scanner\.py|test_baseline_integrity\.py|guard-core)(?![\w-])")
+_PROG_RE = re.compile(r"(?<![\w./-])(?:ai_slop_scanner\.py|test_baseline_integrity\.py|agent-ratchet)(?![\w-])")
 
 
 class CaseError(Exception):
@@ -59,7 +59,7 @@ def _command(side: str, sub: str, args: list[str], opts: argparse.Namespace, clo
         if not (clone / script).is_file():
             raise CaseError(f"legacy script missing at {opts.legacy_ref}: {script}")
         return ["python3", script, *args]
-    return ["uvx", "--quiet", "--from", opts.new_from, "guard-core", "--expect-sha", opts.guard_sha, sub, *args]
+    return ["uvx", "--quiet", "--from", opts.new_from, "agent-ratchet", "--expect-sha", opts.guard_sha, sub, *args]
 
 
 def run_side(side: str, sub: str, args: list[str], opts: argparse.Namespace, clone: Path) -> tuple[int, str, str]:
@@ -138,16 +138,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--consumer", required=True, type=Path, help="Path of the consumer git checkout (never modified)")
     p.add_argument("--legacy-ref", required=True, help="Consumer commit holding the vendored legacy guard")
-    p.add_argument("--guard-sha", required=True, help="guard-core commit under test")
+    p.add_argument("--guard-sha", required=True, help="agent-ratchet commit under test")
     p.add_argument("--commits", type=int, default=30, help="N in HEAD~N..HEAD for the range cases")
     p.add_argument("--out", required=True, type=Path, help="Report directory, must be outside any git repository")
     p.add_argument("--new-from", default=None, help="uvx --from spec (default: public GitHub URL at --guard-sha)")
     p.add_argument("--extra-scan-args", action="append", default=[], help="Extra `scan` case, e.g. 'src test'; repeatable")
     p.add_argument("--timeout", type=float, default=600.0, help="Per-command timeout in seconds")
     p.add_argument("--legacy-cmd", default=None, help="Test seam: command prefix replacing the legacy script")
-    p.add_argument("--new-cmd", default=None, help="Test seam: command prefix replacing uvx guard-core")
+    p.add_argument("--new-cmd", default=None, help="Test seam: command prefix replacing uvx agent-ratchet")
     opts = p.parse_args(argv)
-    opts.new_from = opts.new_from or f"git+https://github.com/dpopek/guard-core@{opts.guard_sha}"
+    opts.new_from = opts.new_from or f"git+https://github.com/dpopek/agent-ratchet@{opts.guard_sha}"
     return opts
 
 

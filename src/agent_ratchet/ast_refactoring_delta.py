@@ -10,7 +10,7 @@ import os
 from pathlib import PurePosixPath
 from typing import Any, Callable, Sequence
 
-from guard_core.git_guard_io import (
+from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES,
     DUMPING_GROUND_FILENAME_RE,
     MAX_CONTROL_NESTING_DEPTH,

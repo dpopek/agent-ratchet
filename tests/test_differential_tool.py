@@ -184,7 +184,7 @@ def test_normalise_does_not_collapse_lookalike_tmp_segments():
 
 
 def test_normalise_program_names():
-    text = "usage: ai_slop_scanner.py x\nusage: test_baseline_integrity.py y\nusage: guard-core scan z\n"
+    text = "usage: ai_slop_scanner.py x\nusage: test_baseline_integrity.py y\nusage: agent-ratchet scan z\n"
     assert diff_tool.normalise(text, Path("/nowhere")) == "usage: <PROG> x\nusage: <PROG> y\nusage: <PROG> scan z\n"
 
 

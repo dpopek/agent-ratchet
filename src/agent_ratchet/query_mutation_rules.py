@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import ast
 
-from guard_core.ast_refactoring_delta import MUTATING_COLLECTION_METHODS
+from agent_ratchet.ast_refactoring_delta import MUTATING_COLLECTION_METHODS
 
 CACHE_ATTRIBUTE_PREFIXES: tuple[str, ...] = ("_cache", "_lazy")
 

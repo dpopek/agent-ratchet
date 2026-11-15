@@ -7,18 +7,19 @@ import subprocess
 import tempfile
 import unittest
 
-from guard_core.ai_slop_scanner import (
+from agent_ratchet.ai_slop_scanner import (
     _new_or_worsened_text_slop,
     check_staged_test_tampering,
     scan_diff_for_shortcut_escapes,
     scan_text_for_slop,
 )
-from guard_core.cognitive_complexity import COGNITIVE_MODULE_CEILING
-from guard_core.git_guard_io import (
+from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING
+from agent_ratchet.git_guard_io import (
+    RULES_VERSION,
     count_effective_sloc,
     evaluate_loc_transition,
 )
-from guard_core.refactoring_guard import (
+from agent_ratchet.refactoring_guard import (
     GUARD_VERSION,
     BranchKind,
     ScopeKind,
@@ -29,12 +30,13 @@ from guard_core.refactoring_guard import (
 )
 
 
-PACKAGE_DIR = Path(__file__).resolve().parent.parent / "src" / "guard_core"
+PACKAGE_DIR = Path(__file__).resolve().parent.parent / "src" / "agent_ratchet"
 
 
 class TestGuardAstConformance(unittest.TestCase):
     def test_guard_version_is_2_3_3(self) -> None:
         self.assertEqual(GUARD_VERSION, "2.3.3")
+        self.assertEqual(RULES_VERSION, "2.3.3")
         self.assertEqual(ScopeKind.CLASS.value, "class")
         self.assertEqual(BranchKind.TYPE_CHECKING.value, "type_checking")
 
