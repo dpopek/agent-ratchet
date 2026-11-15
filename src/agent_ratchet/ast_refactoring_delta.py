@@ -6,7 +6,6 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 from enum import Enum
-import os
 from pathlib import PurePosixPath
 from typing import Any, Callable, Sequence
 
@@ -15,7 +14,6 @@ from agent_ratchet.git_guard_io import (
     DUMPING_GROUND_FILENAME_RE,
     MAX_CONTROL_NESTING_DEPTH,
     MAX_FUNCTION_ARGS,
-    SELF_SKIP_NAMES,
     GuardAnalysisError,
     SlopViolation,
     check_staged_file_size_buffer,
@@ -23,6 +21,7 @@ from agent_ratchet.git_guard_io import (
     extract_changed_lines_map,
     git_cat_bytes,
     git_show_text,
+    is_self_skipped,
 )
 
 
@@ -536,7 +535,7 @@ def register_snapshot_extractor(fn: Callable[[str, str, Sequence[dict[str, Any]]
 def compare_ast_snapshots(
     base_source: str | None, target_source: str, filename: str, extra_rules: Sequence[dict[str, Any]] = ()
 ) -> list[SlopViolation]:
-    if not filename.endswith(".py") or os.path.basename(filename) in SELF_SKIP_NAMES:
+    if not filename.endswith(".py") or is_self_skipped(filename):
         return []
     assert _SNAPSHOT_EXTRACTOR is not None, "Snapshot extractor not registered"
     target_snap = _SNAPSHOT_EXTRACTOR(target_source, filename, extra_rules)

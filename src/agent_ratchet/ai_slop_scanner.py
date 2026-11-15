@@ -15,7 +15,7 @@ from typing import Any, Mapping, Sequence
 
 from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES, CODE_SCAN_EXTS, JS_LIKE_EXTS,
-    SELF_SKIP_NAMES, GuardAnalysisError as GuardAnalysisError,
+    GuardAnalysisError as GuardAnalysisError, is_self_skipped,
     SlopViolation as SlopViolation, check_staged_file_size_buffer as check_staged_file_size_buffer,
     count_test_assertions as count_test_assertions, diff_name_status,
     evaluate_loc_transition, git_cat_bytes, git_show_text, head_commit_exists, is_test_filename,
@@ -185,7 +185,7 @@ def scan_diff_for_shortcut_escapes(diff_text: str) -> list[SlopViolation]:
         elif raw_line.startswith("@@ "):
             m = re.search(r"\+(\d+)", raw_line)
             lineno = int(m.group(1)) - 1 if m else 0
-        elif not current_file or os.path.basename(current_file) in SELF_SKIP_NAMES or not current_file.endswith(CODE_SCAN_EXTS):
+        elif not current_file or is_self_skipped(current_file) or not current_file.endswith(CODE_SCAN_EXTS):
             continue
         elif raw_line.startswith("+") and not raw_line.startswith("+++"):
             lineno += 1
@@ -398,7 +398,7 @@ def _new_or_worsened_text_slop(base_txt: str | None, target_txt: str, new_path: 
 def _load_python_snapshot_files(ref_prefix: str, cwd: str | None = None) -> dict[str, str]:
     out: dict[str, str] = {}
     for rel in list_snapshot_files(ref_prefix, cwd=cwd):
-        if rel.endswith(".py") and rel.startswith(APP_CODE_PREFIXES) and not is_test_filename(rel) and os.path.basename(rel) not in SELF_SKIP_NAMES:
+        if rel.endswith(".py") and rel.startswith(APP_CODE_PREFIXES) and not is_test_filename(rel) and not is_self_skipped(rel):
             txt = git_show_text(f"{ref_prefix}:{rel}" if ref_prefix else f":{rel}", cwd=cwd)
             if txt is not None:
                 out[rel] = txt
@@ -425,7 +425,7 @@ def _evaluate_entry_transition(
         if loc_ceilings is not None:
             loc_ceilings.pop(old_path, None)
         return [], old_path.endswith(".py") and old_path.startswith(APP_CODE_PREFIXES)
-    if os.path.basename(new_path) in SELF_SKIP_NAMES:
+    if is_self_skipped(new_path):
         return [], False
     t_spec = f"{target_prefix}:{new_path}" if target_prefix else f":{new_path}"
     target_bytes = git_cat_bytes(t_spec, cwd)
@@ -485,7 +485,7 @@ def _evaluate_transition(
 def _check_aggregate_range_loc(base_sha: str, head_sha: str, loc_ceilings: dict[str, int], cwd: str | None) -> list[SlopViolation]:
     out: list[SlopViolation] = []
     for status, old_path, new_path in diff_name_status(base_sha, head_sha, cwd=cwd):
-        if status.startswith("D") or is_test_filename(new_path) or os.path.basename(new_path) in SELF_SKIP_NAMES:
+        if status.startswith("D") or is_test_filename(new_path) or is_self_skipped(new_path):
             continue
         t_bytes = git_cat_bytes(f"{head_sha}:{new_path}", cwd)
         if t_bytes is None:
@@ -553,12 +553,30 @@ def _resolve_scan_targets(args: argparse.Namespace) -> list[Path]:
     return targets
 
 
+def _scan_root(cwd: str | None) -> Path:
+    try:
+        top = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=cwd, text=True, stderr=subprocess.DEVNULL).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        top = ""
+    return Path(top or cwd or os.getcwd()).resolve()
+
+
+def _is_self_skipped_target(path: Path, root: Path, cwd: str | None) -> bool:
+    """Self-skip decision for a CLI target: resolved and made repo-relative POSIX; targets outside the root never skip."""
+    resolved = (path if path.is_absolute() else Path(cwd or os.getcwd()) / path).resolve()
+    try:
+        return is_self_skipped(resolved.relative_to(root).as_posix())
+    except ValueError:
+        return False
+
+
 def _scan_worktree_files(targets: list[Path], cwd: str | None = None) -> list[SlopViolation]:
     extra_rules = load_worktree_guard_config(cwd=cwd)["extra_slop_rules"]
     all_violations: list[SlopViolation] = []
     valid_exts = set(CODE_SCAN_EXTS)
+    root = _scan_root(cwd)
     for path in targets:
-        if path.suffix not in valid_exts or path.name in SELF_SKIP_NAMES:
+        if path.suffix not in valid_exts or _is_self_skipped_target(path, root, cwd):
             continue
         try:
             content = path.read_text(encoding="utf-8")
