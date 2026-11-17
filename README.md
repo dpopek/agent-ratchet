@@ -16,6 +16,7 @@ the same CLI, and the old GitHub URL redirects. See the 3.1.0 upgrade notes in
     agent-ratchet [--expect-sha SHA] scan ...
     agent-ratchet [--expect-sha SHA] baseline-integrity ...
     agent-ratchet [--expect-sha SHA] version [--sha]
+    agent-ratchet migrate-imports [--write] [PATH ...]
 
 `scan` takes the arguments of the legacy `ai_slop_scanner.py`, and
 `baseline-integrity` those of the legacy `test_baseline_integrity.py`.
@@ -82,6 +83,19 @@ file's base blob matches its SHA-256 in the manifest. Any other deletion,
 including one in a malformed manifest, is judged as before. Do not add
 look-alike files in the adoption change: git's rename detection (`-M`) can pair
 a deleted guard test with a similar new file, and a renamed test is not exempt.
+
+## Migrating off guard_core
+
+The `guard_core` package is deprecated and removed in 4.0. Through the shim:
+
+1. `scripts/guard migrate-imports` lists what is pending (exit 0: nothing).
+2. `scripts/guard migrate-imports --write` rewrites the import statements.
+3. Fix the `manual-import` and `manual-runtime` items by hand, for example
+   `-m guard_core` to `-m agent_ratchet`.
+4. Re-run step 1 until it exits 0 (1: pending items, 2: errors).
+
+`mention` items (strings, comments) are reported only and do not affect the
+exit code.
 
 ## CI: judge a pull request with the trusted base
 
