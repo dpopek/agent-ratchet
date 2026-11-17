@@ -16,7 +16,8 @@ from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers 
 )
 from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
 from agent_ratchet.git_batch import (  # noqa: F401 -- head_commit_exists / _git_cat_bytes_oneshot re-exported
-    _git_cat_bytes_oneshot as _git_cat_bytes_oneshot, active_reader_for, head_commit_exists as head_commit_exists,
+    _git_cat_bytes_oneshot as _git_cat_bytes_oneshot, active_reader_for, batch_unsafe,
+    head_commit_exists as head_commit_exists,
 )
 from agent_ratchet.source_metrics import (  # noqa: F401 -- lexing primitives re-exported
     JS_LIKE_EXTS as JS_LIKE_EXTS, _count_ast_assertions, _count_js_assertions, count_effective_sloc as count_effective_sloc,
@@ -135,7 +136,7 @@ def git_cat_bytes(spec: str, cwd: str | None = None) -> bytes | None:
     reader = active_reader_for(cwd)
     if spec.startswith("HEAD:") and not (reader.head_exists() if reader is not None else head_commit_exists(cwd)):
         return None
-    if reader is None or "\n" in spec or "\0" in spec:
+    if reader is None or batch_unsafe(spec):
         return _git_cat_bytes_oneshot(spec, cwd)
     return reader.read_spec(spec)
 

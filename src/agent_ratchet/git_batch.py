@@ -1,8 +1,8 @@
 """Blob reads through one `git cat-file --batch` process per scan, with a bounded LRU cache and one-shot fallbacks.
 
-Anything the batch protocol cannot answer byte-identically (non-blob objects, ambiguous names, unverified "missing",
-git fatal errors, specs with newlines or NUL) is delegated to the one-shot `git cat-file blob` path, so findings,
-messages and exit codes match a scan without a session.
+Anything the batch protocol cannot answer byte-identically (non-blob objects, ambiguous names, "missing", git fatal
+errors, specs with newline, CR or NUL) is delegated to the one-shot `git cat-file blob` path, so findings, messages and
+exit codes match a scan without a session. A per-object timeout disables the reader and the scan continues one-shot.
 """
 
 from __future__ import annotations
@@ -21,12 +21,22 @@ from agent_ratchet.ast_safety import GuardAnalysisError
 
 _MISSING_MARKERS: tuple[str, ...] = ("not a valid object name", "does not exist", "exists on disk, but not in")
 _HEADER_RE = re.compile(rb"([0-9a-f]{40}|[0-9a-f]{64}) ([a-z]+) ([0-9]+)")
-# Only plain ref names / object ids are memoised as "missing-safe"; rev syntax (^{...}, @{...}, :, ~, ^) is not.
-_PLAIN_REV_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
-_NO_CONTENT_STATUSES: frozenset[bytes] =frozenset({b"ambiguous", b"submodule"})
+# "missing" covers an absent path (one-shot: None), an unresolvable rev and, on old git, a gitlink (one-shot: "bad file"
+# error), so every miss is answered by one-shot and never memoised.
+_NO_CONTENT_STATUSES: frozenset[bytes] = frozenset({b"ambiguous", b"missing", b"submodule"})
 _GIT_FATAL_EXIT = 128
 _EXIT_GRACE_S = 2.0
 _READ_CHUNK = 1 << 16
+# Characters a batch request line cannot carry verbatim: "\n" splits the request, git strips a trailing "\r".
+_BATCH_UNSAFE_CHARS: tuple[str, ...] = ("\n", "\r", "\0")
+
+
+def batch_unsafe(spec: str) -> bool:
+    return any(ch in spec for ch in _BATCH_UNSAFE_CHARS)
+
+
+class _BatchTimeout(Exception):
+    """A per-object read exceeded the timeout; the caller disables the reader and falls back to one-shot."""
 
 
 def _git_env() -> dict[str, str]:
@@ -64,9 +74,9 @@ class GitBatchReader:
         self._proc: subprocess.Popen[bytes] | None = None
         self._buf = bytearray()
         self._poisoned: str | None = None
+        self._disabled = False
         self._blobs: OrderedDict[str, bytes] = OrderedDict()
         self._spec_oids: dict[str, str] = {}
-        self._missing_safe_revs: set[str] = set()
         self._head: bool | None = None
         self._reads = 0
         self._hits = 0
@@ -97,7 +107,7 @@ class GitBatchReader:
         self._reads += 1
         if self._poisoned is not None:
             raise self._error(spec, f"reader unusable after an earlier failure: {self._poisoned}")
-        if "\n" in spec or "\0" in spec:
+        if self._disabled or batch_unsafe(spec):
             return _git_cat_bytes_oneshot(spec, self._cwd)
         cached = self._cache_get(spec)
         if cached is not None:
@@ -108,6 +118,10 @@ class GitBatchReader:
     def _query(self, spec: str) -> bytes | None:
         try:
             header, record = self._exchange(spec)
+        except _BatchTimeout:
+            self._stop(kill=True)
+            self._disabled = True  # 3.3.0 had no timeout: finish the scan one-shot instead of failing it
+            return _git_cat_bytes_oneshot(spec, self._cwd)
         except BaseException:
             self._stop(kill=True)  # never leave a half-read record in the stream; restart lazily
             raise
@@ -120,8 +134,6 @@ class GitBatchReader:
             self._cache_put(spec, oid, data)
             return data
         name, _, status = header.rpartition(b" ")
-        if name == os.fsencode(spec) and status == b"missing":
-            return self._missing(spec)
         if name != os.fsencode(spec) or status not in _NO_CONTENT_STATUSES:
             self._stop(kill=True)  # unknown framing: restart lazily rather than risk a desynced stream
         return _git_cat_bytes_oneshot(spec, self._cwd)
@@ -137,17 +149,6 @@ class GitBatchReader:
         if data[-1:] != b"\n":
             self._fail(spec, "malformed batch output (missing record terminator)")
         return header, (match.group(1).decode("ascii"), match.group(2), data[:-1])
-
-    def _missing(self, spec: str) -> bytes | None:
-        """Batch says "missing" both for an absent path (one-shot: None) and an unresolvable rev (one-shot: error)."""
-        rev = spec.partition(":")[0] if ":" in spec else ""
-        memoisable = bool(_PLAIN_REV_RE.fullmatch(rev)) and ".." not in rev
-        if memoisable and rev in self._missing_safe_revs:
-            return None
-        result = _git_cat_bytes_oneshot(spec, self._cwd)
-        if memoisable and result is None:
-            self._missing_safe_revs.add(rev)
-        return result
 
     def _request(self, spec: str, deadline: float) -> bytes | None:
         proc = self._ensure_started()
@@ -193,7 +194,7 @@ class GitBatchReader:
             sel.register(fd, selectors.EVENT_READ)
             ready = remaining > 0 and sel.select(remaining)
         if not ready:
-            self._fail(spec, f"timed out after {self._timeout_s:g}s")
+            raise _BatchTimeout(spec)
         chunk = os.read(fd, _READ_CHUNK)
         self._buf.extend(chunk)
         return bool(chunk)

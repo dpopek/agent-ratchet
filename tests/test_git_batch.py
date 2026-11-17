@@ -59,7 +59,7 @@ READ_SPECS = (
     "HEAD:a.py", ":a.py", "HEAD:gone.py", "HEAD~1:gone.py", "HEAD:old_name.py", "HEAD~1:old_name.py",
     "HEAD:new_name.py", "HEAD:link.py", ":link.py", "HEAD:latin1.py", "HEAD:big.bin", "HEAD:missing.py",
     ":missing.py", "0000000:a.py", "nosuchref:a.py",
-    # Revs with ':' must not share a "missing-safe" memo key: the first resolves, the second does not.
+    # Rev syntax containing ':' must split at the right colon: the first resolves, the second does not.
     "HEAD^{/chore: initial}:zz", "HEAD^{/chore: nomatch}:a.py", "HEAD@{0}:zz", "HEAD@{99}:a.py",
 )
 
@@ -69,7 +69,7 @@ def test_reads_match_oneshot(repo: Path) -> None:
     with GitBatchReader(cwd) as reader:
         for spec in READ_SPECS:
             assert _outcome(lambda: reader.read_spec(spec)) == _outcome(lambda: _git_cat_bytes_oneshot(spec, cwd)), spec
-        # Second pass: cache and "missing" memo answer the same way as the first.
+        # Second pass: cached reads and repeated misses answer the same way as the first.
         for spec in READ_SPECS:
             assert _outcome(lambda: reader.read_spec(spec)) == _outcome(lambda: _git_cat_bytes_oneshot(spec, cwd)), spec
     assert reader.stats.cache_hits > 0
@@ -114,6 +114,36 @@ def test_newline_path_bypasses_batch(repo: Path) -> None:
         assert git_cat_bytes("HEAD:a.py", cwd) == b"x = 1\n"
 
 
+def test_trailing_cr_path_bypasses_batch(repo: Path) -> None:
+    # `git cat-file --batch` strips a trailing CR from each request line, so "f.py\r" would read "f.py".
+    cwd = str(repo)
+    _commit_files(repo, "chore: cr name", {"f.py": "plain = 1\n", "f.py\r": "cr = 1\n"})
+    expected = _git_cat_bytes_oneshot("HEAD:f.py\r", cwd)
+    assert expected == b"cr = 1\n"
+    with git_batch_session(cwd) as reader:
+        assert git_cat_bytes("HEAD:f.py\r", cwd) == expected
+        assert reader.read_spec("HEAD:f.py\r") == expected
+        assert reader.read_spec("HEAD:f.py") == b"plain = 1\n"
+
+
+def test_repeated_miss_on_same_rev_uses_oneshot(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Old git can report a gitlink as "missing"; only one-shot tells an absent path from a "bad file" error.
+    cwd = str(repo)
+    calls: list[str] = []
+    real_oneshot = git_batch._git_cat_bytes_oneshot
+
+    def counting_oneshot(spec: str, cwd: str | None = None) -> bytes | None:
+        calls.append(spec)
+        return real_oneshot(spec, cwd)
+
+    monkeypatch.setattr(git_batch, "_git_cat_bytes_oneshot", counting_oneshot)
+    with GitBatchReader(cwd) as reader:
+        assert reader.read_spec("HEAD:missing.py") is None
+        assert reader.read_spec("HEAD:other_missing.py") is None
+        assert reader.read_spec("HEAD:missing.py") is None
+    assert calls == ["HEAD:missing.py", "HEAD:other_missing.py", "HEAD:missing.py"]
+
+
 def test_killed_batch_process_raises(repo: Path) -> None:
     with GitBatchReader(str(repo)) as reader:
         assert reader.read_spec("HEAD:a.py") == b"x = 1\n"
@@ -142,18 +172,23 @@ def test_truncated_output_raises(repo: Path) -> None:
             real_stdout.close()
 
 
-def test_timeout_raises(repo: Path) -> None:
-    with GitBatchReader(str(repo), timeout_s=0.5) as reader:
+def test_timeout_falls_back_to_oneshot(repo: Path) -> None:
+    cwd = str(repo)
+    with GitBatchReader(cwd, timeout_s=0.5) as reader:
         assert reader.read_spec("HEAD:a.py") == b"x = 1\n"
         r_fd, w_fd = os.pipe()
         real_stdout = reader._proc.stdout
         reader._proc.stdout = os.fdopen(r_fd, "rb")
         try:
-            with pytest.raises(GuardAnalysisError, match=r"timed out"):
-                reader.read_spec("HEAD:latin1.py")
+            assert reader.read_spec("HEAD:latin1.py") == _git_cat_bytes_oneshot("HEAD:latin1.py", cwd)
         finally:
             os.close(w_fd)
             real_stdout.close()
+        assert reader._proc is None
+        # Disabled for the rest of the scan: every later read is one-shot, with no batch process restarted.
+        assert reader.read_spec("HEAD:new_name.py") == b"z = 3\n"
+        assert _outcome(lambda: reader.read_spec("HEAD:dir")) == _outcome(lambda: _git_cat_bytes_oneshot("HEAD:dir", cwd))
+        assert reader._proc is None
 
 
 def test_other_cwd_bypasses_session(tmp_path: Path) -> None:

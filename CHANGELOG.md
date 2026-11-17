@@ -14,8 +14,10 @@
 ### Changed
 
 - Blob reads go through one `git cat-file --batch` process per scan. On a
-  40-file commit range this takes git subprocesses from 273 to 20. The cache
-  budget is 64 MiB; larger blobs are read but not cached. Error text is
+  40-file commit range this takes git subprocesses from 273 to 26. The cache
+  budget is 64 MiB; blobs over 8 MiB (1/8 of the budget) are read but not
+  cached. Missing objects are read through the one-shot path; a read that
+  takes over 30 s switches the rest of the scan to it. Error text is
   unchanged.
 - `LockSpec` validates its SHA (40 lowercase hex) and `extras` on construction
   and raises `ValueError`.
@@ -26,7 +28,6 @@
 - The A2 probe no longer swallows non-syntax analysis errors (for example an
   AST that is too deep); they fail closed with exit 2. In practice an earlier
   check already failed closed for these.
-- The shim integration test skips when uv has no local Python 3.11.
 
 ## 3.3.0
 
