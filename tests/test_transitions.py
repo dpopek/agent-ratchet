@@ -30,8 +30,8 @@ def _loss_options(status: str) -> tuple[str | None, ...]:
 
 def _states(status: str, hashes: tuple[str, ...]):
     for loss in _loss_options(status):
-        for ident in hashes:
-            yield FactState(status, ident, ident, "c", loss)  # type: ignore[arg-type]
+        for ident, payload in product(hashes, repeat=2):
+            yield FactState(status, ident, payload, "c", loss)  # type: ignore[arg-type]
 
 
 def _all_inputs():
@@ -73,8 +73,8 @@ def test_every_rule_is_reachable():
     assert dead == []
 
 
-def _fs(status, loss=None, ident="a"):
-    return FactState(status, ident, ident, "c", loss)
+def _fs(status, loss=None, ident="a", payload=None):
+    return FactState(status, ident, ident if payload is None else payload, "c", loss)
 
 
 SPEC_CASES = [
@@ -93,6 +93,15 @@ SPEC_CASES = [
      ("unverifiable_violation", True, True, True)),
     (7, _fs("unknown", "tool_failure"), _fs("pass"), False, ("pass", False, False, False)),
     (8, _fs("pass"), _fs("absent"), False, ("removed", False, False, False)),
+    (9, _fs("absent"), _fs("unknown", "tool_failure"), False,
+     ("needs_tier2_verification", False, True, True)),
+    (9, _fs("not_applicable"), _fs("unknown", "tool_failure"), False,
+     ("needs_tier2_verification", False, True, True)),
+    (10, _fs("violation"), _fs("violation"), False, ("unchanged_violation", False, False, False)),
+    (11, _fs("pass"), _fs("violation"), False, ("violation", True, True, True)),
+    (11, _fs("violation"), _fs("violation", payload="b"), False, ("violation", True, True, True)),
+    (12, _fs("pass"), _fs("not_applicable"), False, ("not_applicable", False, False, False)),
+    (13, _fs("absent"), _fs("absent"), False, ("not_applicable", False, False, False)),
 ]
 
 
@@ -145,7 +154,23 @@ def test_not_applicable_cannot_carry_loss():
 
 def test_unknown_requires_loss_reason():
     with pytest.raises(ValueError):
-        FactState("unknown")
+        FactState("unknown", "a", "a")
+
+
+@pytest.mark.parametrize(
+    "args",
+    [("unknown",), ("pass",), ("violation",), ("violation", "a")],
+    ids=["unknown-no-hashes", "pass-no-hashes", "violation-no-hashes", "violation-no-payload"],
+)
+def test_fact_state_requires_hashes(args):
+    kwargs = {"loss_reason": "tool_failure"} if args[0] == "unknown" else {}
+    with pytest.raises(ValueError):
+        FactState(*args, **kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("status", ["absent", "not_applicable"])
+def test_fact_state_hashes_optional_for_absent_and_na(status):
+    assert FactState(status).identity_hash is None  # type: ignore[arg-type]
 
 
 def test_engine_is_dormant():

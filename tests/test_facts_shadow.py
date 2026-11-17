@@ -10,6 +10,11 @@ from agent_ratchet.git_guard_io import SlopViolation
 SHADOW_LINE = "agent-ratchet shadow:"
 TS_NOCHECK = "// @ts-" + "nocheck\nexport const val = 42;\n"
 JS_EMPTY_TESTS = "it('empty arrow', () => {});\nit('fn expr', function() {});\nit('real test', () => { expect(x).toBe(1); });\n"
+PY_CONVERSATIONAL = "# Certainly! Here is the implementation\nx = 1\n"
+PY_EVASION = "# bypassing the ratchet here\nx = 1\n"
+PY_TAUTOLOGY = "def test_a():\n    assert True\n"
+PY_EMPTY_TEST = "def test_b():\n    pass\n"
+JS_THROWING_GETTER = "const o = { get boom() { throw new Error('x'); } };\n"
 
 
 class _Dummy:
@@ -39,16 +44,30 @@ def test_legacy_parity_on_conformance_fixtures():
     fixtures = {
         "ts_nocheck": scan_text_for_slop(TS_NOCHECK, "src/app.ts"),
         "js_empty_tests": scan_text_for_slop(JS_EMPTY_TESTS, "tests/widget.test.jsx"),
+        "conversational": scan_text_for_slop(PY_CONVERSATIONAL, "src/mod.py"),
+        "evasion": scan_text_for_slop(PY_EVASION, "src/mod.py"),
+        "tautology": scan_text_for_slop(PY_TAUTOLOGY, "tests/test_mod.py"),
+        "py_empty_test": scan_text_for_slop(PY_EMPTY_TEST, "tests/test_mod.py"),
+        "throwing_getter": scan_text_for_slop(JS_THROWING_GETTER, "tests/widget.test.js"),
     }
     dup = SlopViolation("src/a.py", 3, "x_cat", "msg", "snip")
     fixtures["duplicates"] = [dup, dup, dup._replace(line=4)]
+    categories = {v.category for vs in fixtures.values() for v in vs}
+    assert categories >= {
+        "unjustified_lint_escape",
+        "empty_dummy_test",
+        "conversational_marker",
+        "guard_evasion_comment",
+        "tautological_assertion",
+        "synthetic_throwing_getter",
+    }
     checked = 0
     for name, vs in fixtures.items():
         assert vs, name
         assert legacy.shadow_report(vs).endswith("parity ok"), name
         assert legacy.shadow_report(vs) == f"agent-ratchet shadow: {len(vs)} facts, parity ok"
         checked += 1
-    assert checked == 3
+    assert checked == 8
 
 
 def _scan(tmp_path, monkeypatch, capsys, value):

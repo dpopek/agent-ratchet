@@ -105,7 +105,12 @@ class LockSpec:
     extras: Literal["none", "php", "magento"] = "none"
 
     def __post_init__(self) -> None:
-        if not re.fullmatch(r"[0-9a-f]{40}", self.sha) or self.extras not in ("none", "php", "magento"):
+        if (
+            not isinstance(self.sha, str)
+            or not isinstance(self.extras, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", self.sha)
+            or self.extras not in ("none", "php", "magento")
+        ):
             raise ValueError(f"Invalid LockSpec: sha={self.sha!r}, extras={self.extras!r}")
 
 

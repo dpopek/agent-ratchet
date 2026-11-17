@@ -134,5 +134,12 @@
   },
   "bytes_hex": "7b22656d6f6a69223a22f09f9880227d",
   "identity_sha256": "14a1b6b9b22ce63253ec6ceb051a3ab22ef6db880ab8565e8ee803abc3a69744"
+ },
+ {
+  "value": {
+   "k": "a\u00a0b"
+  },
+  "bytes_hex": "7b226b223a2261c2a062227d",
+  "identity_sha256": "1f1e36bf2e0ca91ceb19029c1a8f4522d809d45e6ad0a402c62f41e7f5c7182e"
  }
 ]

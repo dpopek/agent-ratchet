@@ -107,6 +107,16 @@ def test_lockspec_rejects_invalid_extras(args: tuple[str, ...]) -> None:
     assert LockSpec("a" * 40, "magento").extras == "magento"
 
 
+@pytest.mark.parametrize(
+    "args",
+    [(123,), ("a" * 40, ["php"]), ("a" * 40, 5), (None,)],
+    ids=["sha-int", "extras-list", "extras-int", "sha-none"],
+)
+def test_lockspec_rejects_non_str_sha(args: tuple[object, ...]) -> None:
+    with pytest.raises(ValueError, match="Invalid LockSpec"):
+        LockSpec(*args)  # type: ignore[arg-type]
+
+
 def test_read_lock_format(tmp_path: Path) -> None:
     repo, _ = _consumer(tmp_path, {})
     assert read_lock("", cwd=str(repo)) is None
