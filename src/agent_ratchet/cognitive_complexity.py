@@ -6,6 +6,8 @@ from __future__ import annotations
 import ast
 from typing import Mapping, NamedTuple
 
+from agent_ratchet.ast_safety import parse_python, visit_bounded
+
 COGNITIVE_FUNCTION_CEILING: int = 15
 COGNITIVE_MODULE_CEILING: int = 200
 
@@ -90,20 +92,21 @@ def _collect_scores(body: list[ast.stmt], prefix: str, out: dict[str, FunctionSc
             _collect_scores(stmt.body, f"{prefix}{stmt.name}.", out)
 
 
-def function_cognitive_scores(source: str) -> dict[str, FunctionScore]:
-    """Map each top-level function and method qualname to its score; nested defs fold into their parent. Raises SyntaxError."""
+def function_cognitive_scores(source: str, filename: str = "<source>") -> dict[str, FunctionScore]:
+    """Map each top-level function and method qualname to its score; nested defs fold into their parent. Raises SyntaxError, or GuardAnalysisError when the AST is too deep."""
     scores: dict[str, FunctionScore] = {}
-    _collect_scores(ast.parse(source).body, "", scores)
+    tree = parse_python(source, filename)
+    visit_bounded(lambda: _collect_scores(tree.body, "", scores), filename)
     return scores
 
 
-def safe_function_cognitive_scores(source: str | None) -> dict[str, FunctionScore] | None:
-    """Scores, or None when the source is absent or unparseable (syntax errors are reported by the AST scanner)."""
+def safe_function_cognitive_scores(source: str | None, filename: str = "<source>") -> dict[str, FunctionScore] | None:
+    """Scores, or None when the source is absent or has a syntax error (reported by the AST scanner); too-deep ASTs raise GuardAnalysisError."""
     if source is None:
         return None
     try:
-        return function_cognitive_scores(source)
-    except (SyntaxError, ValueError, RecursionError):
+        return function_cognitive_scores(source, filename)
+    except (SyntaxError, ValueError):
         return None
 
 
@@ -130,7 +133,7 @@ class BudgetFinding(NamedTuple):
 
 def evaluate_cognitive_budget(rel_path: str, base_text: str | None, target_text: str, ceiling_override: int | None = None) -> tuple[list[BudgetFinding], int]:
     """Function ceiling for new or grown functions plus a module ratchet; returns findings and the ceiling to carry forward."""
-    target_scores, base_scores = safe_function_cognitive_scores(target_text), safe_function_cognitive_scores(base_text)
+    target_scores, base_scores = safe_function_cognitive_scores(target_text, rel_path), safe_function_cognitive_scores(base_text, rel_path)
     t_total, b_total = module_cognitive_total(target_scores), module_cognitive_total(base_scores)
     allowed = ceiling_override if ceiling_override is not None else max(COGNITIVE_MODULE_CEILING, b_total)
     if target_scores is None:

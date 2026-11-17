@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
@@ -12,6 +11,9 @@ import re
 import subprocess
 from typing import Any, Mapping, NamedTuple, Sequence
 
+from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers re-exported
+    GuardAnalysisError as GuardAnalysisError, parse_python as parse_python, visit_bounded as visit_bounded,
+)
 from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
 from agent_ratchet.source_metrics import (  # noqa: F401 -- lexing primitives re-exported
     JS_LIKE_EXTS as JS_LIKE_EXTS, _count_ast_assertions, _count_js_assertions, count_effective_sloc as count_effective_sloc,
@@ -116,10 +118,6 @@ LEGACY_2_0_SLOP_KINDS: frozenset[str] = frozenset({
     "monkeypatch_binding", "nested_or_late_import", "passthrough_wrapper_bloat", "reexport_facade_aliasing",
     "swallowed_fallback_return", "symbol_alias_bloat",
 })
-
-
-class GuardAnalysisError(RuntimeError):
-    """Raised when AST parsing, Git resolution, or config/lock validation fails."""
 
 
 def head_commit_exists(cwd: str | None = None) -> bool:
@@ -463,12 +461,12 @@ def check_staged_file_size_buffer(cwd: str | None = None, soft_ceiling: int = MO
 def count_test_assertions(content: str, filename: str, strict: bool = False) -> int:
     if filename.endswith(".py"):
         try:
-            tree = ast.parse(content, filename=filename)
+            tree = parse_python(content, filename)
         except SyntaxError as exc:
             if strict:
                 raise GuardAnalysisError(f"SyntaxError in test file {filename}:{exc.lineno or 1}: {exc.msg}") from exc
             return 0
-        return _count_ast_assertions(tree, multiplier=1)
+        return visit_bounded(lambda: _count_ast_assertions(tree, multiplier=1), filename)
     if filename.endswith(JS_LIKE_EXTS):
         return _count_js_assertions(content)
     return 0

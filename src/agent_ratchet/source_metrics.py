@@ -6,12 +6,14 @@ from __future__ import annotations
 import ast
 import re
 
+from agent_ratchet.ast_safety import parse_python, visit_bounded
+
 JS_LIKE_EXTS: tuple[str, ...] = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
 
 
 def _python_docstring_lines(content: str) -> set[int]:
     try:
-        tree = ast.parse(content)
+        tree = parse_python(content, "<source>")
     except SyntaxError:
         return set()
     doc_lines: set[int] = set()
