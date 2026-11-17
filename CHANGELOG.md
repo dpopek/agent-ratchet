@@ -1,5 +1,33 @@
 # Changelog
 
+## 3.4.0
+
+### Added
+
+- `AGENT_RATCHET_SHADOW=1` prints one `agent-ratchet shadow: ...` line to
+  stderr. Stdout and the exit code are unchanged. Any other value is off.
+- New modules, dormant in this release: `agent_ratchet.facts` (CanonicalFact
+  v1, canonical encoding with domain-separated SHA-256 hashes, LanguagePlugin
+  registry, legacy adapter) and `agent_ratchet.transitions` (BASE/HEAD
+  transition engine). Nothing calls them and no plugin is registered.
+
+### Changed
+
+- Blob reads go through one `git cat-file --batch` process per scan. On a
+  40-file commit range this takes git subprocesses from 273 to 20. The cache
+  budget is 64 MiB; larger blobs are read but not cached. Error text is
+  unchanged.
+- `LockSpec` validates its SHA (40 lowercase hex) and `extras` on construction
+  and raises `ValueError`.
+- No change to findings; `RULES_VERSION` stays `2.3.3`.
+
+### Fixed
+
+- The A2 probe no longer swallows non-syntax analysis errors (for example an
+  AST that is too deep); they fail closed with exit 2. In practice an earlier
+  check already failed closed for these.
+- The shim integration test skips when uv has no local Python 3.11.
+
 ## 3.3.0
 
 ### Added

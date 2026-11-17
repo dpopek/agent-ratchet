@@ -211,6 +211,10 @@ exemption can change without a rules bump. For example, 3.2.0 skips files named
 like guard modules only under `scripts/audit/`, and files named like guard
 tests only under `tests/`; elsewhere they are scanned.
 
+Setting `AGENT_RATCHET_SHADOW=1` makes a run print one
+`agent-ratchet shadow: ...` line to stderr. Stdout and the exit code do not
+change; any other value leaves it off.
+
 `agent_ratchet.version.GUARD_VERSION` is a deprecated alias of `VERSION` and is
 removed in 4.0. (The `GUARD_VERSION` exported by `git_guard_io` and
 `refactoring_guard` is a separate alias of `RULES_VERSION`, also removed in 4.0.)
