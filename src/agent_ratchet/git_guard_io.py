@@ -218,7 +218,7 @@ def list_snapshot_files(ref_prefix: str, cwd: str | None = None) -> list[str]:
 def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
     try:
         data = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise GuardAnalysisError(f"Malformed audit_guard_config.json at {source}: {exc}") from exc
     if not isinstance(data, dict):
         raise GuardAnalysisError(f"audit_guard_config.json at {source} must be a JSON object")
