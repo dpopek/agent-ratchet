@@ -28,8 +28,8 @@ class _FakeDistribution:
 def test_version_prints_semver() -> None:
     result = _run_cli("version")
     assert result.returncode == 0
-    assert result.stdout == "3.1.0\n"
-    assert version.GUARD_VERSION == "3.1.0"
+    assert result.stdout == "3.2.0\n"
+    assert version.GUARD_VERSION == "3.2.0"
 
 
 def test_version_sha_without_vcs_metadata_exits_3(monkeypatch) -> None:

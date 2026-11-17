@@ -11,6 +11,8 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = REPO_ROOT / "src"
+# Engine under test; point it at another checkout's src (e.g. an extracted older release) to run these tests against it.
+ENGINE_SRC = Path(os.environ.get("AGENT_RATCHET_ENGINE_SRC") or SRC_DIR)
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -58,10 +60,11 @@ def _init_guard_repo(tmp_dir: str, guard_version: str | None = None) -> Path:
 
 def _run_tool(subcommand: str, repo: Path, *args: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, **(extra_env or {})}
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(SRC_DIR), env.get("PYTHONPATH", "")]))
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ENGINE_SRC), env.get("PYTHONPATH", "")]))
     if extra_env is None:
         env.pop("ALLOW_GUARD_LOCK_UPDATE", None)
-    return subprocess.run([sys.executable, "-m", "agent_ratchet", subcommand, *args], cwd=repo, env=env, capture_output=True, text=True)
+    # -P: never prepend cwd, so only ENGINE_SRC (first on PYTHONPATH) supplies agent_ratchet.
+    return subprocess.run([sys.executable, "-P", "-m", "agent_ratchet", subcommand, *args], cwd=repo, env=env, capture_output=True, text=True)
 
 
 def _run_scanner(repo: Path, *args: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:

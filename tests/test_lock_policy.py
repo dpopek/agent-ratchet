@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from agent_ratchet import lock_policy
+from agent_ratchet import ai_slop_scanner, lock_policy, test_baseline_integrity
 from agent_ratchet.git_guard_io import GuardAnalysisError, is_protected_governance_path
 from agent_ratchet.lock_policy import (
     GUARD_CORE_URL,
@@ -441,8 +441,6 @@ def test_mode_only_change_counts_as_change(tmp_path: Path, remote: Remote) -> No
 
 def test_commit_range_x_z_x_judges_every_hop(tmp_path: Path, remote: Remote, monkeypatch: pytest.MonkeyPatch) -> None:
     """X -> unreleased Z -> X nets to no change, so only the per-commit hops can reject it (T4-c)."""
-    from agent_ratchet import ai_slop_scanner, test_baseline_integrity
-
     repo, base = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
     hop_z = _commit_files(repo, "chore: bump to unreleased", {LOCK_PATH: remote.c3 + "\n"})
     head = _commit_files(repo, "chore: back to release", {LOCK_PATH: remote.c1 + "\n"})

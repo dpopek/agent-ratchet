@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.2.0
+
+### Changed
+
+- Files named like guard modules are skipped only under `scripts/audit/`, and
+  files named like guard tests only under `tests/`. Elsewhere they are now
+  scanned, so new findings may appear in such files. `RULES_VERSION` stays
+  `2.3.3`.
+
+### Fixed
+
+- Excessively nested guard config or baseline JSON exits 2 with
+  `guard_analysis_error` instead of a traceback.
+
+### Deprecated (removed in 4.0)
+
+- `SELF_SKIP_NAMES`; use `is_self_skipped(path)`.
+
 ## 3.1.0
 
 ### Changed

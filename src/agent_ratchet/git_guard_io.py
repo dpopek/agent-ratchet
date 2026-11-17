@@ -17,7 +17,8 @@ from agent_ratchet.source_metrics import (  # noqa: F401 -- lexing primitives re
     JS_LIKE_EXTS as JS_LIKE_EXTS, _count_ast_assertions, _count_js_assertions, count_effective_sloc as count_effective_sloc,
 )
 
-# Rule-set version: findings are identical to the vendored Guard Core 2.3.3 (the package version lives in agent_ratchet.version).
+# Rule-set version: rule identifiers, thresholds and detection algorithms of Guard Core 2.3.3, not byte-identical
+# findings; exemption scope may change without a bump. The package version lives in agent_ratchet.version.
 RULES_VERSION: str = "2.3.3"
 GUARD_VERSION: str = RULES_VERSION  # Deprecated alias, kept until 4.0 (consumers import it).
 DEFAULT_BRANCH_CANDIDATES: tuple[str, ...] = ("origin/main", "origin/master")
@@ -35,13 +36,29 @@ DUMPING_GROUND_FILENAME_RE: re.Pattern[str] = re.compile(
     r"(?:^|/)(?:_?(?:helpers|utils|common|misc|shared|ext|extra)|.*_(?:helpers|utils|common|misc|ext))\.(?:py|ts|tsx|mts|cts|js|jsx|mjs|cjs)$"
 )
 
-SELF_SKIP_NAMES: set[str] = {
+# Vendored guard modules: exempt only under the protected governance prefix scripts/audit/.
+GUARD_MODULE_NAMES: frozenset[str] = frozenset({
     "ai_slop_scanner.py", "refactoring_guard.py", "ast_refactoring_delta.py", "ast_topology_guard.py",
-    "git_guard_io.py", "source_metrics.py", "query_mutation_rules.py", "ast_control_flow.py", "baseline_diff.py", "cognitive_complexity.py", "guard_versions.py", "test_baseline_integrity.py", "test_ai_slop_scanner.py", "test_agent_slop_scanner.py",
-    "test_baseline_integrity_guard.py", "test_guard_conformance.py", "test_guard_git_conformance.py", "test_guard_cognitive_conformance.py",
-    "test_guard_topology_conformance.py", "guard_repo_harness.py",
-    "ai_slop_scanner.test.ts", "test_quality_auditor.py", "test_suite_quality_ratchet.py",
-}
+    "git_guard_io.py", "source_metrics.py", "query_mutation_rules.py", "ast_control_flow.py",
+    "baseline_diff.py", "cognitive_complexity.py", "guard_versions.py", "test_baseline_integrity.py",
+    "test_quality_auditor.py",
+})
+# Legacy guard test files and fixtures: exempt only under tests/ (temporary; 4.0 moves to path-scoped exemptions).
+GUARD_TEST_NAMES: frozenset[str] = frozenset({
+    "test_ai_slop_scanner.py", "test_agent_slop_scanner.py", "test_baseline_integrity_guard.py",
+    "test_guard_conformance.py", "test_guard_git_conformance.py", "test_guard_cognitive_conformance.py",
+    "test_guard_topology_conformance.py", "test_suite_quality_ratchet.py", "guard_repo_harness.py",
+    "ai_slop_scanner.test.ts",
+})
+_SELF_SKIP_SCOPES: tuple[tuple[str, frozenset[str]], ...] = (("scripts/audit/", GUARD_MODULE_NAMES), ("tests/", GUARD_TEST_NAMES))
+# Deprecated since 3.2.0 (basename-only, unscoped); kept as an export until 4.0. Use is_self_skipped().
+SELF_SKIP_NAMES: set[str] = set(GUARD_MODULE_NAMES | GUARD_TEST_NAMES)
+
+
+def is_self_skipped(path: str) -> bool:
+    """True only for a repo-relative POSIX path under a self-skip prefix whose basename is in that prefix's set."""
+    name = path.rsplit("/", 1)[-1]
+    return any(path.startswith(prefix) and name in names for prefix, names in _SELF_SKIP_SCOPES)
 
 
 class SlopViolation(NamedTuple):
@@ -202,7 +219,7 @@ def list_snapshot_files(ref_prefix: str, cwd: str | None = None) -> list[str]:
 def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
     try:
         data = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise GuardAnalysisError(f"Malformed audit_guard_config.json at {source}: {exc}") from exc
     if not isinstance(data, dict):
         raise GuardAnalysisError(f"audit_guard_config.json at {source} must be a JSON object")
@@ -433,7 +450,7 @@ def evaluate_loc_transition(
 def check_staged_file_size_buffer(cwd: str | None = None, soft_ceiling: int = MODIFIED_FILE_SOFT_CEILING_LOC, waivers: Sequence[Mapping[str, Any]] = ()) -> list[SlopViolation]:
     violations: list[SlopViolation] = []
     for status, old_path, new_path in diff_name_status(None, None, cwd=cwd):
-        if status.startswith("D") or is_test_filename(new_path) or os.path.basename(new_path) in SELF_SKIP_NAMES:
+        if status.startswith("D") or is_test_filename(new_path) or is_self_skipped(new_path):
             continue
         target_bytes = git_cat_bytes(f":{new_path}", cwd)
         if target_bytes is not None:

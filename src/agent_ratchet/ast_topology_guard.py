@@ -10,9 +10,9 @@ from typing import AbstractSet, Mapping, Sequence
 
 from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES,
-    SELF_SKIP_NAMES,
     GuardAnalysisError,
     SlopViolation,
+    is_self_skipped,
     is_test_filename,
 )
 
@@ -298,7 +298,7 @@ def build_snapshot_import_graph(
 ) -> dict[str, set[str]]:
     facts_by_path: dict[str, ModuleImportFacts] = {}
     for rel, src in sorted(files_source_map.items()):
-        if not rel.endswith(".py") or is_test_filename(rel) or PurePosixPath(rel).name in SELF_SKIP_NAMES:
+        if not rel.endswith(".py") or is_test_filename(rel) or is_self_skipped(rel):
             continue
         facts_by_path[rel] = extract_module_import_facts(src, rel)
 

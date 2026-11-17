@@ -43,7 +43,10 @@ The shim reads `guard.lock` and runs
 an environment that has the locked agent-ratchet installed
 (`uv run --no-config --no-project --with ...`). `--no-config` keeps a
 repository `uv.toml` or `[tool.uv]` table from redirecting the index or
-sources.
+sources. It also ignores the user-level and system `uv.toml`, so a package
+mirror must come from `UV_INDEX_URL` or another `UV_*` environment variable.
+`--no-config` is not a hermetic environment; CI must control trusted
+environment variables separately.
 
 Run the shim from the repository root. It finds `guard.lock` from the root
 wherever it is called, but the agent-ratchet arguments, including relative paths
@@ -109,11 +112,28 @@ proven to install and run before it lands:
 
 Make both steps required checks.
 
-On the adoption pull request the base has no `scripts/guard` yet, so
-`git show origin/main:scripts/guard` fails. That pull request bootstraps: run
-its own `scripts/guard` with `--lock-from origin/main`. The base has no
-`guard.lock` either, so the shim prints the bootstrap notice and uses the pull
-request's lock. Review the adoption pull request by hand.
+On the adoption pull request the base has neither `scripts/guard` nor
+`guard.lock`. Detect this explicitly; never key the bootstrap on a failing
+`git show`, which also fails on a network or ref error:
+
+    git rev-parse --verify origin/main >/dev/null || exit 1
+    present=$(git ls-tree origin/main -- guard.lock scripts/guard) || exit 1
+    if [ -z "$present" ]; then
+        shim=scripts/guard                                   # bootstrap
+    elif [ "$(printf '%s\n' "$present" | wc -l)" -eq 2 ]; then
+        git show origin/main:scripts/guard > "$RUNNER_TEMP/guard"
+        shim="$RUNNER_TEMP/guard"                            # normal path
+    else
+        echo "broken install: base has only one of guard.lock, scripts/guard" >&2
+        exit 1
+    fi
+    sh "$shim" --lock-from origin/main scan --commit-range origin/main..HEAD
+
+Only an empty listing, both files absent, bootstraps: the pull request runs
+its own `scripts/guard` with `--lock-from origin/main`, and the shim prints the
+bootstrap notice and uses the pull request's lock. Exactly one of the two files
+present is a broken install and fails. Review the adoption pull request by
+hand.
 
 ## Changing the lock: `ALLOW_GUARD_LOCK_UPDATE`
 
@@ -135,6 +155,19 @@ executes, so it is gated.
   annotated `v3.*` release tag of agent-ratchet and is a descendant of the
   previous locked SHA.
 
+### Break-glass: an invalid lock on the base
+
+If the default branch itself carries an invalid `guard.lock` or
+`scripts/guard`, every pull request is judged by that broken pin, and the gate
+cannot repair it by design. Recover as follows:
+
+1. The operator opens a single-purpose pull request that touches only
+   `guard.lock` and `scripts/guard`.
+2. A second person reviews it by hand, or the operator records the review in
+   the pull request.
+3. It is merged with a merge commit. The next pull request must pass the normal
+   gate.
+
 ## Release procedure
 
 1. Merge the change into `main` of agent-ratchet and wait for green CI.
@@ -151,6 +184,15 @@ executes, so it is gated.
 
 Never move or delete a `v3.*` tag and never rewrite `main`: every pinned SHA
 must stay fetchable.
+
+## Versions
+
+The package version (`agent-ratchet version`) and `RULES_VERSION` (still
+`2.3.3`) are separate. `RULES_VERSION` names the rule identifiers, thresholds
+and detection algorithms, not byte-identical findings: the scope of an
+exemption can change without a rules bump. For example, 3.2.0 skips files named
+like guard modules only under `scripts/audit/`, and files named like guard
+tests only under `tests/`; elsewhere they are scanned.
 
 ## Differential acceptance tool
 

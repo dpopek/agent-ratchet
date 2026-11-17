@@ -146,10 +146,18 @@ def test_malformed_manifest_flagged(tmp_path: Path, manifest: bytes) -> None:
     assert _tamper_paths(check_staged_test_tampering(cwd=str(repo))) == {LISTED}
 
 
-def test_deeply_nested_manifest_yields_no_exemption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Python <= 3.14 raises RecursionError on deep nesting; 3.15 parses iteratively, so the raise is forced here."""
+def test_deeply_nested_manifest_yields_no_exemption(tmp_path: Path) -> None:
+    """Real 100 000-level nesting: whether the parser raises or returns, no file is exempted."""
     repo = _base_repo(tmp_path, manifest=b"[" * 100000 + b"]" * 100000)
     _stage_adoption(repo, LISTED)
+    assert adopted_guard_files("HEAD", "", [LISTED], cwd=str(repo)) == frozenset()
+
+
+def test_recursion_error_while_parsing_manifest_yields_no_exemption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A manifest that would exempt LISTED; an injected RecursionError must take the handler branch, not exempt."""
+    repo = _base_repo(tmp_path, manifest=_manifest({LISTED: _sha256_bytes(_test_src("conformance").encode())}))
+    _stage_adoption(repo, LISTED)
+    assert adopted_guard_files("HEAD", "", [LISTED], cwd=str(repo)) == frozenset({LISTED})
 
     def _deep(_raw: bytes) -> object:
         raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")

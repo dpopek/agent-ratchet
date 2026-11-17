@@ -70,7 +70,7 @@ def _load_json_blob(spec: str, cwd: str | None = None) -> tuple[bytes | None, di
         return None, None
     try:
         parsed = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise BaselineAnalysisError(f"Failed to parse JSON in '{spec}': {exc}") from exc
     if not isinstance(parsed, dict):
         raise BaselineAnalysisError(f"JSON root in '{spec}' must be an object.")
@@ -185,7 +185,7 @@ def _load_target_baseline(bf: str, t_prefix: str, cwd: str | None) -> tuple[byte
         if not isinstance(parsed, dict):
             raise BaselineAnalysisError(f"JSON root in {bf} must be an object.")
         return c_raw, parsed
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise BaselineAnalysisError(f"Failed to parse JSON in {bf}: {exc}") from exc
 
 
