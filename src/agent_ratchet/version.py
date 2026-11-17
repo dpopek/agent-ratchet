@@ -5,7 +5,8 @@ from __future__ import annotations
 import importlib.metadata
 import json
 
-GUARD_VERSION: str = "3.2.0"
+VERSION: str = "3.3.0"
+GUARD_VERSION: str = VERSION  # Deprecated alias, kept until 4.0.
 _DISTRIBUTION_NAME = "agent-ratchet"
 
 

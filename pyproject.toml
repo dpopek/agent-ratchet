@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-ratchet"
-version = "3.2.0"
+version = "3.3.0"
 description = "Shared quality and refactoring guards for Python repositories."
 readme = "README.md"
 license = "MIT"
@@ -22,4 +22,7 @@ guard-core = "agent_ratchet.cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = ["integration: exercises a real external tool (skipped when it is absent)"]
+markers = [
+    "integration: exercises a real external tool (skipped when it is absent)",
+    "bridge: runs the previous release (extracted from its git tag) against this checkout's lock transitions",
+]
