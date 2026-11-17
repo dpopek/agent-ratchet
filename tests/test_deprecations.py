@@ -87,10 +87,27 @@ def test_legacy_cli_paths_note_on_stderr_only(capsys: pytest.CaptureFixture[str]
     assert capsys.readouterr().err == ""
 
 
-@pytest.mark.parametrize("module", [git_guard_io, refactoring_guard, version, lock_policy])
-def test_star_import_is_silent_and_all_has_no_deprecated_name(module: object) -> None:
-    deprecated = {"GUARD_VERSION", "SELF_SKIP_NAMES", "RELEASE_TAG_PATTERN"}
-    assert not deprecated & set(getattr(module, "__all__", ()))
+def test_star_import_of_refactoring_guard_binds_guard_version_and_warns() -> None:
+    assert "GUARD_VERSION" in refactoring_guard.__all__
+    namespace: dict[str, object] = {}
+    with pytest.warns(DeprecationWarning, match=re.escape(_guard_version_msg("refactoring_guard", "RULES_VERSION"))):
+        exec("from agent_ratchet.refactoring_guard import *", namespace)  # noqa: S102
+    assert namespace["GUARD_VERSION"] is refactoring_guard.RULES_VERSION
+
+
+@pytest.mark.parametrize("module", [git_guard_io, version, lock_policy])
+def test_star_import_without_all_is_silent_and_skips_deprecated_names(module: object) -> None:
+    assert not hasattr(module, "__all__")
+    namespace: dict[str, object] = {}
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
-        exec(f"from {module.__name__} import *", {})  # noqa: S102
+        exec(f"from {module.__name__} import *", namespace)  # noqa: S102
+    assert not {"GUARD_VERSION", "SELF_SKIP_NAMES", "RELEASE_TAG_PATTERN"} & set(namespace)
+
+
+def test_deprecation_warning_reports_caller_file() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        lock_policy.RELEASE_TAG_PATTERN  # noqa: B018
+    assert len(caught) == 1
+    assert caught[0].filename == __file__
