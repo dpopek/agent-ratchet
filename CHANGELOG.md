@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.3.0
+
+### Added
+
+- Annotated `v4.x.y` release tags are accepted in the lock policy next to
+  `v3.x.y`.
+- Optional `EXTRAS=none|php|magento` line in `guard.lock`. Any `EXTRAS` line
+  is rejected as malformed by 3.2.0 and earlier, and values other than `none`
+  require a `v4.x.y` release. The POSIX shim honours it.
+- `agent_ratchet.__version__` and `agent_ratchet.version.VERSION`.
+
+### Changed
+
+- A `RecursionError` while parsing, visiting or analysing a file's AST (or the
+  SCC graph) now exits 2 with `guard_analysis_error` instead of being skipped.
+  This can surface analysis errors in files with extreme nesting depth.
+- The POSIX shim's malformed-lock error text differs from 3.2.0; match on
+  "malformed" rather than the exact old wording.
+- `GuardAnalysisError` is defined in `agent_ratchet.ast_safety`. It is still
+  importable from `agent_ratchet.git_guard_io` and is the same class.
+- `RULES_VERSION` stays `2.3.3`.
+
+### Deprecated (removed in 4.0)
+
+- `RELEASE_TAG_PATTERN` in `lock_policy`; use `RELEASE_TAG_PATTERNS`.
+- `agent_ratchet.version.GUARD_VERSION`; use `VERSION` or `__version__`.
+
+### Upgrade
+
+See "Upgrading to 4.x" in the README. Do not add `EXTRAS` in the bump that
+moves the base off 3.2.0 or earlier.
+
 ## 3.2.0
 
 ### Changed

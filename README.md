@@ -185,14 +185,33 @@ cannot repair it by design. Recover as follows:
 Never move or delete a `v3.*` tag and never rewrite `main`: every pinned SHA
 must stay fetchable.
 
+## Upgrading to 4.x
+
+Agent-ratchet 3.2.0 and earlier reject any `EXTRAS` line in `guard.lock` and
+know only `v3.*` release tags. A base that old cannot verify a lock that uses
+either, so move in separate pull requests, in this order:
+
+1. Bump `guard.lock` to 3.3.0, SHA only (one line, no `EXTRAS`).
+2. Bump to 3.4.0.
+3. Pin `v4.0.0`, still without `EXTRAS`.
+4. In a separate pull request, add `EXTRAS=none|php|magento` and the matching
+   profile. Values other than `none` require a `v4.x.y` release.
+
+Never add `EXTRAS` in the same PR that moves the base off ≤ 3.2.0.
+
 ## Versions
 
-The package version (`agent-ratchet version`) and `RULES_VERSION` (still
+The package version (`agent-ratchet version`, `agent_ratchet.__version__`,
+`agent_ratchet.version.VERSION`) and `RULES_VERSION` (still
 `2.3.3`) are separate. `RULES_VERSION` names the rule identifiers, thresholds
 and detection algorithms, not byte-identical findings: the scope of an
 exemption can change without a rules bump. For example, 3.2.0 skips files named
 like guard modules only under `scripts/audit/`, and files named like guard
 tests only under `tests/`; elsewhere they are scanned.
+
+`agent_ratchet.version.GUARD_VERSION` is a deprecated alias of `VERSION` and is
+removed in 4.0. (The `GUARD_VERSION` exported by `git_guard_io` and
+`refactoring_guard` is a separate alias of `RULES_VERSION`, also removed in 4.0.)
 
 ## Differential acceptance tool
 
