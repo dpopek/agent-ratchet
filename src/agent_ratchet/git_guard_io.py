@@ -15,6 +15,9 @@ from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers 
     GuardAnalysisError as GuardAnalysisError, parse_python as parse_python, visit_bounded as visit_bounded,
 )
 from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
+from agent_ratchet.git_batch import (  # noqa: F401 -- head_commit_exists / _git_cat_bytes_oneshot re-exported
+    _git_cat_bytes_oneshot as _git_cat_bytes_oneshot, active_reader_for, head_commit_exists as head_commit_exists,
+)
 from agent_ratchet.source_metrics import (  # noqa: F401 -- lexing primitives re-exported
     JS_LIKE_EXTS as JS_LIKE_EXTS, _count_ast_assertions, _count_js_assertions, count_effective_sloc as count_effective_sloc,
 )
@@ -120,10 +123,6 @@ LEGACY_2_0_SLOP_KINDS: frozenset[str] = frozenset({
 })
 
 
-def head_commit_exists(cwd: str | None = None) -> bool:
-    return subprocess.run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-
-
 def verify_commit_ref(ref: str, cwd: str | None = None) -> str:
     try:
         return subprocess.check_output(["git", "rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=cwd, text=True, stderr=subprocess.PIPE).strip()
@@ -132,15 +131,13 @@ def verify_commit_ref(ref: str, cwd: str | None = None) -> str:
 
 
 def git_cat_bytes(spec: str, cwd: str | None = None) -> bytes | None:
-    if spec.startswith("HEAD:") and not head_commit_exists(cwd):
+    """Blob bytes for `spec`, None when missing; reads through the active git_batch_session for this cwd if any."""
+    reader = active_reader_for(cwd)
+    if spec.startswith("HEAD:") and not (reader.head_exists() if reader is not None else head_commit_exists(cwd)):
         return None
-    res = subprocess.run(["git", "cat-file", "blob", spec], cwd=cwd, capture_output=True, env={**os.environ, "LC_ALL": "C"})  # stable stderr
-    if res.returncode == 0:
-        return res.stdout
-    err = (res.stderr or b"").decode("utf-8", errors="replace").lower()
-    if "not a valid object name" in err or "does not exist" in err or "exists on disk, but not in" in err:
-        return None
-    raise GuardAnalysisError(f"git cat-file failed for '{spec}': {err.strip()}")
+    if reader is None or "\n" in spec or "\0" in spec:
+        return _git_cat_bytes_oneshot(spec, cwd)
+    return reader.read_spec(spec)
 
 
 def git_show_text(spec: str, cwd: str | None = None) -> str | None:

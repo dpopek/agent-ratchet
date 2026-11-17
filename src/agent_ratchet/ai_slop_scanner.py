@@ -22,6 +22,7 @@ from agent_ratchet.git_guard_io import (
     list_snapshot_files, load_guard_config_for_ref, parse_python, visit_bounded,
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
+from agent_ratchet.git_batch import git_batch_session
 from agent_ratchet.lock_policy import LOCK_PATH, adopted_guard_files, check_staged_lock, lock_check_is_local, verify_lock_transition
 from agent_ratchet.source_metrics import (
     _count_ast_assertions, _count_js_top_level_items, _find_balanced_span, _parametrize_multiplier, strip_js_comments,
@@ -622,7 +623,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--test-fixtures", action="store_true", help="Run self-test against fixtures")
     parser.add_argument("files", nargs="*", help="Specific files or folders to scan")
     args = parser.parse_args(argv)
+    with git_batch_session():
+        return _run_scan(args)
 
+
+def _run_scan(args: argparse.Namespace) -> int:
     if args.test_fixtures:
         return 0 if run_fixtures_self_test() else 1
     lock_rc = check_staged_lock() if args.staged_only else None
