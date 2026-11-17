@@ -13,7 +13,7 @@ from typing import Callable
 
 import pytest
 
-from agent_ratchet import ai_slop_scanner
+from agent_ratchet import ai_slop_scanner, git_batch
 from agent_ratchet.ast_safety import GuardAnalysisError
 from agent_ratchet.git_batch import GitBatchReader, _git_cat_bytes_oneshot, active_reader_for, git_batch_session
 from agent_ratchet.git_guard_io import git_cat_bytes
@@ -59,6 +59,8 @@ READ_SPECS = (
     "HEAD:a.py", ":a.py", "HEAD:gone.py", "HEAD~1:gone.py", "HEAD:old_name.py", "HEAD~1:old_name.py",
     "HEAD:new_name.py", "HEAD:link.py", ":link.py", "HEAD:latin1.py", "HEAD:big.bin", "HEAD:missing.py",
     ":missing.py", "0000000:a.py", "nosuchref:a.py",
+    # Revs with ':' must not share a "missing-safe" memo key: the first resolves, the second does not.
+    "HEAD^{/chore: initial}:zz", "HEAD^{/chore: nomatch}:a.py", "HEAD@{0}:zz", "HEAD@{99}:a.py",
 )
 
 
@@ -276,3 +278,48 @@ def test_subprocess_count_reduced(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     print(f"\nsubprocess count for {CHANGED_FILES} changed files: without session={without}, with session={with_count}")
     assert session_result == plain_result
     assert without >= 5 * with_count, (without, with_count)
+
+
+def test_interrupt_mid_read_resets_stream(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real_read = os.read
+    calls = {"n": 0}
+
+    def interrupting_read(fd: int, n: int) -> bytes:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt
+        return real_read(fd, n)
+
+    with GitBatchReader(str(repo)) as reader:
+        assert reader.read_spec("HEAD:a.py") == b"x = 1\n"
+        monkeypatch.setattr(git_batch.os, "read", interrupting_read)
+        calls["n"] = 0
+        with pytest.raises(KeyboardInterrupt):
+            reader.read_spec("HEAD:big.bin")
+        monkeypatch.setattr(git_batch.os, "read", real_read)
+        assert reader._proc is None and not reader._buf
+        assert reader.read_spec("HEAD:latin1.py") == b"# caf\xe9\nq = 1\n"
+        assert reader.read_spec("HEAD:big.bin") == _git_cat_bytes_oneshot("HEAD:big.bin", str(repo))
+
+
+def test_deleted_cwd_session_falls_back_to_oneshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _new_repo(tmp_path / "r")
+    _commit_files(repo, "chore: r", {"x": "from R\n"})
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    with git_batch_session() as reader:
+        assert reader is None
+        assert active_reader_for(None) is None
+        assert git_cat_bytes("HEAD:x", cwd=str(repo)) == b"from R\n"
+
+
+def test_deleted_cwd_inside_session_bypasses_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    work = tmp_path / "w"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    with git_batch_session() as reader:
+        assert reader is not None
+        work.rmdir()
+        assert active_reader_for(None) is None

@@ -21,7 +21,9 @@ from agent_ratchet.ast_safety import GuardAnalysisError
 
 _MISSING_MARKERS: tuple[str, ...] = ("not a valid object name", "does not exist", "exists on disk, but not in")
 _HEADER_RE = re.compile(rb"([0-9a-f]{40}|[0-9a-f]{64}) ([a-z]+) ([0-9]+)")
-_NO_CONTENT_STATUSES: frozenset[bytes] = frozenset({b"ambiguous", b"submodule"})
+# Only plain ref names / object ids are memoised as "missing-safe"; rev syntax (^{...}, @{...}, :, ~, ^) is not.
+_PLAIN_REV_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
+_NO_CONTENT_STATUSES: frozenset[bytes] =frozenset({b"ambiguous", b"submodule"})
 _GIT_FATAL_EXIT = 128
 _EXIT_GRACE_S = 2.0
 _READ_CHUNK = 1 << 16
@@ -104,20 +106,19 @@ class GitBatchReader:
         return self._query(spec)
 
     def _query(self, spec: str) -> bytes | None:
-        deadline = time.monotonic() + self._timeout_s
-        header = self._request(spec, deadline)
+        try:
+            header, record = self._exchange(spec)
+        except BaseException:
+            self._stop(kill=True)  # never leave a half-read record in the stream; restart lazily
+            raise
         if header is None:  # git exited with a fatal error: the one-shot path reproduces its message
             return _git_cat_bytes_oneshot(spec, self._cwd)
-        match = _HEADER_RE.fullmatch(header)
-        if match:
-            oid, kind, size = match.group(1).decode("ascii"), match.group(2), int(match.group(3))
-            data = self._read_exact(size + 1, deadline, spec)
-            if data[-1:] != b"\n":
-                self._fail(spec, "malformed batch output (missing record terminator)")
+        if record is not None:
+            oid, kind, data = record
             if kind != b"blob":
                 return _git_cat_bytes_oneshot(spec, self._cwd)
-            self._cache_put(spec, oid, data[:-1])
-            return data[:-1]
+            self._cache_put(spec, oid, data)
+            return data
         name, _, status = header.rpartition(b" ")
         if name == os.fsencode(spec) and status == b"missing":
             return self._missing(spec)
@@ -125,13 +126,26 @@ class GitBatchReader:
             self._stop(kill=True)  # unknown framing: restart lazily rather than risk a desynced stream
         return _git_cat_bytes_oneshot(spec, self._cwd)
 
+    def _exchange(self, spec: str) -> tuple[bytes | None, tuple[str, bytes, bytes] | None]:
+        """One request/response: (header, (oid, type, content) for an object header, else None)."""
+        deadline = time.monotonic() + self._timeout_s
+        header = self._request(spec, deadline)
+        match = _HEADER_RE.fullmatch(header) if header is not None else None
+        if match is None:
+            return header, None
+        data = self._read_exact(int(match.group(3)) + 1, deadline, spec)
+        if data[-1:] != b"\n":
+            self._fail(spec, "malformed batch output (missing record terminator)")
+        return header, (match.group(1).decode("ascii"), match.group(2), data[:-1])
+
     def _missing(self, spec: str) -> bytes | None:
         """Batch says "missing" both for an absent path (one-shot: None) and an unresolvable rev (one-shot: error)."""
         rev = spec.partition(":")[0] if ":" in spec else ""
-        if rev in self._missing_safe_revs:
+        memoisable = bool(_PLAIN_REV_RE.fullmatch(rev)) and ".." not in rev
+        if memoisable and rev in self._missing_safe_revs:
             return None
         result = _git_cat_bytes_oneshot(spec, self._cwd)
-        if rev and result is None:
+        if memoisable and result is None:
             self._missing_safe_revs.add(rev)
         return result
 
@@ -240,14 +254,24 @@ class GitBatchReader:
 _ACTIVE: ContextVar[tuple[str, GitBatchReader] | None] = ContextVar("agent_ratchet_git_batch_reader", default=None)
 
 
-def _session_key(cwd: str | None) -> str:
-    return os.path.realpath(cwd or os.getcwd())
+def _session_key(cwd: str | None) -> str | None:
+    """Realpath of cwd (default: process cwd); None when it cannot be resolved, e.g. a deleted working directory."""
+    try:
+        return os.path.realpath(cwd or os.getcwd())
+    except OSError:
+        return None
 
 
 @contextmanager
-def git_batch_session(cwd: str | None = None) -> Iterator[GitBatchReader]:
-    """Bind one lazy reader to the scan cwd; git_cat_bytes for that cwd reads through it until the block exits."""
+def git_batch_session(cwd: str | None = None) -> Iterator[GitBatchReader | None]:
+    """Bind one lazy reader to the scan cwd; git_cat_bytes for that cwd reads through it until the block exits.
+
+    Yields None (no reader bound, every read one-shot as in 3.3.0) when the cwd cannot be resolved.
+    """
     key = _session_key(cwd)
+    if key is None:
+        yield None
+        return
     with GitBatchReader(key) as reader:
         token = _ACTIVE.set((key, reader))
         try:
@@ -258,6 +282,6 @@ def git_batch_session(cwd: str | None = None) -> Iterator[GitBatchReader]:
 
 def active_reader_for(cwd: str | None) -> GitBatchReader | None:
     bound = _ACTIVE.get()
-    if bound is None or _session_key(cwd) != bound[0]:
+    if bound is None or _session_key(cwd) != bound[0]:  # an unresolvable cwd (None) never matches
         return None
     return bound[1]
