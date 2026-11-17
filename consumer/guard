@@ -90,25 +90,39 @@ if [ "$src" = "wt" ]; then
     [ -f "$ROOT/guard.lock" ] || die "guard.lock is missing or not a regular file"
 fi
 
-# Same grammar as agent_ratchet.lock_policy: 40 lowercase hex, optional single LF, nothing else.
+# Same grammar as agent_ratchet.lock_policy: 40 lowercase hex, an optional EXTRAS=none|php|magento
+# line, at most one trailing LF, nothing else. Bytes outside the grammar's alphabet (NUL, CR, blanks)
+# are rejected on the raw stream, before command substitution can drop or strip them.
+malformed() {
+    die "guard.lock is malformed (expected 40 lowercase hex characters and an optional EXTRAS=none|php|magento line)"
+}
+stray=$(emit_lock | tr -d '0-9a-zA-Z=\n' | wc -c | tr -d ' ')
+[ "$stray" = "0" ] || malformed
 size=$(emit_lock | wc -c | tr -d ' ')
 data=$(
     emit_lock
     printf x
 )
 data=${data%x}
-want=40
-case "$data" in
-    *"$NL")
-        data=${data%"$NL"}
-        want=41
-        ;;
+[ "${#data}" -eq "$size" ] || malformed
+data=${data%"$NL"}
+SHA=${data%%"$NL"*}
+EXTRA=none
+if [ "$SHA" != "$data" ]; then
+    case "${data#*"$NL"}" in
+        EXTRAS=none | EXTRAS=php | EXTRAS=magento) EXTRA=${data#*"$NL"EXTRAS=} ;;
+        *) malformed ;;
+    esac
+fi
+[ "${#SHA}" -eq 40 ] || malformed
+case "$SHA" in
+    *[!0-9a-f]*) malformed ;;
 esac
-[ "${#data}" -eq 40 ] && [ "$size" -eq "$want" ] || die "guard.lock is malformed (expected 40 lowercase hex characters)"
-case "$data" in
-    *[!0-9a-f]*) die "guard.lock is malformed (expected 40 lowercase hex characters)" ;;
-esac
-SHA=$data
+
+SPEC="$URL@$SHA"
+if [ "$EXTRA" != "none" ]; then
+    SPEC="agent-ratchet[$EXTRA] @ $SPEC"
+fi
 
 if [ "$mode" = "exec" ]; then
     tool=uv
@@ -118,6 +132,6 @@ fi
 command -v "$tool" >/dev/null 2>&1 || die "$tool not found on PATH; install uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
 
 if [ "$mode" = "exec" ]; then
-    exec uv run --no-config --no-project --with "$URL@$SHA" -- "$@"
+    exec uv run --no-config --no-project --with "$SPEC" -- "$@"
 fi
-exec uvx --no-config --from "$URL@$SHA" agent-ratchet --expect-sha "$SHA" "$@"
+exec uvx --no-config --from "$SPEC" agent-ratchet --expect-sha "$SHA" "$@"

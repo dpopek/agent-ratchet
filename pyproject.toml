@@ -22,3 +22,4 @@ guard-core = "agent_ratchet.cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["integration: exercises a real external tool (skipped when it is absent)"]
