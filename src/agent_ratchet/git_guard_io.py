@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import warnings
 from typing import Any, Mapping, NamedTuple, Sequence
 
 from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers re-exported
@@ -26,7 +27,7 @@ from agent_ratchet.source_metrics import (  # noqa: F401 -- lexing primitives re
 # Rule-set version: rule identifiers, thresholds and detection algorithms of Guard Core 2.3.3, not byte-identical
 # findings; exemption scope may change without a bump. The package version lives in agent_ratchet.version.
 RULES_VERSION: str = "2.3.3"
-GUARD_VERSION: str = RULES_VERSION  # Deprecated alias, kept until 4.0 (consumers import it).
+_GUARD_VERSION: str = RULES_VERSION  # Deprecated public alias GUARD_VERSION, served by __getattr__ until 4.0.
 DEFAULT_BRANCH_CANDIDATES: tuple[str, ...] = ("origin/main", "origin/master")
 _UNREACHABLE_DISTANCE = 1 << 62
 
@@ -57,8 +58,22 @@ GUARD_TEST_NAMES: frozenset[str] = frozenset({
     "ai_slop_scanner.test.ts",
 })
 _SELF_SKIP_SCOPES: tuple[tuple[str, frozenset[str]], ...] = (("scripts/audit/", GUARD_MODULE_NAMES), ("tests/", GUARD_TEST_NAMES))
-# Deprecated since 3.2.0 (basename-only, unscoped); kept as an export until 4.0. Use is_self_skipped().
-SELF_SKIP_NAMES: set[str] = set(GUARD_MODULE_NAMES | GUARD_TEST_NAMES)
+# Deprecated since 3.2.0 (basename-only, unscoped); public SELF_SKIP_NAMES is served by __getattr__ until 4.0. Use is_self_skipped().
+_SELF_SKIP_NAMES: set[str] = set(GUARD_MODULE_NAMES | GUARD_TEST_NAMES)
+
+
+_DEPRECATED_NAMES: dict[str, tuple[str, str]] = {
+    "GUARD_VERSION": ("_GUARD_VERSION", "agent_ratchet.git_guard_io.RULES_VERSION"),
+    "SELF_SKIP_NAMES": ("_SELF_SKIP_NAMES", "is_self_skipped()"),
+}
+
+
+def __getattr__(name: str) -> object:
+    if name in _DEPRECATED_NAMES:
+        private, replacement = _DEPRECATED_NAMES[name]
+        warnings.warn(f"agent_ratchet.git_guard_io.{name} is deprecated and removed in 4.0; use {replacement}", DeprecationWarning, stacklevel=2)
+        return globals()[private]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def is_self_skipped(path: str) -> bool:

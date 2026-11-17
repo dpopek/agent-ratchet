@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import warnings
 from typing import Iterable, Literal
 
 from agent_ratchet.git_guard_io import GuardAnalysisError, _git_out, _read_ref_file_bytes, head_commit_exists, trusted_base_candidates
@@ -25,8 +26,16 @@ LEGACY_MANIFEST_PATH = "scripts/audit/guard_manifest.json"
 CANONICAL_SHIM_PATH = "consumer/guard"
 LOCK_UPDATE_ENV = "ALLOW_GUARD_LOCK_UPDATE"
 RELEASE_TAG_PATTERNS: tuple[str, ...] = ("refs/tags/v3.*", "refs/tags/v4.*")
-RELEASE_TAG_PATTERN = RELEASE_TAG_PATTERNS[0]  # deprecated alias, removed in 4.0
+_RELEASE_TAG_PATTERN = RELEASE_TAG_PATTERNS[0]  # deprecated public alias RELEASE_TAG_PATTERN, served by __getattr__ until 4.0
 RELEASE_TAG_RE = re.compile(r"\Av(3|4)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
+
+
+def __getattr__(name: str) -> object:
+    if name == "RELEASE_TAG_PATTERN":
+        warnings.warn("agent_ratchet.lock_policy.RELEASE_TAG_PATTERN is deprecated and removed in 4.0; use RELEASE_TAG_PATTERNS", DeprecationWarning, stacklevel=2)
+        return _RELEASE_TAG_PATTERN
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _LOCK_RE = re.compile(rb"\A([0-9a-f]{40})(?:\nEXTRAS=(none|php|magento))?\n?\Z")
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")

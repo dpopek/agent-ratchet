@@ -20,7 +20,7 @@ from agent_ratchet.git_guard_io import (
     evaluate_loc_transition,
 )
 from agent_ratchet.refactoring_guard import (
-    GUARD_VERSION,
+    RULES_VERSION as AST_RULES_VERSION,
     BranchKind,
     ScopeKind,
     collect_full_scan_violations,
@@ -35,7 +35,7 @@ PACKAGE_DIR = Path(__file__).resolve().parent.parent / "src" / "agent_ratchet"
 
 class TestGuardAstConformance(unittest.TestCase):
     def test_guard_version_is_2_3_3(self) -> None:
-        self.assertEqual(GUARD_VERSION, "2.3.3")
+        self.assertEqual(AST_RULES_VERSION, "2.3.3")
         self.assertEqual(RULES_VERSION, "2.3.3")
         self.assertEqual(ScopeKind.CLASS.value, "class")
         self.assertEqual(BranchKind.TYPE_CHECKING.value, "type_checking")

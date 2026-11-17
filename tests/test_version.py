@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from agent_ratchet import version
 
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
@@ -101,4 +103,5 @@ def test_dunder_version_matches_distribution() -> None:
 
 
 def test_guard_version_alias_equal() -> None:
-    assert version.GUARD_VERSION == version.VERSION  # deprecated alias, removed in 4.0
+    with pytest.warns(DeprecationWarning, match="agent_ratchet.version.GUARD_VERSION is deprecated"):
+        assert version.GUARD_VERSION == version.VERSION  # deprecated alias, removed in 4.0

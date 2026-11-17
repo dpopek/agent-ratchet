@@ -11,6 +11,9 @@ import importlib.machinery
 import importlib.util
 import sys
 from types import ModuleType
+import warnings
+
+warnings.warn("guard_core is deprecated and removed in 4.0; import agent_ratchet instead (see 'agent-ratchet migrate-imports')", DeprecationWarning, stacklevel=2)
 
 _OLD = __name__
 _NEW = "agent_ratchet"
