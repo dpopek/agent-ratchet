@@ -94,8 +94,9 @@ The `guard_core` package is deprecated and removed in 4.0. Through the shim:
    `-m guard_core` to `-m agent_ratchet`.
 4. Re-run step 1 until it exits 0 (1: pending items, 2: errors).
 
-`mention` items (strings, comments) are reported only and do not affect the
-exit code.
+Exact or runtime-looking `guard_core` strings (`"guard_core"`, `"guard-core"`,
+`"guard_core.x"`, `-m guard_core`) are manual items (exit 1). Other strings and
+comments are `mention` items: reported only, no effect on the exit code.
 
 ## CI: judge a pull request with the trusted base
 
@@ -208,8 +209,8 @@ know only `v3.*` release tags. A base that old cannot verify a lock that uses
 either, so move in separate pull requests, in this order:
 
 1. Bump `guard.lock` to 3.3.0, SHA only (one line, no `EXTRAS`).
-2. Bump to 3.5.0 or later and run `migrate-imports` (see "Migrating off
-   guard_core" above).
+2. Bump to 3.5.x and run `scripts/guard migrate-imports --write .` (see
+   "Migrating off guard_core" above).
 3. Pin `v4.0.0`, still without `EXTRAS`.
 4. In a separate pull request, add `EXTRAS=none|php|magento` and the matching
    profile. Values other than `none` require a `v4.x.y` release.
