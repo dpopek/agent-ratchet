@@ -253,10 +253,10 @@ def _collect_py_test_funcs(body: list[ast.stmt], prefix: str = "") -> dict[str, 
     return funcs
 
 
-def _allows_py_dto_consolidation(b_txt: str, t_txt: str, b_cnt: int, t_cnt: int) -> bool:
-    b_tree, t_tree = parse_python(b_txt, "<base>"), parse_python(t_txt, "<target>")
-    b_funcs = visit_bounded(lambda: _collect_py_test_funcs(b_tree.body), "<base>")
-    t_funcs = visit_bounded(lambda: _collect_py_test_funcs(t_tree.body), "<target>")
+def _allows_py_dto_consolidation(old_path: str, new_path: str, b_txt: str, t_txt: str, b_cnt: int, t_cnt: int) -> bool:
+    b_tree, t_tree = parse_python(b_txt, old_path), parse_python(t_txt, new_path)
+    b_funcs = visit_bounded(lambda: _collect_py_test_funcs(b_tree.body), old_path)
+    t_funcs = visit_bounded(lambda: _collect_py_test_funcs(t_tree.body), new_path)
     b_other, t_other = b_cnt - sum(a for _, a, _ in b_funcs.values()), t_cnt - sum(a for _, a, _ in t_funcs.values())
     if not b_funcs or t_other < b_other or not (set(b_funcs) <= set(t_funcs)) or any(ta < tm or tm < 1 for tm, ta, _ in t_funcs.values()):
         return False
@@ -333,7 +333,7 @@ def _allows_dto_consolidation(b_txt: str, old_path: str, t_txt: str, new_path: s
     if t_cnt < 1 or any(v.category in ("empty_dummy_test", "tautological_assertion") for v in scan_text_for_slop(t_txt, new_path)):
         return False
     if new_path.endswith(".py") and old_path.endswith(".py"):
-        return _allows_py_dto_consolidation(b_txt, t_txt, b_cnt, t_cnt)
+        return _allows_py_dto_consolidation(old_path, new_path, b_txt, t_txt, b_cnt, t_cnt)
     if new_path.endswith(JS_LIKE_EXTS) and old_path.endswith(JS_LIKE_EXTS):
         return _allows_js_dto_consolidation(b_txt, t_txt, b_cnt, t_cnt)
     return False

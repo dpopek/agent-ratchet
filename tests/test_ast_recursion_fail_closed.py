@@ -46,6 +46,7 @@ def test_deep_ast_staged_scan_fails_closed(repo: Path, deep: str) -> None:
     _git(repo, "add", "src/deep.py")
     r = _run_scanner(repo, "--staged-only")
     _assert_fails_closed(r.returncode, r.stdout, r.stderr)
+    assert "src/deep.py: AST too deep to analyse" in r.stderr
 
 
 @DEEP_SOURCES
