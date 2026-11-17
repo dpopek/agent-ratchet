@@ -17,7 +17,8 @@ from agent_ratchet.source_metrics import (  # noqa: F401 -- lexing primitives re
     JS_LIKE_EXTS as JS_LIKE_EXTS, _count_ast_assertions, _count_js_assertions, count_effective_sloc as count_effective_sloc,
 )
 
-# Rule-set version: findings are identical to the vendored Guard Core 2.3.3 (the package version lives in agent_ratchet.version).
+# Rule-set version: rule identifiers, thresholds and detection algorithms of Guard Core 2.3.3, not byte-identical
+# findings; exemption scope may change without a bump. The package version lives in agent_ratchet.version.
 RULES_VERSION: str = "2.3.3"
 GUARD_VERSION: str = RULES_VERSION  # Deprecated alias, kept until 4.0 (consumers import it).
 DEFAULT_BRANCH_CANDIDATES: tuple[str, ...] = ("origin/main", "origin/master")
