@@ -8,6 +8,7 @@ MODULES = [
     "test_baseline_integrity",
     "refactoring_guard",
     "ast_refactoring_delta",
+    "ast_safety",
     "ast_topology_guard",
     "ast_control_flow",
     "baseline_diff",

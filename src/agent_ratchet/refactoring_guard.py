@@ -23,7 +23,7 @@ from agent_ratchet.query_mutation_rules import query_call_mutation_message, quer
 from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES as APP_CODE_PREFIXES, GUARD_VERSION as GUARD_VERSION, HARD_FILE_CEILING_LOC as HARD_FILE_CEILING_LOC,
     MAX_CONTROL_NESTING_DEPTH, MAX_FUNCTION_ARGS, MODIFIED_FILE_SOFT_CEILING_LOC as MODIFIED_FILE_SOFT_CEILING_LOC,
-    GuardAnalysisError as GuardAnalysisError, SlopViolation, git_show_bytes as git_show_bytes, is_self_skipped, is_test_filename
+    GuardAnalysisError as GuardAnalysisError, SlopViolation, git_show_bytes as git_show_bytes, is_self_skipped, is_test_filename, parse_python, visit_bounded
 )
 __all__ = ["APP_CODE_PREFIXES", "BranchKind", "DUMPING_GROUND_FILENAME_RE", "ExitKind", "FunctionVariantMetrics", "GUARD_VERSION", "GuardAnalysisError", "HARD_FILE_CEILING_LOC", "MODIFIED_FILE_SOFT_CEILING_LOC", "ModuleAstSnapshot", "ScopeKind", "SlopViolation", "check_staged_file_size_buffer", "collect_full_scan_violations", "collect_refactoring_slop_entries", "compare_ast_snapshots", "evaluate_loc_transition", "extract_ast_snapshot", "extract_changed_lines_map", "git_show_bytes", "git_show_text", "scan_ast_for_refactoring_slop"]
 
@@ -434,12 +434,12 @@ def extract_ast_snapshot(source: str, filename: str, extra_rules: Sequence[Mappi
     if not filename.endswith(".py") or is_self_skipped(filename):
         return ModuleAstSnapshot(filename, None, 0, {}, {}, {}, {}, [])
     try:
-        tree = ast.parse(source, filename=filename)
+        tree = parse_python(source, filename)
     except SyntaxError as exc:
         err_msg, lineno = f"SyntaxError: {exc.msg}", exc.lineno or 1
         return ModuleAstSnapshot(filename, err_msg, lineno, {}, {}, {}, {}, [SlopViolation(filename, lineno, "syntax_error", err_msg, "")])
     b = _AstSnapshotBuilder(filename, source.splitlines())
-    b.visit(tree)
+    visit_bounded(lambda: b.visit(tree), filename)
     return ModuleAstSnapshot(filename, None, 0, b.runtime_variants, b.overload_variants, b.non_function_counts, b.non_function_lines, b.full_violations)
 register_snapshot_extractor(extract_ast_snapshot)
 

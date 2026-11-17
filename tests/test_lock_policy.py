@@ -14,9 +14,13 @@ from agent_ratchet.lock_policy import (
     GUARD_CORE_URL,
     LEGACY_MANIFEST_PATH,
     LOCK_PATH,
+    LockSpec,
     SHIM_PATH,
     lock_check_is_local,
     read_lock,
+    read_lock_spec,
+    ReleaseTagListError,
+    release_tag_for,
     released_descendant_error,
     staged_lock_errors,
     verify_lock_transition,
@@ -24,6 +28,7 @@ from agent_ratchet.lock_policy import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from guard_repo_harness import _commit_files, _git, _init_guard_repo, _run_baseline_guard, _run_scanner, _write_files
+from lock_grammar_cases import LOCK_GRAMMAR_CASES
 
 ENV_MSG = "guard.lock/scripts/guard change requires ALLOW_GUARD_LOCK_UPDATE=1"
 DELETED_MSG = "guard.lock was deleted"
@@ -104,6 +109,66 @@ def test_read_lock_format(tmp_path: Path) -> None:
             read_lock("", cwd=str(repo))
 
 
+@pytest.mark.parametrize(("raw", "expected"), LOCK_GRAMMAR_CASES)
+def test_read_lock_spec_grammar(tmp_path: Path, raw: bytes, expected: LockSpec | None) -> None:
+    repo, _ = _consumer(tmp_path, {})
+    (repo / LOCK_PATH).write_bytes(raw)
+    _git(repo, "add", LOCK_PATH)
+    if expected is None:
+        with pytest.raises(GuardAnalysisError):
+            read_lock_spec("", cwd=str(repo))
+        with pytest.raises(GuardAnalysisError):
+            read_lock("", cwd=str(repo))
+    else:
+        assert read_lock_spec("", cwd=str(repo)) == expected
+        assert read_lock("", cwd=str(repo)) == expected.sha
+
+
+def test_read_lock_spec_absent_is_none(tmp_path: Path) -> None:
+    repo, _ = _consumer(tmp_path, {})
+    assert read_lock_spec("", cwd=str(repo)) is None
+
+
+def test_read_lock_legacy_returns_sha_with_extras_line(tmp_path: Path) -> None:
+    repo, _ = _consumer(tmp_path, {})
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    _stage(repo, {LOCK_PATH: f"{sha}\nEXTRAS=php\n"})
+    assert read_lock("", cwd=str(repo)) == sha
+
+
+def _extras_bump(tmp_path: Path, tags: list[tuple[str, str, bool]], extras: str) -> tuple[Path, str, str, str]:
+    (tmp_path / "remote").mkdir()
+    url, shas = _tag_remote(tmp_path / "remote", tags)
+    repo, base = _consumer(tmp_path / "consumer", {LOCK_PATH: shas["c1"] + "\n", SHIM_PATH: _shim("c1")})
+    head = _commit_files(repo, "chore: bump guard", {LOCK_PATH: f"{shas['c2']}\nEXTRAS={extras}\n", SHIM_PATH: _shim("c2")})
+    return repo, base, head, url
+
+
+def test_extras_requires_v4_release(tmp_path: Path) -> None:
+    repo, base, head, url = _extras_bump(tmp_path, [("v3.0.0", "c1", True), ("v3.3.0", "c2", True)], "php")
+    errs = verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=url)
+    assert len(errs) == 1 and "EXTRAS=php requires a v4.x.y release" in errs[0]
+
+
+def test_extras_allowed_on_v4_release(tmp_path: Path) -> None:
+    repo, base, head, url = _extras_bump(tmp_path, [("v3.0.0", "c1", True), ("v4.0.0", "c2", True)], "magento")
+    assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=url) == []
+
+
+def test_extras_none_allowed_on_v3(tmp_path: Path) -> None:
+    repo, base, head, url = _extras_bump(tmp_path, [("v3.0.0", "c1", True), ("v3.3.0", "c2", True)], "none")
+    assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=url) == []
+
+
+def test_extras_change_on_same_sha_is_a_lock_change(tmp_path: Path) -> None:
+    (tmp_path / "remote").mkdir()
+    url, shas = _tag_remote(tmp_path / "remote", [("v3.0.0", "c1", True), ("v3.3.0", "c2", True)])
+    repo, base = _consumer(tmp_path / "consumer", {LOCK_PATH: shas["c2"] + "\n", SHIM_PATH: _shim("c2")})
+    head = _commit_files(repo, "chore: extras", {LOCK_PATH: f"{shas['c2']}\nEXTRAS=php\n"})
+    errs = verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=url)
+    assert len(errs) == 1 and "EXTRAS=php requires a v4.x.y release" in errs[0]
+
+
 def test_unchanged_lock_ok(tmp_path: Path, remote: Remote) -> None:
     repo, base = _consumer(tmp_path, {LOCK_PATH: remote.c1 + "\n", SHIM_PATH: _shim("c1")})
     _stage(repo, {"src/app.py": "A = 2\n"})
@@ -169,6 +234,74 @@ def test_lightweight_tag_rejected(tmp_path: Path, remote: Remote) -> None:
     repo, base, head = _committed_bump(tmp_path, remote.c2, remote.c3, "c3")
     errs = verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=remote.url)
     assert len(errs) == 1 and "annotated" in errs[0]
+
+
+def _tag_remote(tmp_path: Path, tags: list[tuple[str, str, bool]]) -> tuple[str, dict[str, str]]:
+    """Bare stand-in: main c1 <- c2, side branch s1 <- c1; ``tags`` = (name, commit key in c1/c2/s1, annotated)."""
+    work = tmp_path / "work"
+    work.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "guard@example.com"], ["config", "user.name", "Guard Test"]):
+        _git(work, *args)
+    c1 = _commit_files(work, "release 1", {"consumer/guard": _shim("c1")})
+    _git(work, "checkout", "-q", "-b", "side")
+    s1 = _commit_files(work, "side", {"side.txt": "s\n"})
+    _git(work, "checkout", "-q", "-")
+    c2 = _commit_files(work, "release 2", {"consumer/guard": _shim("c2")})
+    shas = {"c1": c1, "c2": c2, "s1": s1}
+    for name, key, annotated in tags:
+        _git(work, "tag", *(["-a", "-m", name] if annotated else []), name, shas[key])
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "clone", "--bare", "--quiet", str(work), str(bare)], check=True)
+    return bare.as_uri(), shas
+
+
+def test_release_accepts_annotated_v4_descendant(tmp_path: Path) -> None:
+    url, shas = _tag_remote(tmp_path, [("v3.0.0", "c1", True), ("v4.0.0", "c2", True)])
+    assert released_descendant_error(shas["c1"], shas["c2"], repo_url=url) is None
+
+
+@pytest.mark.parametrize("tag", ["v4.0.0-rc1", "v4.0", "v4.01.0", "v5.0.0", "v3.3", "release-3.3.0"])
+def test_release_rejects_prerelease_and_short_tags(tmp_path: Path, tag: str) -> None:
+    url, shas = _tag_remote(tmp_path, [("v3.0.0", "c1", True), (tag, "c2", True)])
+    err = released_descendant_error(shas["c1"], shas["c2"], repo_url=url)
+    assert err is not None and "no annotated v3.x.y/v4.x.y release tag" in err
+
+
+def test_release_rejects_lightweight_v4_tag(tmp_path: Path) -> None:
+    url, shas = _tag_remote(tmp_path, [("v3.0.0", "c1", True), ("v4.0.0", "c2", False)])
+    err = released_descendant_error(shas["c1"], shas["c2"], repo_url=url)
+    assert err is not None and "annotated" in err
+
+
+def test_release_rejects_v4_non_descendant(tmp_path: Path) -> None:
+    url, shas = _tag_remote(tmp_path, [("v3.0.0", "c2", True), ("v4.0.0", "s1", True)])
+    err = released_descendant_error(shas["c2"], shas["s1"], repo_url=url)
+    assert err is not None and "is not a descendant of" in err
+
+
+def test_release_tag_for_returns_lowest_semver_valid_tag(tmp_path: Path) -> None:
+    tags = [("v4.0.0", "c2", True), ("v3.10.0", "c2", True), ("v3.9.0", "c2", True), ("v3.0.0-rc1", "c2", True), ("v3.0.5", "c2", False)]
+    _, shas = _tag_remote(tmp_path, tags)
+    git_dir = tmp_path / "remote.git"
+    assert release_tag_for(str(git_dir), shas["c2"]) == "v3.9.0"
+    assert release_tag_for(str(git_dir), shas["c1"]) is None
+
+
+def test_release_tag_listing_failure_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    not_a_repo = tmp_path / "empty"
+    not_a_repo.mkdir()
+    with pytest.raises(ReleaseTagListError):
+        release_tag_for(str(not_a_repo), "ab" * 20)
+    (tmp_path / "r").mkdir()
+    _, shas = _tag_remote(tmp_path / "r", [("v3.0.0", "c1", True)])
+    git_dir = str(tmp_path / "r" / "remote.git")
+
+    def boom(_git_dir: str, _sha: str) -> str | None:
+        raise ReleaseTagListError("boom")
+
+    monkeypatch.setattr(lock_policy, "release_tag_for", boom)
+    err = lock_policy._release_error(git_dir, None, shas["c1"])
+    assert err is not None and err.startswith("cannot list agent-ratchet release tags")
 
 
 def test_lock_sha_absent_from_remote_rejected(tmp_path: Path, remote: Remote) -> None:

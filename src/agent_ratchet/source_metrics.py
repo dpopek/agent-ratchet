@@ -6,12 +6,14 @@ from __future__ import annotations
 import ast
 import re
 
+from agent_ratchet.ast_safety import parse_python, visit_bounded
+
 JS_LIKE_EXTS: tuple[str, ...] = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
 
 
-def _python_docstring_lines(content: str) -> set[int]:
+def _python_docstring_lines(rel_path: str, content: str) -> set[int]:
     try:
-        tree = ast.parse(content)
+        tree = parse_python(content, rel_path)
     except SyntaxError:
         return set()
     doc_lines: set[int] = set()
@@ -63,7 +65,7 @@ def strip_js_comments(content: str) -> str:
 
 def count_effective_sloc(rel_path: str, content: str) -> int:
     if rel_path.endswith(".py"):
-        doc_lines = _python_docstring_lines(content)
+        doc_lines = _python_docstring_lines(rel_path, content)
         return sum(1 for idx, ln in enumerate(content.splitlines(), 1) if idx not in doc_lines and (s := ln.strip()) and not s.startswith("#"))
     if rel_path.endswith(JS_LIKE_EXTS):
         return sum(1 for ln in strip_js_comments(content).splitlines() if ln.strip())

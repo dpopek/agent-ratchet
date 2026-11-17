@@ -28,8 +28,8 @@ class _FakeDistribution:
 def test_version_prints_semver() -> None:
     result = _run_cli("version")
     assert result.returncode == 0
-    assert result.stdout == "3.2.0\n"
-    assert version.GUARD_VERSION == "3.2.0"
+    assert result.stdout == "3.3.0\n"
+    assert version.VERSION == "3.3.0"
 
 
 def test_version_sha_without_vcs_metadata_exits_3(monkeypatch) -> None:
@@ -76,4 +76,29 @@ def test_pyproject_version_matches_guard_version() -> None:
     import tomllib
 
     pyproject = tomllib.loads((SRC_DIR.parent / "pyproject.toml").read_text(encoding="utf-8"))
-    assert pyproject["project"]["version"] == version.GUARD_VERSION
+    assert pyproject["project"]["version"] == version.VERSION
+
+
+def test_dunder_version_matches_pyproject() -> None:
+    import tomllib
+
+    import agent_ratchet
+
+    pyproject = tomllib.loads((SRC_DIR.parent / "pyproject.toml").read_text(encoding="utf-8"))
+    assert agent_ratchet.__version__ == pyproject["project"]["version"] == version.VERSION
+
+
+def test_dunder_version_matches_distribution() -> None:
+    import pytest
+
+    import agent_ratchet
+
+    try:
+        installed = importlib.metadata.version("agent-ratchet")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("agent-ratchet is not installed (PYTHONPATH run); pyproject comparison covers this")
+    assert agent_ratchet.__version__ == installed
+
+
+def test_guard_version_alias_equal() -> None:
+    assert version.GUARD_VERSION == version.VERSION  # deprecated alias, removed in 4.0

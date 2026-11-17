@@ -8,6 +8,9 @@ import shutil
 import subprocess
 
 import pytest
+from lock_grammar_cases import LOCK_GRAMMAR_CASES
+
+from agent_ratchet.lock_policy import LockSpec
 
 SHIM = Path(__file__).resolve().parent.parent / "consumer" / "guard"
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -41,11 +44,11 @@ def _fakes(tmp_path: Path) -> Path:
     return bindir
 
 
-def _run(repo: Path, tmp_path: Path, *args: str, path: str | None = None, rc: int = 0):
+def _run(repo: Path, tmp_path: Path, *args: str, path: str | None = None, rc: int = 0, shell: str = "sh", shim: Path = SHIM):
     out = tmp_path / "argv.txt"
     out.unlink(missing_ok=True)
     env = {"PATH": path or f"{_fakes(tmp_path)}{os.pathsep}{os.environ['PATH']}", "FAKE_OUT": str(out), "FAKE_RC": str(rc), "HOME": str(tmp_path)}
-    proc = subprocess.run(["sh", str(SHIM), *args], cwd=repo, env=env, capture_output=True, text=True)
+    proc = subprocess.run([shell, str(shim), *args], cwd=repo, env=env, capture_output=True, text=True)
     argv = out.read_text().splitlines() if out.exists() else []
     return proc, argv
 
@@ -204,6 +207,87 @@ def test_shim_rejects_malformed_index_lock_despite_valid_worktree(tmp_path: Path
     (repo / "guard.lock").write_text(SHA + "\n")
     proc, argv = _run(repo, tmp_path, "scan", "--staged-only")
     assert proc.returncode == 3 and "malformed" in proc.stderr and argv == []
+
+
+def _place_lock(repo: Path, source: str, content: bytes) -> tuple[str, ...]:
+    """Puts ``content`` where ``source`` reads it; returns the shim args selecting that source."""
+    if source == "ref":
+        (repo / "guard.lock").write_bytes(content)
+        _git(repo, "add", "guard.lock")
+        _git(repo, "commit", "-q", "-m", "lock")
+        (repo / "guard.lock").write_text(SHA2 + "\n")
+        return ("--lock-from", "main")
+    (repo / "guard.lock").write_bytes(content)
+    if source == "index":
+        _git(repo, "add", "guard.lock")
+        (repo / "guard.lock").write_text(SHA2 + "\n")
+    return ()
+
+
+_SHELLS = ["sh", *(["dash"] if shutil.which("dash") else [])]
+
+
+@pytest.mark.parametrize(("shell", "source"), [(s, src) for s in _SHELLS for src in ("wt", "index", "ref")])
+@pytest.mark.parametrize(("content", "expected"), LOCK_GRAMMAR_CASES, ids=[repr(c) for c, _ in LOCK_GRAMMAR_CASES])
+def test_shim_lock_grammar_matches_python(tmp_path: Path, shell: str, source: str, content: bytes, expected: LockSpec | None) -> None:
+    repo = _repo(tmp_path)
+    lock_args = _place_lock(repo, source, content)
+    proc, argv = _run(repo, tmp_path, *lock_args, "scan", shell=shell)
+    if expected is None:
+        assert proc.returncode == 3 and "guard.lock is malformed" in proc.stderr and argv == [], proc.stderr
+        return
+    assert proc.returncode == 0 and proc.stderr == "", proc.stderr
+    spec = f"{URL}@{expected.sha}" if expected.extras in (None, "none") else f"agent-ratchet[{expected.extras}] @ {URL}@{expected.sha}"
+    assert argv == ["--no-config", "--from", spec, "agent-ratchet", "--expect-sha", expected.sha, "scan"]
+
+
+def test_shim_passes_extra_in_both_paths(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    (repo / "guard.lock").write_text(f"{SHA}\nEXTRAS=php\n")
+    spec = f"agent-ratchet[php] @ {URL}@{SHA}"
+    proc, argv = _run(repo, tmp_path, "scan", "--staged")
+    assert proc.returncode == 0 and proc.stderr == ""
+    assert argv == ["--no-config", "--from", spec, "agent-ratchet", "--expect-sha", SHA, "scan", "--staged"]
+    proc, argv = _run(repo, tmp_path, "exec", "--", "python", "-m", "pytest")
+    assert proc.returncode == 0 and proc.stderr == ""
+    assert argv == ["run", "--no-config", "--no-project", "--with", spec, "--", "python", "-m", "pytest"]
+
+
+@pytest.mark.parametrize("content", [SHA + "\n", SHA, f"{SHA}\nEXTRAS=none\n", f"{SHA}\nEXTRAS=none"])
+def test_shim_no_extra_is_byte_identical_argv(tmp_path: Path, content: str) -> None:
+    root = SHIM.parent.parent
+    if subprocess.run(["git", "rev-parse", "-q", "--verify", "refs/tags/v3.2.0^{commit}"], cwd=root, capture_output=True).returncode != 0:
+        pytest.skip("tag v3.2.0 is not available in this clone")
+    old = tmp_path / "guard-v3.2.0"
+    old.write_bytes(subprocess.run(["git", "show", "v3.2.0:consumer/guard"], cwd=root, check=True, capture_output=True).stdout)
+    repo = _repo(tmp_path)
+    (repo / "guard.lock").write_text(SHA + "\n")
+    for args in (("scan", "--staged", "a b"), ("exec", "--", "pytest", "-q")):
+        _, want = _run(repo, tmp_path, *args, shim=old)
+        (repo / "guard.lock").write_bytes(content.encode())
+        proc, got = _run(repo, tmp_path, *args)
+        (repo / "guard.lock").write_text(SHA + "\n")
+        assert proc.returncode == 0 and want and got == want
+
+
+@pytest.mark.integration
+def test_shim_extra_real_uv_install(tmp_path: Path) -> None:
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv not found")
+    root = SHIM.parent.parent
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(root), str(clone)], check=True, capture_output=True)
+    sha = _git(clone, "rev-parse", "HEAD").strip()
+    venv = tmp_path / "venv"
+    subprocess.run([uv, "venv", "-q", "--no-config", "--python", "3.11", str(venv)], check=True, capture_output=True)
+    spec = f"agent-ratchet[php] @ git+{clone.as_uri()}@{sha}"
+    proc = subprocess.run(
+        [uv, "pip", "install", "--no-config", "--dry-run", "--python", str(venv / "bin" / "python"), spec],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "Would install" in proc.stderr and "agent-ratchet" in proc.stderr
 
 
 def test_shim_rejects_unmerged_index_lock(tmp_path: Path) -> None:

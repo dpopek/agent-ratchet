@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from agent_ratchet import ai_slop_scanner, test_baseline_integrity
-from agent_ratchet.version import GUARD_VERSION, installed_sha
+from agent_ratchet.version import VERSION, installed_sha
 
 EXIT_SHA_MISMATCH = 3
 
@@ -28,7 +28,7 @@ def _version(rest: list[str]) -> int:
     parser.add_argument("--sha", action="store_true", help="Print the installed commit SHA instead of the version")
     args = parser.parse_args(rest)
     if not args.sha:
-        print(GUARD_VERSION)
+        print(VERSION)
         return 0
     sha = installed_sha()
     if sha is None:

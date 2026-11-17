@@ -99,7 +99,7 @@ works:
 
 Replace `main` with the repository's default branch. The guard pinned by the
 base then decides whether the lock bump in the pull request is allowed (an
-annotated `v3.*` tag that descends from the previous pin).
+annotated `v3.x.y`/`v4.x.y` release tag that descends from the previous pin).
 
 When the pull request changes `guard.lock` or `scripts/guard`, add a second,
 smoke step that runs the pull request's own shim and lock, so the new pin is
@@ -138,21 +138,23 @@ hand.
 ## Changing the lock: `ALLOW_GUARD_LOCK_UPDATE`
 
 A change to `guard.lock` is a change to the code that every hook and CI job
-executes, so it is gated.
+executes, so it is gated. Adding or removing `EXTRAS=none`, or a trailing
+newline, on the same SHA is semantically no change and is not gated: the shim
+and the engine read it identically.
 
 - Locally, `ALLOW_GUARD_LOCK_UPDATE=1` permits a change of `guard.lock` or
   `scripts/guard` in an uncommitted target: HEAD to the index, or the work
   tree. It is for the repository operator only. Agents and automation never set
   it, and it is never set in CI.
 - The variable never skips the remote checks. A changed lock must still be
-  peeled from an annotated `v3.*` release tag of agent-ratchet and descend from
+  peeled from an annotated `v3.x.y`/`v4.x.y` release tag of agent-ratchet and descend from
   the previous locked SHA. On every change of `guard.lock` or `scripts/guard`,
   `scripts/guard` must equal `consumer/guard` at the locked SHA, so copy
   `consumer/guard` to `scripts/guard` whenever you bump the lock.
 - A committed bump that is not yet on the trusted base is verified against
   agent-ratchet again on every pre-commit run.
 - In CI, a lock change is accepted only when the new SHA is peeled from an
-  annotated `v3.*` release tag of agent-ratchet and is a descendant of the
+  annotated `v3.x.y`/`v4.x.y` release tag of agent-ratchet and is a descendant of the
   previous locked SHA.
 
 ### Break-glass: an invalid lock on the base
@@ -182,17 +184,36 @@ cannot repair it by design. Recover as follows:
    where `OLD` is the SHA currently in the consumer's `guard.lock`. Use the
    `guard-core` command here: a 3.0.x pin has no `agent-ratchet` command.
 
-Never move or delete a `v3.*` tag and never rewrite `main`: every pinned SHA
-must stay fetchable.
+Never move or delete a `v3.*` or `v4.*` tag and never rewrite `main`: every
+pinned SHA must stay fetchable.
+
+## Upgrading to 4.x
+
+Agent-ratchet 3.2.0 and earlier reject any `EXTRAS` line in `guard.lock` and
+know only `v3.*` release tags. A base that old cannot verify a lock that uses
+either, so move in separate pull requests, in this order:
+
+1. Bump `guard.lock` to 3.3.0, SHA only (one line, no `EXTRAS`).
+2. Bump to 3.4.0 (when released).
+3. Pin `v4.0.0`, still without `EXTRAS`.
+4. In a separate pull request, add `EXTRAS=none|php|magento` and the matching
+   profile. Values other than `none` require a `v4.x.y` release.
+
+Never add `EXTRAS` in the same PR that moves the base off ≤ 3.2.0.
 
 ## Versions
 
-The package version (`agent-ratchet version`) and `RULES_VERSION` (still
+The package version (`agent-ratchet version`, `agent_ratchet.__version__`,
+`agent_ratchet.version.VERSION`) and `RULES_VERSION` (still
 `2.3.3`) are separate. `RULES_VERSION` names the rule identifiers, thresholds
 and detection algorithms, not byte-identical findings: the scope of an
 exemption can change without a rules bump. For example, 3.2.0 skips files named
 like guard modules only under `scripts/audit/`, and files named like guard
 tests only under `tests/`; elsewhere they are scanned.
+
+`agent_ratchet.version.GUARD_VERSION` is a deprecated alias of `VERSION` and is
+removed in 4.0. (The `GUARD_VERSION` exported by `git_guard_io` and
+`refactoring_guard` is a separate alias of `RULES_VERSION`, also removed in 4.0.)
 
 ## Differential acceptance tool
 

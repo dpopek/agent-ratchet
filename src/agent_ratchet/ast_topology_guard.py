@@ -6,7 +6,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import AbstractSet, Mapping, Sequence
+from typing import AbstractSet, Iterator, Mapping, Sequence
 
 from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES,
@@ -14,6 +14,8 @@ from agent_ratchet.git_guard_io import (
     SlopViolation,
     is_self_skipped,
     is_test_filename,
+    parse_python,
+    visit_bounded,
 )
 
 _DEFAULT_IMPORT_ROOTS: tuple[str, ...] = (".", "src", "backend", "web", "mobile", "packages")
@@ -176,12 +178,12 @@ class _ImportFactsVisitor(ast.NodeVisitor):
 
 def extract_module_import_facts(source: str, rel_path: str) -> ModuleImportFacts:
     try:
-        tree = ast.parse(source, filename=rel_path)
+        tree = parse_python(source, rel_path)
     except SyntaxError as exc:
         raise GuardAnalysisError(f"{rel_path}:{exc.lineno or 1}: SyntaxError: {exc.msg}") from exc
     is_init = PurePosixPath(rel_path).name == "__init__.py"
     visitor = _ImportFactsVisitor(is_init_file=is_init)
-    visitor.visit(tree)
+    visit_bounded(lambda: visitor.visit(tree), rel_path)
     pure_attrs = frozenset(visitor.defined_attrs - visitor.imported_submodules)
     return ModuleImportFacts(
         rel_path=rel_path,
@@ -311,6 +313,7 @@ def build_snapshot_import_graph(
 
 
 def tarjan_scc(graph: Mapping[str, AbstractSet[str]]) -> list[set[str]]:
+    """Tarjan SCCs with an explicit stack (no recursion limit); neighbours in sorted order, so output order matches the recursive form."""
     index = 0
     indices: dict[str, int] = {}
     lowlink: dict[str, int] = {}
@@ -318,35 +321,46 @@ def tarjan_scc(graph: Mapping[str, AbstractSet[str]]) -> list[set[str]]:
     on_stack: set[str] = set()
     cycles: list[set[str]] = []
 
-    def strongconnect(node: str) -> None:
-        nonlocal index
-        indices[node] = index
-        lowlink[node] = index
+    for root in sorted(graph):
+        if root in indices:
+            continue
+        indices[root] = lowlink[root] = index
         index += 1
-        stack.append(node)
-        on_stack.add(node)
-        for nbr in sorted(graph.get(node, ())):
-            if nbr not in graph:
-                continue
-            if nbr not in indices:
-                strongconnect(nbr)
-                lowlink[node] = min(lowlink[node], lowlink[nbr])
-            elif nbr in on_stack:
-                lowlink[node] = min(lowlink[node], indices[nbr])
-        if lowlink[node] == indices[node]:
-            scc: set[str] = set()
-            while True:
-                w = stack.pop()
-                on_stack.remove(w)
-                scc.add(w)
-                if w == node:
+        stack.append(root)
+        on_stack.add(root)
+        work: list[tuple[str, Iterator[str]]] = [(root, iter(sorted(graph.get(root, ()))))]
+        while work:
+            node, nbrs = work[-1]
+            descended = False
+            for nbr in nbrs:
+                if nbr not in graph:
+                    continue
+                if nbr not in indices:
+                    indices[nbr] = lowlink[nbr] = index
+                    index += 1
+                    stack.append(nbr)
+                    on_stack.add(nbr)
+                    work.append((nbr, iter(sorted(graph.get(nbr, ())))))
+                    descended = True
                     break
-            if len(scc) > 1 or node in graph.get(node, ()):
-                cycles.append(scc)
-
-    for v in sorted(graph):
-        if v not in indices:
-            strongconnect(v)
+                if nbr in on_stack:
+                    lowlink[node] = min(lowlink[node], indices[nbr])
+            if descended:
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                lowlink[parent] = min(lowlink[parent], lowlink[node])
+            if lowlink[node] == indices[node]:
+                scc: set[str] = set()
+                while True:
+                    w = stack.pop()
+                    on_stack.remove(w)
+                    scc.add(w)
+                    if w == node:
+                        break
+                if len(scc) > 1 or node in graph.get(node, ()):
+                    cycles.append(scc)
     return cycles
 
 
