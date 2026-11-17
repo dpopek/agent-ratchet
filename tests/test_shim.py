@@ -256,6 +256,8 @@ def test_shim_passes_extra_in_both_paths(tmp_path: Path) -> None:
 @pytest.mark.parametrize("content", [SHA + "\n", SHA, f"{SHA}\nEXTRAS=none\n", f"{SHA}\nEXTRAS=none"])
 def test_shim_no_extra_is_byte_identical_argv(tmp_path: Path, content: str) -> None:
     root = SHIM.parent.parent
+    if subprocess.run(["git", "rev-parse", "-q", "--verify", "refs/tags/v3.2.0^{commit}"], cwd=root, capture_output=True).returncode != 0:
+        pytest.skip("tag v3.2.0 is not available in this clone")
     old = tmp_path / "guard-v3.2.0"
     old.write_bytes(subprocess.run(["git", "show", "v3.2.0:consumer/guard"], cwd=root, check=True, capture_output=True).stdout)
     repo = _repo(tmp_path)

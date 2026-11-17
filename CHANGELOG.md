@@ -14,10 +14,13 @@
 ### Changed
 
 - A `RecursionError` while parsing, visiting or analysing a file's AST (or the
-  SCC graph) now exits 2 with `guard_analysis_error` instead of being skipped.
+  SCC graph) now exits 2 with `guard_analysis_error` instead of being skipped or crashing with a traceback.
   This can surface analysis errors in files with extreme nesting depth.
 - The POSIX shim's malformed-lock error text differs from 3.2.0; match on
   "malformed" rather than the exact old wording.
+- The release-tag error text differs from 3.2.0 (was "carries no annotated
+  v3.x.y release tag", now "no annotated v3.x.y/v4.x.y release tag peels to
+  <sha>"); match on "release tag".
 - `GuardAnalysisError` is defined in `agent_ratchet.ast_safety`. It is still
   importable from `agent_ratchet.git_guard_io` and is the same class.
 - `RULES_VERSION` stays `2.3.3`.

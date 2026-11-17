@@ -99,7 +99,7 @@ works:
 
 Replace `main` with the repository's default branch. The guard pinned by the
 base then decides whether the lock bump in the pull request is allowed (an
-annotated `v3.*` tag that descends from the previous pin).
+annotated `v3.x.y`/`v4.x.y` release tag that descends from the previous pin).
 
 When the pull request changes `guard.lock` or `scripts/guard`, add a second,
 smoke step that runs the pull request's own shim and lock, so the new pin is
@@ -138,7 +138,9 @@ hand.
 ## Changing the lock: `ALLOW_GUARD_LOCK_UPDATE`
 
 A change to `guard.lock` is a change to the code that every hook and CI job
-executes, so it is gated.
+executes, so it is gated. Adding or removing `EXTRAS=none`, or a trailing
+newline, on the same SHA is semantically no change and is not gated: the shim
+and the engine read it identically.
 
 - Locally, `ALLOW_GUARD_LOCK_UPDATE=1` permits a change of `guard.lock` or
   `scripts/guard` in an uncommitted target: HEAD to the index, or the work
@@ -182,8 +184,8 @@ cannot repair it by design. Recover as follows:
    where `OLD` is the SHA currently in the consumer's `guard.lock`. Use the
    `guard-core` command here: a 3.0.x pin has no `agent-ratchet` command.
 
-Never move or delete a `v3.*` tag and never rewrite `main`: every pinned SHA
-must stay fetchable.
+Never move or delete a `v3.*` or `v4.*` tag and never rewrite `main`: every
+pinned SHA must stay fetchable.
 
 ## Upgrading to 4.x
 
@@ -192,7 +194,7 @@ know only `v3.*` release tags. A base that old cannot verify a lock that uses
 either, so move in separate pull requests, in this order:
 
 1. Bump `guard.lock` to 3.3.0, SHA only (one line, no `EXTRAS`).
-2. Bump to 3.4.0.
+2. Bump to 3.4.0 (when released).
 3. Pin `v4.0.0`, still without `EXTRAS`.
 4. In a separate pull request, add `EXTRAS=none|php|magento` and the matching
    profile. Values other than `none` require a `v4.x.y` release.
