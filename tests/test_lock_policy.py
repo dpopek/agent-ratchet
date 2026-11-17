@@ -17,6 +17,7 @@ from agent_ratchet.lock_policy import (
     SHIM_PATH,
     lock_check_is_local,
     read_lock,
+    ReleaseTagListError,
     release_tag_for,
     released_descendant_error,
     staged_lock_errors,
@@ -196,7 +197,7 @@ def test_release_accepts_annotated_v4_descendant(tmp_path: Path) -> None:
     assert released_descendant_error(shas["c1"], shas["c2"], repo_url=url) is None
 
 
-@pytest.mark.parametrize("tag", ["v4.0.0-rc1", "v4.0", "v5.0.0", "v3.3", "release-3.3.0"])
+@pytest.mark.parametrize("tag", ["v4.0.0-rc1", "v4.0", "v4.01.0", "v5.0.0", "v3.3", "release-3.3.0"])
 def test_release_rejects_prerelease_and_short_tags(tmp_path: Path, tag: str) -> None:
     url, shas = _tag_remote(tmp_path, [("v3.0.0", "c1", True), (tag, "c2", True)])
     err = released_descendant_error(shas["c1"], shas["c2"], repo_url=url)
@@ -217,10 +218,27 @@ def test_release_rejects_v4_non_descendant(tmp_path: Path) -> None:
 
 def test_release_tag_for_returns_lowest_semver_valid_tag(tmp_path: Path) -> None:
     tags = [("v4.0.0", "c2", True), ("v3.10.0", "c2", True), ("v3.9.0", "c2", True), ("v3.0.0-rc1", "c2", True), ("v3.0.5", "c2", False)]
-    url, shas = _tag_remote(tmp_path, tags)
+    _, shas = _tag_remote(tmp_path, tags)
     git_dir = tmp_path / "remote.git"
     assert release_tag_for(str(git_dir), shas["c2"]) == "v3.9.0"
     assert release_tag_for(str(git_dir), shas["c1"]) is None
+
+
+def test_release_tag_listing_failure_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    not_a_repo = tmp_path / "empty"
+    not_a_repo.mkdir()
+    with pytest.raises(ReleaseTagListError):
+        release_tag_for(str(not_a_repo), "ab" * 20)
+    (tmp_path / "r").mkdir()
+    _, shas = _tag_remote(tmp_path / "r", [("v3.0.0", "c1", True)])
+    git_dir = str(tmp_path / "r" / "remote.git")
+
+    def boom(_git_dir: str, _sha: str) -> str | None:
+        raise ReleaseTagListError("boom")
+
+    monkeypatch.setattr(lock_policy, "release_tag_for", boom)
+    err = lock_policy._release_error(git_dir, None, shas["c1"])
+    assert err is not None and err.startswith("cannot list agent-ratchet release tags")
 
 
 def test_lock_sha_absent_from_remote_rejected(tmp_path: Path, remote: Remote) -> None:

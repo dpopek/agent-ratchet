@@ -119,15 +119,18 @@ def _clone(repo_url: str, dest: str) -> tuple[str | None, str | None]:
     return None, f"cannot clone agent-ratchet from {repo_url}: {reason}"
 
 
-class _TagListError(Exception):
-    pass
+class ReleaseTagListError(Exception):
+    """Release tags of agent-ratchet could not be listed (fail closed: never read as "no tag")."""
 
 
 def release_tag_for(git_dir: str, sha: str) -> str | None:
-    """Name of the lowest-SemVer annotated v3/v4 release tag that peels to ``sha``; None when there is none."""
+    """Name of the lowest-SemVer annotated v3/v4 release tag that peels to ``sha``; None when there is none.
+
+    Raises ReleaseTagListError when the tags cannot be listed.
+    """
     refs = _git(["for-each-ref", "--format=%(refname)", *RELEASE_TAG_PATTERNS], git_dir=git_dir)
     if refs.returncode != 0:
-        raise _TagListError(refs.stderr.decode("utf-8", errors="replace").strip())
+        raise ReleaseTagListError(refs.stderr.decode("utf-8", errors="replace").strip())
     found: list[tuple[tuple[int, ...], str]] = []
     for ref in refs.stdout.decode("utf-8", errors="replace").split():
         name = ref.removeprefix("refs/tags/")
@@ -149,7 +152,7 @@ def _release_error(git_dir: str, old_sha: str | None, new_sha: str) -> str | Non
             return f"{LOCK_PATH} {new_sha} is not a descendant of {old_sha} in agent-ratchet"
     try:
         tag = release_tag_for(git_dir, new_sha)
-    except _TagListError as exc:
+    except ReleaseTagListError as exc:
         return f"cannot list agent-ratchet release tags: {exc}"
     return None if tag else f"{LOCK_PATH}: no annotated v3.x.y/v4.x.y release tag peels to {new_sha} in agent-ratchet"
 
