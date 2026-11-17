@@ -627,6 +627,18 @@ def main(argv: list[str] | None = None) -> int:
         return _run_scan(args)
 
 
+def _emit_shadow_report(violations: Sequence[SlopViolation]) -> None:
+    """Opt-in (AGENT_RATCHET_SHADOW=1) stderr-only fact parity check; never affects stdout or the exit code."""
+    if os.environ.get("AGENT_RATCHET_SHADOW") != "1":
+        return
+    try:
+        from agent_ratchet.facts.legacy import shadow_report
+
+        print(shadow_report(violations), file=sys.stderr)
+    except Exception as exc:
+        print(f"agent-ratchet shadow: failed ({type(exc).__name__})", file=sys.stderr)
+
+
 def _run_scan(args: argparse.Namespace) -> int:
     if args.test_fixtures:
         return 0 if run_fixtures_self_test() else 1
@@ -651,6 +663,7 @@ def _run_scan(args: argparse.Namespace) -> int:
         print(f"ERROR: [guard_analysis_error] {exc}", file=sys.stderr)
         return 2
 
+    _emit_shadow_report(all_violations)
     if all_violations:
         return _report_violations(all_violations)
 
