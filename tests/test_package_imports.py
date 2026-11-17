@@ -14,6 +14,7 @@ MODULES = [
     "baseline_diff",
     "cognitive_complexity",
     "git_guard_io",
+    "migrate",
     "query_mutation_rules",
     "source_metrics",
 ]

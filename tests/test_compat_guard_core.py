@@ -16,6 +16,9 @@ from test_package_imports import MODULES
 ROOT = Path(__file__).resolve().parents[1]
 
 
+pytestmark = pytest.mark.filterwarnings("ignore:guard_core is deprecated:DeprecationWarning")
+
+
 @pytest.mark.parametrize("name", [*MODULES, "cli", "lock_policy", "version"])
 def test_old_module_path_is_the_new_module(name: str) -> None:
     assert importlib.import_module(f"guard_core.{name}") is importlib.import_module(f"agent_ratchet.{name}")
@@ -58,5 +61,5 @@ def test_python_dash_m_guard_core_runs_the_cli() -> None:
 
 def test_both_console_scripts_share_one_entry_point() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert pyproject["project"]["scripts"] == {"agent-ratchet": "agent_ratchet.cli:main", "guard-core": "agent_ratchet.cli:main"}
+    assert pyproject["project"]["scripts"] == {"agent-ratchet": "agent_ratchet.cli:main", "guard-core": "agent_ratchet.cli:legacy_main"}
     assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"] == ["src/agent_ratchet", "src/guard_core"]

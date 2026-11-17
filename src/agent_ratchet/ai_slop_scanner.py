@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Git-blob-isolated AST, topology (A2), regex, and diff scanner (GUARD_VERSION = "2.3.3")."""
+"""Git-blob-isolated AST, topology (A2), regex, and diff scanner (RULES_VERSION = "2.3.3")."""
 
 from __future__ import annotations
 

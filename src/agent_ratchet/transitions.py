@@ -50,6 +50,8 @@ class FactState:
             raise ValueError("unknown status requires a loss_reason")
         if self.status == "not_applicable" and self.loss_reason is not None:
             raise ValueError("not_applicable is never a substitute for a loss_reason")
+        if self.status not in ("absent", "not_applicable") and (self.identity_hash is None or self.payload_hash is None):
+            raise ValueError(f"{self.status} status requires identity_hash and payload_hash")
 
 
 @dataclass(frozen=True)

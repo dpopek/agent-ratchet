@@ -31,7 +31,7 @@ def test_encoding_version() -> None:
 
 def test_golden_vectors() -> None:
     entries = json.loads(VECTORS.read_text(encoding="utf-8"))
-    assert len(entries) >= 12
+    assert len(entries) >= 17
     for entry in entries:
         assert canonical_bytes(entry["value"]).hex() == entry["bytes_hex"]
         assert identity_hash(entry["value"]) == entry["identity_sha256"]
@@ -143,3 +143,40 @@ def test_fact_rejects_bad_enums(kwargs) -> None:
 def test_fact_rejects_bad_kind(kind) -> None:
     with pytest.raises(CanonicalEncodingError):
         CanonicalFact(kind, {}, {}, "unique_key", "complete", Origin("x"))
+
+
+def test_fact_is_hashable_and_equal_by_content() -> None:
+    a = _fact({"n": 1, "l": [1, {"x": 2}]}, {"p": 1})
+    b = _fact({"l": [1, {"x": 2}], "n": 1}, {"p": 1})
+    assert a == b and hash(a) == hash(b)
+    assert len({a, b}) == 1
+    assert a != _fact({"n": 2}, {"p": 1})
+    assert a != _fact({"n": 1, "l": [1, {"x": 2}]}, {"p": 1}, path="b/x.py")
+    assert a != "not a fact"
+
+
+def test_fact_mappings_are_read_only_and_detached() -> None:
+    ident = {"x": 0, "nested": {"y": [1, 2]}}
+    payload = {"p": {"q": 1}}
+    fact = _fact(ident, payload)
+    before = (fact.identity_hash, fact.payload_hash)
+    ident["x"] = 9
+    ident["nested"]["y"].append(3)
+    ident["nested"]["z"] = 1
+    payload["p"]["q"] = 2
+    assert (fact.identity_hash, fact.payload_hash) == before
+    with pytest.raises(TypeError):
+        fact.identity["x"] = 1  # type: ignore[index]
+    with pytest.raises(TypeError):
+        fact.identity["nested"]["y"] = 1  # type: ignore[index]
+    with pytest.raises(TypeError):
+        fact.payload["p"]["q"] = 1  # type: ignore[index]
+    assert fact.identity["nested"]["y"] == (1, 2)
+
+
+@pytest.mark.parametrize("field", ["identity", "payload"])
+@pytest.mark.parametrize("bad", [["a"], "s", 1, None])
+def test_non_mapping_identity_or_payload_raises_encoding_error(field, bad) -> None:
+    kwargs = {"identity": {}, "payload": {}, field: bad}
+    with pytest.raises(CanonicalEncodingError):
+        CanonicalFact("k", cardinality="unique_key", completeness="complete", origin=Origin("x"), **kwargs)

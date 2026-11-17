@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_ratchet.git_guard_io import GUARD_MODULE_NAMES, GUARD_TEST_NAMES, SELF_SKIP_NAMES, is_self_skipped
+from agent_ratchet import git_guard_io
+from agent_ratchet.git_guard_io import GUARD_MODULE_NAMES, GUARD_TEST_NAMES, is_self_skipped
 
 PACKAGE_DIR = Path(__file__).resolve().parent.parent / "src" / "agent_ratchet"
 
@@ -40,7 +41,9 @@ def test_scanned(path: str) -> None:
 
 
 def test_deprecated_union_is_exactly_both_sets() -> None:
-    assert SELF_SKIP_NAMES == set(GUARD_MODULE_NAMES) | set(GUARD_TEST_NAMES)
+    with pytest.warns(DeprecationWarning, match="SELF_SKIP_NAMES is deprecated"):
+        deprecated = git_guard_io.SELF_SKIP_NAMES
+    assert deprecated == set(GUARD_MODULE_NAMES) | set(GUARD_TEST_NAMES)
     assert not GUARD_MODULE_NAMES & GUARD_TEST_NAMES
 
 

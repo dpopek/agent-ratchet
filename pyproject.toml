@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-ratchet"
-version = "3.4.0"
+version = "3.5.0"
 description = "Shared quality and refactoring guards for Python repositories."
 readme = "README.md"
 license = "MIT"
@@ -17,7 +17,7 @@ packages = ["src/agent_ratchet", "src/guard_core"]
 
 [project.scripts]
 agent-ratchet = "agent_ratchet.cli:main"
-guard-core = "agent_ratchet.cli:main"
+guard-core = "agent_ratchet.cli:legacy_main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

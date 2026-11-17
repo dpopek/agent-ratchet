@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from agent_ratchet import ai_slop_scanner, test_baseline_integrity
+from agent_ratchet import ai_slop_scanner, migrate, test_baseline_integrity
 from agent_ratchet.version import VERSION, installed_sha
 
 EXIT_SHA_MISMATCH = 3
@@ -14,7 +14,7 @@ EXIT_SHA_MISMATCH = 3
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-ratchet", description="Shared quality and refactoring guards.", add_help=False, allow_abbrev=False)
     parser.add_argument("--expect-sha", default=None, help="Fail with exit 3 unless the installed commit equals this SHA")
-    parser.add_argument("subcommand", choices=("scan", "baseline-integrity", "version"))
+    parser.add_argument("subcommand", choices=("scan", "baseline-integrity", "version", "migrate-imports"))
     return parser
 
 
@@ -52,4 +52,12 @@ def main(argv: list[str] | None = None) -> int:
         return ai_slop_scanner.main(rest)
     if args.subcommand == "baseline-integrity":
         return test_baseline_integrity.main(rest)
+    if args.subcommand == "migrate-imports":
+        return migrate.main(rest)
     return _version(rest)
+
+
+def legacy_main(argv: list[str] | None = None) -> int:
+    """Entry point of the deprecated ``guard-core`` script: one stderr note, then the unchanged CLI."""
+    print("agent-ratchet: 'guard-core' is deprecated and removed in 4.0; use 'agent-ratchet'", file=sys.stderr)
+    return main(argv)

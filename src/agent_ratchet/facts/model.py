@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from types import MappingProxyType
+from typing import Any, Literal
 
 from agent_ratchet.facts.encoding import CanonicalEncodingError, canonical_bytes, identity_hash, payload_hash
 
@@ -23,7 +24,16 @@ class Origin:
     line: int | None = None
 
 
-@dataclass(frozen=True)
+def _freeze(value: Any) -> Any:
+    """Deep read-only copy: Mapping -> MappingProxyType over a fresh dict, list/tuple -> tuple."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _freeze(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(v) for v in value)
+    return value
+
+
+@dataclass(frozen=True, eq=False)
 class CanonicalFact:
     kind: str
     identity: Mapping
@@ -40,10 +50,25 @@ class CanonicalFact:
             raise ValueError(f"invalid cardinality: {self.cardinality!r}")
         if self.completeness not in ("complete", "incomplete"):
             raise ValueError(f"invalid completeness: {self.completeness!r}")
+        if not isinstance(self.identity, Mapping) or not isinstance(self.payload, Mapping):
+            raise CanonicalEncodingError("identity and payload must be mappings")
         if "kind" in self.identity:
             raise CanonicalEncodingError('identity must not contain the reserved key "kind"')
         canonical_bytes(self.identity)
         canonical_bytes(self.payload)
+        object.__setattr__(self, "identity", _freeze(self.identity))
+        object.__setattr__(self, "payload", _freeze(self.payload))
+
+    def _key(self) -> tuple:
+        return (self.kind, self.identity_hash, self.payload_hash, self.cardinality, self.completeness, self.origin)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CanonicalFact):
+            return NotImplemented
+        return self._key() == other._key()
+
+    def __hash__(self) -> int:
+        return hash(self._key())
 
     @property
     def identity_hash(self) -> str:

@@ -1,5 +1,44 @@
 # Changelog
 
+## 3.5.0
+
+### Deprecated
+
+All removed in 4.0. Using one warns, naming the replacement: the `guard_core`
+import warns once per process and the CLI paths print a note on stderr.
+
+- The `guard_core` package (import, `python -m guard_core`, the `guard-core`
+  console script): use `agent_ratchet`, `python -m agent_ratchet`,
+  `agent-ratchet`.
+- `agent_ratchet.version.GUARD_VERSION`: use `VERSION`.
+- `agent_ratchet.git_guard_io.GUARD_VERSION` and
+  `agent_ratchet.refactoring_guard.GUARD_VERSION`: use `RULES_VERSION`.
+- `agent_ratchet.git_guard_io.SELF_SKIP_NAMES`: use `is_self_skipped()`.
+- `agent_ratchet.lock_policy.RELEASE_TAG_PATTERN`: use
+  `RELEASE_TAG_PATTERNS`.
+- `from agent_ratchet.{version,git_guard_io,lock_policy} import *` no longer
+  binds the deprecated names; import them explicitly.
+
+### Added
+
+- `agent-ratchet migrate-imports [--write] [PATH ...]` rewrites `guard_core`
+  imports to `agent_ratchet`. Exit 0 when nothing is pending, 1 when rewrites
+  not yet applied (without `--write`) or manual items remain, 2 on errors.
+  Exact or runtime-looking `guard_core` strings are manual items (exit 1);
+  other strings and comments are mentions (no effect on the exit code).
+  `scripts/guard` is the consumer's vendored shim. See "Migrating off
+  guard_core" in the README.
+- `agent_ratchet.refactoring_guard.RULES_VERSION`.
+
+### Changed
+
+- `CanonicalFact` is hashable; its identity and payload are deep-frozen and
+  read-only. A non-Mapping payload raises `CanonicalEncodingError`.
+- `FactState` requires `identity_hash` and `payload_hash` unless its status is
+  `absent` or `not_applicable`.
+- `LockSpec` rejects non-str SHA and `extras` values with `ValueError`.
+- Default scan output is unchanged from 3.4.0.
+
 ## 3.4.0
 
 ### Added
