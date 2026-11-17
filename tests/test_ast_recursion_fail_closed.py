@@ -10,6 +10,7 @@ from typing import Callable
 import pytest
 
 from agent_ratchet import ast_topology_guard, cognitive_complexity, git_guard_io, refactoring_guard
+from agent_ratchet.ai_slop_scanner import _py_entry_needs_a2
 from agent_ratchet.ast_topology_guard import tarjan_scc
 from agent_ratchet.git_guard_io import GuardAnalysisError, count_test_assertions, parse_python, visit_bounded
 
@@ -21,6 +22,7 @@ DEEP_PARSE = "x = " + "+".join(["1"] * 100_000) + "\n"
 # Parses fine, but NodeVisitor / compile recurse past the limit; exercises visit_bounded.
 DEEP_VISIT = "x = " + "+".join(["1"] * 1_000) + "\n"
 SHALLOW = "x = 1\n"
+SYNTAX_ERROR_EXIT = 2  # pinned from the unmodified 3.3.0 run: syntax_error rule, not the A2 probe
 DEEP_SOURCES = pytest.mark.parametrize("deep", [DEEP_PARSE, DEEP_VISIT], ids=["parse", "visit"])
 
 
@@ -75,6 +77,32 @@ def test_deep_ast_topology_fails_closed(deep: str) -> None:
 def test_deep_ast_refactoring_snapshot_fails_closed(deep: str) -> None:
     with pytest.raises(GuardAnalysisError, match="AST too deep to analyse"):
         refactoring_guard.extract_ast_snapshot(deep, "src/deep.py")
+
+
+def test_a2_probe_propagates_recursion_error(repo: Path) -> None:
+    base = _git(repo, "rev-parse", "HEAD")
+    head = _commit_files(repo, "feat: deepen", {"src/deep.py": DEEP_PARSE})
+    r = _run_scanner(repo, "--commit-range", f"{base}..{head}")
+    _assert_fails_closed(r.returncode, r.stdout, r.stderr)
+    assert "AST too deep" in r.stderr
+
+
+def test_a2_probe_unit_propagates_recursion_error() -> None:
+    # compare_ast_snapshots raises first end to end, so the probe's own narrowing is pinned directly.
+    for base, target in (("x = 1\n", DEEP_PARSE), (DEEP_PARSE, "x = 1\n"), ("x = 1\n", DEEP_VISIT)):
+        with pytest.raises(GuardAnalysisError, match="AST too deep"):
+            _py_entry_needs_a2("M", "src/x.py", "src/x.py", base, target)
+
+
+def test_a2_probe_unit_tolerates_syntax_error() -> None:
+    assert _py_entry_needs_a2("M", "src/x.py", "src/x.py", "x = 1\n", "def (:\n") is False
+
+
+def test_a2_probe_still_tolerates_syntax_error(repo: Path) -> None:
+    base = _git(repo, "rev-parse", "HEAD")
+    head = _commit_files(repo, "feat: break", {"src/deep.py": "def (:\n"})
+    r = _run_scanner(repo, "--commit-range", f"{base}..{head}")
+    assert (r.returncode, "Traceback" in r.stderr) == (SYNTAX_ERROR_EXIT, False), (r.stdout, r.stderr[-2000:])
 
 
 def test_deep_ast_cognitive_fails_closed() -> None:

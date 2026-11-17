@@ -19,6 +19,7 @@ from agent_ratchet.git_guard_io import (
     is_protected_governance_path as is_protected_governance_path,
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
+from agent_ratchet.git_batch import git_batch_session
 from agent_ratchet.lock_policy import LOCK_PATH, check_staged_lock, lock_check_is_local, verify_lock_transition
 
 from agent_ratchet.baseline_diff import (
@@ -348,7 +349,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--staged-only", action="store_true", help="Evaluate staged Git index instead of worktree")
     parser.add_argument("--commit-range", default=None, help="Commit range <base>..<head> for per-commit + final check")
     args = parser.parse_args(argv)
+    with git_batch_session():
+        return _run_baseline_check(args)
 
+
+def _run_baseline_check(args: argparse.Namespace) -> int:
     if args.test_violation_mock:
         res = evaluate_baseline_diff({"metric": "type_escapes", "ceiling": 100, "exemptions": []}, {"metric": "type_escapes", "ceiling": 150, "exemptions": []})
         if not res.is_valid:

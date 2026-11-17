@@ -22,6 +22,7 @@ from agent_ratchet.git_guard_io import (
     list_snapshot_files, load_guard_config_for_ref, parse_python, visit_bounded,
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
+from agent_ratchet.git_batch import git_batch_session
 from agent_ratchet.lock_policy import LOCK_PATH, adopted_guard_files, check_staged_lock, lock_check_is_local, verify_lock_transition
 from agent_ratchet.source_metrics import (
     _count_ast_assertions, _count_js_top_level_items, _find_balanced_span, _parametrize_multiplier, strip_js_comments,
@@ -414,8 +415,10 @@ def _py_entry_needs_a2(status: str, old_path: str, new_path: str, base_txt: str 
     try:
         bf, tf = extract_module_import_facts(base_txt, old_path), extract_module_import_facts(target_txt, new_path)
         return bf.raw_imports != tf.raw_imports or bf.defined_attrs != tf.defined_attrs or bf.has_dynamic_exports != tf.has_dynamic_exports
-    except GuardAnalysisError:
-        return False
+    except GuardAnalysisError as exc:
+        if isinstance(exc.__cause__, SyntaxError):
+            return False
+        raise
 
 
 def _evaluate_entry_transition(
@@ -620,7 +623,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--test-fixtures", action="store_true", help="Run self-test against fixtures")
     parser.add_argument("files", nargs="*", help="Specific files or folders to scan")
     args = parser.parse_args(argv)
+    with git_batch_session():
+        return _run_scan(args)
 
+
+def _emit_shadow_report(violations: Sequence[SlopViolation]) -> None:
+    """Opt-in (AGENT_RATCHET_SHADOW=1) stderr-only fact parity check; never affects stdout or the exit code."""
+    if os.environ.get("AGENT_RATCHET_SHADOW") != "1":
+        return
+    try:
+        from agent_ratchet.facts.legacy import shadow_report
+
+        print(shadow_report(violations), file=sys.stderr)
+    except Exception as exc:
+        print(f"agent-ratchet shadow: failed ({type(exc).__name__})", file=sys.stderr)
+
+
+def _run_scan(args: argparse.Namespace) -> int:
     if args.test_fixtures:
         return 0 if run_fixtures_self_test() else 1
     lock_rc = check_staged_lock() if args.staged_only else None
@@ -644,6 +663,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: [guard_analysis_error] {exc}", file=sys.stderr)
         return 2
 
+    _emit_shadow_report(all_violations)
     if all_violations:
         return _report_violations(all_violations)
 
