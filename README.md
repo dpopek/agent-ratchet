@@ -145,14 +145,14 @@ executes, so it is gated.
   tree. It is for the repository operator only. Agents and automation never set
   it, and it is never set in CI.
 - The variable never skips the remote checks. A changed lock must still be
-  peeled from an annotated `v3.*` release tag of agent-ratchet and descend from
+  peeled from an annotated `v3.x.y`/`v4.x.y` release tag of agent-ratchet and descend from
   the previous locked SHA. On every change of `guard.lock` or `scripts/guard`,
   `scripts/guard` must equal `consumer/guard` at the locked SHA, so copy
   `consumer/guard` to `scripts/guard` whenever you bump the lock.
 - A committed bump that is not yet on the trusted base is verified against
   agent-ratchet again on every pre-commit run.
 - In CI, a lock change is accepted only when the new SHA is peeled from an
-  annotated `v3.*` release tag of agent-ratchet and is a descendant of the
+  annotated `v3.x.y`/`v4.x.y` release tag of agent-ratchet and is a descendant of the
   previous locked SHA.
 
 ### Break-glass: an invalid lock on the base

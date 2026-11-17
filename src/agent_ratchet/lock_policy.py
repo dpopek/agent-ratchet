@@ -23,7 +23,9 @@ SHIM_PATH = "scripts/guard"
 LEGACY_MANIFEST_PATH = "scripts/audit/guard_manifest.json"
 CANONICAL_SHIM_PATH = "consumer/guard"
 LOCK_UPDATE_ENV = "ALLOW_GUARD_LOCK_UPDATE"
-RELEASE_TAG_PATTERN = "refs/tags/v3.*"
+RELEASE_TAG_PATTERNS: tuple[str, ...] = ("refs/tags/v3.*", "refs/tags/v4.*")
+RELEASE_TAG_PATTERN = RELEASE_TAG_PATTERNS[0]  # deprecated alias, removed in 4.0
+RELEASE_TAG_RE = re.compile(r"\Av(3|4)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 
 _LOCK_RE = re.compile(rb"\A[0-9a-f]{40}\n?\Z")
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
@@ -117,6 +119,27 @@ def _clone(repo_url: str, dest: str) -> tuple[str | None, str | None]:
     return None, f"cannot clone agent-ratchet from {repo_url}: {reason}"
 
 
+class _TagListError(Exception):
+    pass
+
+
+def release_tag_for(git_dir: str, sha: str) -> str | None:
+    """Name of the lowest-SemVer annotated v3/v4 release tag that peels to ``sha``; None when there is none."""
+    refs = _git(["for-each-ref", "--format=%(refname)", *RELEASE_TAG_PATTERNS], git_dir=git_dir)
+    if refs.returncode != 0:
+        raise _TagListError(refs.stderr.decode("utf-8", errors="replace").strip())
+    found: list[tuple[tuple[int, ...], str]] = []
+    for ref in refs.stdout.decode("utf-8", errors="replace").split():
+        name = ref.removeprefix("refs/tags/")
+        match = RELEASE_TAG_RE.match(name)
+        if not match or _git(["cat-file", "-t", ref], git_dir=git_dir).stdout.strip() != b"tag":
+            continue
+        peeled = _git(["rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], git_dir=git_dir)
+        if peeled.returncode == 0 and peeled.stdout.strip().decode("ascii", errors="replace") == sha:
+            found.append((tuple(int(g) for g in match.groups()), name))
+    return min(found)[1] if found else None
+
+
 def _release_error(git_dir: str, old_sha: str | None, new_sha: str) -> str | None:
     if _git(["cat-file", "-e", f"{new_sha}^{{commit}}"], git_dir=git_dir).returncode != 0:
         return f"{LOCK_PATH} SHA {new_sha} is not a commit in agent-ratchet"
@@ -124,16 +147,11 @@ def _release_error(git_dir: str, old_sha: str | None, new_sha: str) -> str | Non
         rc = _git(["merge-base", "--is-ancestor", old_sha, new_sha], git_dir=git_dir).returncode
         if rc != 0:
             return f"{LOCK_PATH} {new_sha} is not a descendant of {old_sha} in agent-ratchet"
-    refs = _git(["for-each-ref", "--format=%(refname)", RELEASE_TAG_PATTERN], git_dir=git_dir)
-    if refs.returncode != 0:
-        return f"cannot list agent-ratchet release tags: {refs.stderr.decode('utf-8', errors='replace').strip()}"
-    for ref in refs.stdout.decode("utf-8", errors="replace").split():
-        if _git(["cat-file", "-t", ref], git_dir=git_dir).stdout.strip() != b"tag":
-            continue
-        peeled = _git(["rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], git_dir=git_dir)
-        if peeled.returncode == 0 and peeled.stdout.strip().decode("ascii", errors="replace") == new_sha:
-            return None
-    return f"{LOCK_PATH} {new_sha} carries no annotated v3.x.y release tag in agent-ratchet"
+    try:
+        tag = release_tag_for(git_dir, new_sha)
+    except _TagListError as exc:
+        return f"cannot list agent-ratchet release tags: {exc}"
+    return None if tag else f"{LOCK_PATH}: no annotated v3.x.y/v4.x.y release tag peels to {new_sha} in agent-ratchet"
 
 
 def _shim_error(git_dir: str, sha: str, shim: bytes | None) -> str | None:
