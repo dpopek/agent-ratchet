@@ -85,3 +85,12 @@ def test_legacy_cli_paths_note_on_stderr_only(capsys: pytest.CaptureFixture[str]
     assert captured.out == new.stdout
     assert main(["version"]) == 0
     assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("module", [git_guard_io, refactoring_guard, version, lock_policy])
+def test_star_import_is_silent_and_all_has_no_deprecated_name(module: object) -> None:
+    deprecated = {"GUARD_VERSION", "SELF_SKIP_NAMES", "RELEASE_TAG_PATTERN"}
+    assert not deprecated & set(getattr(module, "__all__", ()))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        exec(f"from {module.__name__} import *", {})  # noqa: S102

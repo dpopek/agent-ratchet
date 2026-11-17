@@ -208,7 +208,8 @@ know only `v3.*` release tags. A base that old cannot verify a lock that uses
 either, so move in separate pull requests, in this order:
 
 1. Bump `guard.lock` to 3.3.0, SHA only (one line, no `EXTRAS`).
-2. Bump to 3.4.0 (when released).
+2. Bump to 3.5.0 or later and run `migrate-imports` (see "Migrating off
+   guard_core" above).
 3. Pin `v4.0.0`, still without `EXTRAS`.
 4. In a separate pull request, add `EXTRAS=none|php|magento` and the matching
    profile. Values other than `none` require a `v4.x.y` release.
