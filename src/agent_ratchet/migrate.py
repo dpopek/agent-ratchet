@@ -10,7 +10,9 @@ import ast
 import bisect
 import os
 import re
+import shutil
 import sys
+import tempfile
 import tokenize
 from dataclasses import dataclass, field
 from typing import Literal
@@ -43,6 +45,10 @@ class Item:
 class FilePlan:
     new_source: str
     items: list[Item] = field(default_factory=list)
+
+
+def _is_runtime_string(value: str) -> bool:
+    return value in RUNTIME_STRINGS or value.startswith(("guard_core.", "guard-core")) or "-m guard_core" in value
 
 
 def _in_roots(module: str | None) -> bool:
@@ -94,7 +100,7 @@ def plan_file(source: str, path: str) -> FilePlan:
             _plan_from(node, edits, report, pos, tokens, starts)
         elif isinstance(node, ast.Import):
             _plan_import(node, edits, report, pos, token_at)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in RUNTIME_STRINGS:
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and _is_runtime_string(node.value):
             report(node.lineno, "manual-runtime")
 
     rows = {e[0] for e in edits}
@@ -166,6 +172,23 @@ def _iter_py_files(paths: list[str]):
                     yield full.replace(os.sep, "/")
 
 
+def _atomic_write(path: str, data: bytes) -> None:
+    """Replace ``path`` with ``data`` via a same-directory temp file, keeping the original mode."""
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".migrate-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agent-ratchet migrate-imports", description="Rewrite guard_core imports to agent_ratchet.")
     parser.add_argument("--write", action="store_true", help="Apply the rewrites (default: report only)")
@@ -195,8 +218,11 @@ def main(argv: list[str] | None = None) -> int:
         items.extend(plan.items)
         new_raw = plan.new_source.encode("utf-8")
         if args.write and new_raw != raw:
-            with open(path, "wb") as fh:
-                fh.write(new_raw)
+            try:
+                _atomic_write(path, new_raw)
+            except OSError as exc:
+                print(f"{path}:0: error: {(str(exc).splitlines() or [type(exc).__name__])[0]}")
+                errors += 1
     items.sort(key=lambda i: (i.path, i.line, _KIND_ORDER[i.kind]))
     for it in items:
         print(f"{it.path}:{it.line}: {it.kind}: {it.text}")

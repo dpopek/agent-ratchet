@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 from agent_ratchet.migrate import main, plan_file
 
 
@@ -203,3 +205,55 @@ def test_cli_dispatch(tmp_path, capsys):
     (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
     assert cli.main(["migrate-imports", str(tmp_path)]) == 0
     assert "migrate-imports: 0 rewrite(s)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        'mock.patch("guard_core.version.installed_sha")\n',
+        'importlib.import_module("guard_core.cli")\n',
+        'x = "python -m guard_core scan"\n',
+    ],
+)
+def test_runtime_reference_in_longer_string_is_manual_runtime(src, tmp_path):
+    assert kinds(plan_file(src, "a.py")) == [(1, "manual-runtime")]
+    (tmp_path / "a.py").write_text(src, encoding="utf-8")
+    assert main([str(tmp_path)]) == 1
+
+
+def test_prose_string_mentioning_guard_core_stays_mention(tmp_path):
+    src = 'x = "migrated from guard_core last year"\n'
+    assert kinds(plan_file(src, "a.py")) == [(1, "mention")]
+    (tmp_path / "a.py").write_text(src, encoding="utf-8")
+    assert main([str(tmp_path)]) == 0
+
+
+def test_replace_failure_exit_2_original_untouched_and_temp_removed(tmp_path, capsys, monkeypatch):
+    a = tmp_path / "a.py"
+    a.write_text("from guard_core.cli import main\n", encoding="utf-8")
+    b = tmp_path / "b.py"
+    b.write_text("from guard_core.cli import main\n", encoding="utf-8")
+    real = os.replace
+
+    def fake(src, dst):
+        if str(dst).endswith("a.py"):
+            raise PermissionError("denied")
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "replace", fake)
+    assert main(["--write", str(tmp_path)]) == 2
+    out = capsys.readouterr().out
+    assert f"{a.as_posix()}:0: error: denied" in out
+    assert a.read_text(encoding="utf-8") == "from guard_core.cli import main\n"
+    assert b.read_text(encoding="utf-8") == "from agent_ratchet.cli import main\n"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.py", "b.py"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+def test_write_preserves_executable_mode(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("from guard_core.cli import main\n", encoding="utf-8")
+    f.chmod(0o755)
+    assert main(["--write", str(tmp_path)]) == 0
+    assert f.stat().st_mode & 0o777 == 0o755
+    assert f.read_text(encoding="utf-8") == "from agent_ratchet.cli import main\n"
