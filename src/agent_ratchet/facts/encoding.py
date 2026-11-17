@@ -49,7 +49,14 @@ def _normalise(value: object) -> object:
 
 def canonical_bytes(value: CanonicalValue) -> bytes:
     """Encode ``value`` as compact UTF-8 JSON with dict keys in UTF-8 byte order."""
-    return json.dumps(_normalise(value), ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    try:
+        return json.dumps(_normalise(value), ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    except CanonicalEncodingError:
+        raise
+    except RecursionError as exc:
+        raise CanonicalEncodingError("value is cyclic or nested too deeply") from exc
+    except ValueError as exc:
+        raise CanonicalEncodingError(f"value cannot be encoded: {exc}") from exc
 
 
 def canonical_map(pairs: Iterable[tuple[str, CanonicalValue]]) -> dict[str, CanonicalValue]:

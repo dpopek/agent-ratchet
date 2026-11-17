@@ -106,3 +106,40 @@ def test_moved_path_keeps_identity_changes_context() -> None:
 def test_fact_validates_on_construction() -> None:
     with pytest.raises(CanonicalEncodingError):
         _fact({"n": 1.5}, {})
+
+
+def test_identity_with_kind_key_is_rejected() -> None:
+    with pytest.raises(CanonicalEncodingError):
+        CanonicalFact("a", {"kind": "b", "n": 1}, {}, "unique_key", "complete", Origin("x"))
+    b = CanonicalFact("b", {"n": 1}, {}, "unique_key", "complete", Origin("x"))
+    assert b.identity_hash  # the colliding twin can no longer be built
+
+
+def test_huge_int_is_encoding_error() -> None:
+    with pytest.raises(CanonicalEncodingError):
+        canonical_bytes(10**5000)
+
+
+def test_cyclic_and_deep_structures_are_encoding_errors() -> None:
+    cyclic: list = []
+    cyclic.append(cyclic)
+    with pytest.raises(CanonicalEncodingError):
+        canonical_bytes(cyclic)
+    deep: list = []
+    for _ in range(100_000):
+        deep = [deep]
+    with pytest.raises(CanonicalEncodingError):
+        canonical_bytes(deep)
+
+
+@pytest.mark.parametrize("kwargs", [{"cardinality": "bogus"}, {"completeness": "partial"}])
+def test_fact_rejects_bad_enums(kwargs) -> None:
+    args = {"cardinality": "unique_key", "completeness": "complete", **kwargs}
+    with pytest.raises(ValueError):
+        CanonicalFact("k", {}, {}, origin=Origin("x"), **args)
+
+
+@pytest.mark.parametrize("kind", ["", 5, None, "\ud800"])
+def test_fact_rejects_bad_kind(kind) -> None:
+    with pytest.raises(CanonicalEncodingError):
+        CanonicalFact(kind, {}, {}, "unique_key", "complete", Origin("x"))

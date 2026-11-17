@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-from agent_ratchet.facts.encoding import canonical_bytes, identity_hash, payload_hash
+from agent_ratchet.facts.encoding import CanonicalEncodingError, canonical_bytes, identity_hash, payload_hash
 
 Cardinality = Literal["unique_key", "multiset"]
 Completeness = Literal["complete", "incomplete"]
@@ -33,6 +33,15 @@ class CanonicalFact:
     origin: Origin
 
     def __post_init__(self) -> None:
+        if not isinstance(self.kind, str) or not self.kind:
+            raise CanonicalEncodingError("kind must be a non-empty str")
+        canonical_bytes(self.kind)
+        if self.cardinality not in ("unique_key", "multiset"):
+            raise ValueError(f"invalid cardinality: {self.cardinality!r}")
+        if self.completeness not in ("complete", "incomplete"):
+            raise ValueError(f"invalid completeness: {self.completeness!r}")
+        if "kind" in self.identity:
+            raise CanonicalEncodingError('identity must not contain the reserved key "kind"')
         canonical_bytes(self.identity)
         canonical_bytes(self.payload)
 
