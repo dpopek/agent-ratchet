@@ -414,8 +414,10 @@ def _py_entry_needs_a2(status: str, old_path: str, new_path: str, base_txt: str 
     try:
         bf, tf = extract_module_import_facts(base_txt, old_path), extract_module_import_facts(target_txt, new_path)
         return bf.raw_imports != tf.raw_imports or bf.defined_attrs != tf.defined_attrs or bf.has_dynamic_exports != tf.has_dynamic_exports
-    except GuardAnalysisError:
-        return False
+    except GuardAnalysisError as exc:
+        if isinstance(exc.__cause__, SyntaxError):
+            return False
+        raise
 
 
 def _evaluate_entry_transition(

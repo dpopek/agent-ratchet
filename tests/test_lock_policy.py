@@ -96,6 +96,17 @@ def test_lock_check_is_local_only_for_uncommitted_targets() -> None:
     assert not lock_check_is_local("HEAD") and not lock_check_is_local("0" * 40)
 
 
+@pytest.mark.parametrize(
+    "args",
+    [("a" * 40, "PHP"), ("a" * 40, ""), ("A" * 40,), ("a" * 39,)],
+    ids=["extras-case", "extras-empty", "sha-uppercase", "sha-short"],
+)
+def test_lockspec_rejects_invalid_extras(args: tuple[str, ...]) -> None:
+    with pytest.raises(ValueError):
+        LockSpec(*args)  # type: ignore[arg-type]
+    assert LockSpec("a" * 40, "magento").extras == "magento"
+
+
 def test_read_lock_format(tmp_path: Path) -> None:
     repo, _ = _consumer(tmp_path, {})
     assert read_lock("", cwd=str(repo)) is None

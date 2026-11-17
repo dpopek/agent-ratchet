@@ -275,6 +275,8 @@ def test_shim_extra_real_uv_install(tmp_path: Path) -> None:
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("uv not found")
+    if subprocess.run([uv, "python", "find", "3.11"], capture_output=True).returncode != 0:
+        pytest.skip("Python 3.11 not available to uv")
     root = SHIM.parent.parent
     clone = tmp_path / "clone"
     subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(root), str(clone)], check=True, capture_output=True)
