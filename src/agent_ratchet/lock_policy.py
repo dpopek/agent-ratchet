@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 import hashlib
 import json
@@ -13,7 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from typing import Iterable
+from typing import Iterable, Literal
 
 from agent_ratchet.git_guard_io import GuardAnalysisError, _git_out, _read_ref_file_bytes, head_commit_exists, trusted_base_candidates
 
@@ -27,7 +28,7 @@ RELEASE_TAG_PATTERNS: tuple[str, ...] = ("refs/tags/v3.*", "refs/tags/v4.*")
 RELEASE_TAG_PATTERN = RELEASE_TAG_PATTERNS[0]  # deprecated alias, removed in 4.0
 RELEASE_TAG_RE = re.compile(r"\Av(3|4)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 
-_LOCK_RE = re.compile(rb"\A[0-9a-f]{40}\n?\Z")
+_LOCK_RE = re.compile(rb"\A([0-9a-f]{40})(?:\nEXTRAS=(none|php|magento))?\n?\Z")
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _GIT_TIMEOUT_S = 120
 _ISOLATED_GIT_ENV = {"LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
@@ -89,13 +90,27 @@ def entry_mode(ref_prefix: str | None, rel_path: str, cwd: str | None = None) ->
     return None
 
 
-def read_lock(ref_prefix: str, cwd: str | None = None) -> str | None:
+@dataclass(frozen=True)
+class LockSpec:
+    sha: str
+    extras: Literal["none", "php", "magento"] = "none"
+
+
+def read_lock_spec(ref_prefix: str, cwd: str | None = None) -> LockSpec | None:
     raw = _read_ref_file_bytes(ref_prefix, LOCK_PATH, cwd=cwd)
     if raw is None:
         return None
-    if not _LOCK_RE.match(raw):
-        raise GuardAnalysisError(f"Malformed {LOCK_PATH} at {ref_prefix or 'INDEX'}: expected 40 lowercase hex characters and at most one trailing newline")
-    return raw[:40].decode("ascii")
+    match = _LOCK_RE.match(raw)
+    if not match:
+        raise GuardAnalysisError(
+            f"Malformed {LOCK_PATH} at {ref_prefix or 'INDEX'}: expected 40 lowercase hex characters, an optional EXTRAS=none|php|magento line and at most one trailing newline"
+        )
+    return LockSpec(match.group(1).decode("ascii"), (match.group(2) or b"none").decode("ascii"))  # type: ignore[arg-type]
+
+
+def read_lock(ref_prefix: str, cwd: str | None = None) -> str | None:
+    spec = read_lock_spec(ref_prefix, cwd=cwd)
+    return None if spec is None else spec.sha
 
 
 def _isolated_env() -> dict[str, str]:
@@ -143,7 +158,7 @@ def release_tag_for(git_dir: str, sha: str) -> str | None:
     return min(found)[1] if found else None
 
 
-def _release_error(git_dir: str, old_sha: str | None, new_sha: str) -> str | None:
+def _release_error(git_dir: str, old_sha: str | None, new_sha: str, extras: str = "none") -> str | None:
     if _git(["cat-file", "-e", f"{new_sha}^{{commit}}"], git_dir=git_dir).returncode != 0:
         return f"{LOCK_PATH} SHA {new_sha} is not a commit in agent-ratchet"
     if old_sha is not None:
@@ -154,7 +169,11 @@ def _release_error(git_dir: str, old_sha: str | None, new_sha: str) -> str | Non
         tag = release_tag_for(git_dir, new_sha)
     except ReleaseTagListError as exc:
         return f"cannot list agent-ratchet release tags: {exc}"
-    return None if tag else f"{LOCK_PATH}: no annotated v3.x.y/v4.x.y release tag peels to {new_sha} in agent-ratchet"
+    if not tag:
+        return f"{LOCK_PATH}: no annotated v3.x.y/v4.x.y release tag peels to {new_sha} in agent-ratchet"
+    if extras != "none" and not tag.startswith("v4."):
+        return f"{LOCK_PATH}: EXTRAS={extras} requires a v4.x.y release, but {new_sha} is released as {tag}"
+    return None
 
 
 def _shim_error(git_dir: str, sha: str, shim: bytes | None) -> str | None:
@@ -167,7 +186,9 @@ def _shim_error(git_dir: str, sha: str, shim: bytes | None) -> str | None:
 
 
 @lru_cache(maxsize=32)
-def _remote_errors(repo_url: str, old_sha: str | None, new_sha: str, check_release: bool, shim: bytes | None, check_shim: bool) -> tuple[str, ...]:
+def _remote_errors(
+    repo_url: str, old_sha: str | None, new_sha: str, check_release: bool, shim: bytes | None, check_shim: bool, extras: str = "none"
+) -> tuple[str, ...]:
     """Release (descendant + annotated tag) and shim checks against one temporary clone; any failure is a reason, never an exception."""
     if not _SHA_RE.match(new_sha) or (old_sha is not None and not _SHA_RE.match(old_sha)):
         return (f"invalid agent-ratchet SHA ({old_sha!r} -> {new_sha!r})",)
@@ -176,7 +197,7 @@ def _remote_errors(repo_url: str, old_sha: str | None, new_sha: str, check_relea
             git_dir, clone_err = _clone(repo_url, tmp)
             if git_dir is None:
                 return (clone_err or f"cannot clone agent-ratchet from {repo_url}",)
-            errs = [_release_error(git_dir, old_sha, new_sha) if check_release else None, _shim_error(git_dir, new_sha, shim) if check_shim else None]
+            errs = [_release_error(git_dir, old_sha, new_sha, extras) if check_release else None, _shim_error(git_dir, new_sha, shim) if check_shim else None]
             return tuple(e for e in errs if e is not None)
     except (OSError, subprocess.SubprocessError) as exc:
         return (f"cannot verify agent-ratchet {new_sha} against {repo_url}: {exc}",)
@@ -204,7 +225,7 @@ def adopted_guard_files(base_prefix: str, target_prefix: str, deleted: Iterable[
     try:
         if entry_mode(base_prefix, LOCK_PATH, cwd) is not None or entry_mode(target_prefix, LOCK_PATH, cwd) != "100644":
             return frozenset()
-        if read_lock(target_prefix, cwd=cwd) is None or _read_ref_file_bytes(target_prefix, LEGACY_MANIFEST_PATH, cwd=cwd) is not None:
+        if read_lock_spec(target_prefix, cwd=cwd) is None or _read_ref_file_bytes(target_prefix, LEGACY_MANIFEST_PATH, cwd=cwd) is not None:
             return frozenset()
         manifest = json.loads(_read_ref_file_bytes(base_prefix, LEGACY_MANIFEST_PATH, cwd=cwd) or b"null")
         files = manifest.get("files") if isinstance(manifest, dict) else None
@@ -230,8 +251,8 @@ def verify_lock_transition(
     if base_lock_mode is not None and base_lock_mode not in _ALLOWED_MODES[LOCK_PATH]:
         return [f"{LOCK_PATH} in the base is not a regular file (mode {base_lock_mode}); a lock transition cannot be verified"]
     base_valid = {p: m in _ALLOWED_MODES[p] for p, m in base_modes.items()}
-    base_lock = read_lock(base_prefix, cwd=cwd) if base_prefix is not None and base_valid[LOCK_PATH] else None
-    target_lock = read_lock(target_prefix, cwd=cwd)
+    base_lock = read_lock_spec(base_prefix, cwd=cwd) if base_prefix is not None and base_valid[LOCK_PATH] else None
+    target_lock = read_lock_spec(target_prefix, cwd=cwd)
     base_shim = _snapshot_bytes(base_prefix, SHIM_PATH, cwd) if base_valid[SHIM_PATH] else None
     target_shim = _snapshot_bytes(target_prefix, SHIM_PATH, cwd)
     target_manifest = _snapshot_bytes(target_prefix, LEGACY_MANIFEST_PATH, cwd)
@@ -251,7 +272,9 @@ def verify_lock_transition(
         return [ENV_REQUIRED_MSG]
     if target_lock is None:
         return [_shim_mismatch_msg(None)]
-    return list(_remote_errors(repo_url, base_lock, target_lock, lock_changed, target_shim, lock_changed or shim_changed))
+    return list(
+        _remote_errors(repo_url, base_lock.sha if base_lock else None, target_lock.sha, lock_changed, target_shim, lock_changed or shim_changed, target_lock.extras)
+    )
 
 
 def _trusted_fork_point(cwd: str | None) -> str | None:

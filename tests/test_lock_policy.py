@@ -14,9 +14,11 @@ from agent_ratchet.lock_policy import (
     GUARD_CORE_URL,
     LEGACY_MANIFEST_PATH,
     LOCK_PATH,
+    LockSpec,
     SHIM_PATH,
     lock_check_is_local,
     read_lock,
+    read_lock_spec,
     ReleaseTagListError,
     release_tag_for,
     released_descendant_error,
@@ -26,6 +28,7 @@ from agent_ratchet.lock_policy import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from guard_repo_harness import _commit_files, _git, _init_guard_repo, _run_baseline_guard, _run_scanner, _write_files
+from lock_grammar_cases import LOCK_GRAMMAR_CASES
 
 ENV_MSG = "guard.lock/scripts/guard change requires ALLOW_GUARD_LOCK_UPDATE=1"
 DELETED_MSG = "guard.lock was deleted"
@@ -104,6 +107,66 @@ def test_read_lock_format(tmp_path: Path) -> None:
         _stage(repo, {LOCK_PATH: bad})
         with pytest.raises(GuardAnalysisError):
             read_lock("", cwd=str(repo))
+
+
+@pytest.mark.parametrize(("raw", "expected"), LOCK_GRAMMAR_CASES)
+def test_read_lock_spec_grammar(tmp_path: Path, raw: bytes, expected: LockSpec | None) -> None:
+    repo, _ = _consumer(tmp_path, {})
+    (repo / LOCK_PATH).write_bytes(raw)
+    _git(repo, "add", LOCK_PATH)
+    if expected is None:
+        with pytest.raises(GuardAnalysisError):
+            read_lock_spec("", cwd=str(repo))
+        with pytest.raises(GuardAnalysisError):
+            read_lock("", cwd=str(repo))
+    else:
+        assert read_lock_spec("", cwd=str(repo)) == expected
+        assert read_lock("", cwd=str(repo)) == expected.sha
+
+
+def test_read_lock_spec_absent_is_none(tmp_path: Path) -> None:
+    repo, _ = _consumer(tmp_path, {})
+    assert read_lock_spec("", cwd=str(repo)) is None
+
+
+def test_read_lock_legacy_returns_sha_with_extras_line(tmp_path: Path) -> None:
+    repo, _ = _consumer(tmp_path, {})
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    _stage(repo, {LOCK_PATH: f"{sha}\nEXTRAS=php\n"})
+    assert read_lock("", cwd=str(repo)) == sha
+
+
+def _extras_bump(tmp_path: Path, tags: list[tuple[str, str, bool]], extras: str) -> tuple[Path, str, str, str]:
+    (tmp_path / "remote").mkdir()
+    url, shas = _tag_remote(tmp_path / "remote", tags)
+    repo, base = _consumer(tmp_path / "consumer", {LOCK_PATH: shas["c1"] + "\n", SHIM_PATH: _shim("c1")})
+    head = _commit_files(repo, "chore: bump guard", {LOCK_PATH: f"{shas['c2']}\nEXTRAS={extras}\n", SHIM_PATH: _shim("c2")})
+    return repo, base, head, url
+
+
+def test_extras_requires_v4_release(tmp_path: Path) -> None:
+    repo, base, head, url = _extras_bump(tmp_path, [("v3.0.0", "c1", True), ("v3.3.0", "c2", True)], "php")
+    errs = verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=url)
+    assert len(errs) == 1 and "EXTRAS=php requires a v4.x.y release" in errs[0]
+
+
+def test_extras_allowed_on_v4_release(tmp_path: Path) -> None:
+    repo, base, head, url = _extras_bump(tmp_path, [("v3.0.0", "c1", True), ("v4.0.0", "c2", True)], "magento")
+    assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=url) == []
+
+
+def test_extras_none_allowed_on_v3(tmp_path: Path) -> None:
+    repo, base, head, url = _extras_bump(tmp_path, [("v3.0.0", "c1", True), ("v3.3.0", "c2", True)], "none")
+    assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=url) == []
+
+
+def test_extras_change_on_same_sha_is_a_lock_change(tmp_path: Path) -> None:
+    (tmp_path / "remote").mkdir()
+    url, shas = _tag_remote(tmp_path / "remote", [("v3.0.0", "c1", True), ("v3.3.0", "c2", True)])
+    repo, base = _consumer(tmp_path / "consumer", {LOCK_PATH: shas["c2"] + "\n", SHIM_PATH: _shim("c2")})
+    head = _commit_files(repo, "chore: extras", {LOCK_PATH: f"{shas['c2']}\nEXTRAS=php\n"})
+    errs = verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=url)
+    assert len(errs) == 1 and "EXTRAS=php requires a v4.x.y release" in errs[0]
 
 
 def test_unchanged_lock_ok(tmp_path: Path, remote: Remote) -> None:
