@@ -257,3 +257,63 @@ def test_write_preserves_executable_mode(tmp_path):
     assert main(["--write", str(tmp_path)]) == 0
     assert f.stat().st_mode & 0o777 == 0o755
     assert f.read_text(encoding="utf-8") == "from agent_ratchet.cli import main\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+def test_explicit_symlink_write_updates_target_keeps_link(tmp_path):
+    real = tmp_path / "real.py"
+    real.write_text("from guard_core import x\n", encoding="utf-8")
+    link = tmp_path / "link.py"
+    os.symlink(real, link)
+    assert main(["--write", str(link)]) == 0
+    assert os.path.islink(link) and os.readlink(link) == str(real)
+    assert real.read_text(encoding="utf-8") == "from agent_ratchet import x\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+def test_symlink_chain_rewritten_once_links_intact(tmp_path, capsys):
+    real = tmp_path / "real.py"
+    real.write_text("from guard_core import x\n", encoding="utf-8")
+    b = tmp_path / "b.py"
+    os.symlink(real, b)
+    a = tmp_path / "a.py"
+    os.symlink(b, a)
+    assert main([str(a), str(b), str(real)]) == 1
+    rewrites = [ln for ln in capsys.readouterr().out.splitlines() if ": rewrite:" in ln]
+    assert len(rewrites) == 1 and rewrites[0].startswith(f"{a.as_posix()}:")
+    assert main(["--write", str(a), str(b), str(real)]) == 0
+    assert os.path.islink(a) and os.path.islink(b)
+    assert real.read_text(encoding="utf-8") == "from agent_ratchet import x\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+def test_explicit_symlinked_directory_walked_link_survives(tmp_path):
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "n.py").write_text("from guard_core import y\n", encoding="utf-8")
+    linkdir = tmp_path / "linkdir"
+    os.symlink(sub, linkdir)
+    assert main(["--write", str(linkdir)]) == 0
+    assert os.path.islink(linkdir)
+    assert (sub / "n.py").read_text(encoding="utf-8") == "from agent_ratchet import y\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+def test_symlink_target_write_failure_exit_2_untouched(tmp_path, monkeypatch, capsys):
+    (tmp_path / "t").mkdir()
+    (tmp_path / "l").mkdir()
+    real = tmp_path / "t" / "real.py"
+    real.write_text("from guard_core import x\n", encoding="utf-8")
+    link = tmp_path / "l" / "link.py"
+    os.symlink(real, link)
+
+    def fake(src, dst):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(os, "replace", fake)
+    assert main(["--write", str(link)]) == 2
+    assert "error: denied" in capsys.readouterr().out
+    assert os.path.islink(link)
+    assert real.read_text(encoding="utf-8") == "from guard_core import x\n"
+    assert sorted(p.name for p in real.parent.iterdir()) == ["real.py"]
+    assert sorted(p.name for p in link.parent.iterdir()) == ["link.py"]

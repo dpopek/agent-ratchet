@@ -205,7 +205,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     errors = 0
     items: list[Item] = []
+    seen: set[str] = set()
     for path in sorted(set(_iter_py_files(paths))):
+        real = os.path.realpath(path)
+        if real in seen:
+            continue
+        seen.add(real)
         try:
             with open(path, "rb") as fh:
                 raw = fh.read()
@@ -219,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         new_raw = plan.new_source.encode("utf-8")
         if args.write and new_raw != raw:
             try:
-                _atomic_write(path, new_raw)
+                _atomic_write(real, new_raw)
             except OSError as exc:
                 print(f"{path}:0: error: {(str(exc).splitlines() or [type(exc).__name__])[0]}")
                 errors += 1
