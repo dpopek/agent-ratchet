@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.5.2
+
+### Fixed
+
+- Guard config and baselines nested deeper than 512 levels fail closed
+  (exit 2) on every Python. Before, Python 3.15 accepted the deep config or
+  crashed on the deep baseline.
+- `migrate-imports` detects `-mguard_core` written without a space.
+
+### Changed
+
+- CI also runs on Python 3.15.
+
 ## 3.5.1
 
 ### Fixed
