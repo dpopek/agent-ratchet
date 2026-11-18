@@ -234,6 +234,7 @@ def test_prose_string_mentioning_guard_core_stays_mention(tmp_path):
         "guard_core", "guard-core", "guard_core.cli", "guard_core.version.installed_sha",
         "guard-core scan", "guard-core==3.0", "guard-core @ git+https://x/y",
         "guard-core[php]", "guard-core(>=3.0)", "python -m guard_core scan", "-m guard_core.cli", "x -m\tguard_core",
+        "-mguard_core", "python -mguard_core.cli", "guard-core; python_version<'3.13'", "guard-core<4", "guard-core!=3.0",
         "guard-core is deprecated",  # accepted false positive (spec)
     ],
 )
@@ -246,6 +247,7 @@ def test_runtime_strings_are_manual(value):
     [
         "guard-core-legacy", "guard-core's docs", "guard-coredump", "guard-core.lock",
         "python -m guard_core_extras", "guard_core_path", "guard_core.", "rerun-m guard_core",
+        "x-mguard_core", "-mguard_core_x",
     ],
 )
 def test_prose_and_lookalikes_are_mentions(value):
@@ -341,3 +343,37 @@ def test_symlink_target_write_failure_exit_2_untouched(tmp_path, monkeypatch, ca
     assert real.read_text(encoding="utf-8") == "from guard_core import x\n"
     assert sorted(p.name for p in real.parent.iterdir()) == ["real.py"]
     assert sorted(p.name for p in link.parent.iterdir()) == ["link.py"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+def test_symlink_write_temp_file_in_target_dir(tmp_path, monkeypatch):
+    (tmp_path / "t").mkdir()
+    (tmp_path / "l").mkdir()
+    real = tmp_path / "t" / "real.py"
+    real.write_text("from guard_core import x\n", encoding="utf-8")
+    link = tmp_path / "l" / "link.py"
+    os.symlink(real, link)
+    real_replace = os.replace
+    seen = []
+
+    def spy(src, dst):
+        seen.append(os.path.realpath(os.path.dirname(src)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy)
+    assert main(["--write", str(link)]) == 0
+    assert seen == [os.path.realpath(real.parent)]
+    assert real.read_text(encoding="utf-8") == "from agent_ratchet import x\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+def test_symlink_write_preserves_target_mode(tmp_path):
+    real = tmp_path / "real.py"
+    real.write_text("from guard_core import x\n", encoding="utf-8")
+    real.chmod(0o755)
+    link = tmp_path / "link.py"
+    os.symlink(real, link)
+    assert main(["--write", str(link)]) == 0
+    assert os.path.islink(link)
+    assert real.stat().st_mode & 0o777 == 0o755
+    assert real.read_text(encoding="utf-8") == "from agent_ratchet import x\n"
