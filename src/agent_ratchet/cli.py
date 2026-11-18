@@ -56,8 +56,3 @@ def main(argv: list[str] | None = None) -> int:
         return migrate.main(rest)
     return _version(rest)
 
-
-def legacy_main(argv: list[str] | None = None) -> int:
-    """Entry point of the deprecated ``guard-core`` script: one stderr note, then the unchanged CLI."""
-    print("agent-ratchet: 'guard-core' is deprecated and removed in 4.0; use 'agent-ratchet'", file=sys.stderr)
-    return main(argv)

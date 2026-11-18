@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
-import warnings
 
-VERSION: str = "3.5.2"
-_GUARD_VERSION: str = VERSION  # Deprecated public alias GUARD_VERSION, served by __getattr__ until 4.0.
+VERSION: str = "4.0.0.dev0"
 _DISTRIBUTION_NAME = "agent-ratchet"
 
 
@@ -27,9 +25,3 @@ def installed_sha() -> str | None:
     commit = vcs_info.get("commit_id") if isinstance(vcs_info, dict) else None
     return commit if isinstance(commit, str) and commit else None
 
-
-def __getattr__(name: str) -> object:
-    if name == "GUARD_VERSION":
-        warnings.warn("agent_ratchet.version.GUARD_VERSION is deprecated and removed in 4.0; use agent_ratchet.version.VERSION", DeprecationWarning, stacklevel=2)
-        return _GUARD_VERSION
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import ast
-import warnings
 from typing import Any, Mapping, Sequence
 
 import agent_ratchet.ast_refactoring_delta as _delta
@@ -26,15 +25,8 @@ from agent_ratchet.git_guard_io import (
     MAX_CONTROL_NESTING_DEPTH, MAX_FUNCTION_ARGS, MODIFIED_FILE_SOFT_CEILING_LOC as MODIFIED_FILE_SOFT_CEILING_LOC,
     GuardAnalysisError as GuardAnalysisError, SlopViolation, git_show_bytes as git_show_bytes, is_self_skipped, is_test_filename, parse_python, visit_bounded
 )
-__all__ = ["APP_CODE_PREFIXES", "BranchKind", "DUMPING_GROUND_FILENAME_RE", "ExitKind", "FunctionVariantMetrics", "GUARD_VERSION", "GuardAnalysisError", "HARD_FILE_CEILING_LOC", "MODIFIED_FILE_SOFT_CEILING_LOC", "ModuleAstSnapshot", "RULES_VERSION", "ScopeKind", "SlopViolation", "check_staged_file_size_buffer", "collect_full_scan_violations", "collect_refactoring_slop_entries", "compare_ast_snapshots", "evaluate_loc_transition", "extract_ast_snapshot", "extract_changed_lines_map", "git_show_bytes", "git_show_text", "scan_ast_for_refactoring_slop"]
+__all__ = ["APP_CODE_PREFIXES", "BranchKind", "DUMPING_GROUND_FILENAME_RE", "ExitKind", "FunctionVariantMetrics", "GuardAnalysisError", "HARD_FILE_CEILING_LOC", "MODIFIED_FILE_SOFT_CEILING_LOC", "ModuleAstSnapshot", "RULES_VERSION", "ScopeKind", "SlopViolation", "check_staged_file_size_buffer", "collect_full_scan_violations", "collect_refactoring_slop_entries", "compare_ast_snapshots", "evaluate_loc_transition", "extract_ast_snapshot", "extract_changed_lines_map", "git_show_bytes", "git_show_text", "scan_ast_for_refactoring_slop"]
 
-
-
-def __getattr__(name: str) -> object:
-    if name == "GUARD_VERSION":
-        warnings.warn("agent_ratchet.refactoring_guard.GUARD_VERSION is deprecated and removed in 4.0; use agent_ratchet.refactoring_guard.RULES_VERSION", DeprecationWarning, stacklevel=2)
-        return RULES_VERSION
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class _AstSnapshotBuilder(ControlFlowVisitorMixin):

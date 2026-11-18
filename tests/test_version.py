@@ -30,8 +30,8 @@ class _FakeDistribution:
 def test_version_prints_semver() -> None:
     result = _run_cli("version")
     assert result.returncode == 0
-    assert result.stdout == "3.5.2\n"
-    assert version.VERSION == "3.5.2"
+    assert result.stdout == "4.0.0.dev0\n"
+    assert version.VERSION == "4.0.0.dev0"
 
 
 def test_version_sha_without_vcs_metadata_exits_3(monkeypatch) -> None:
@@ -100,8 +100,3 @@ def test_dunder_version_matches_distribution() -> None:
     except importlib.metadata.PackageNotFoundError:
         pytest.skip("agent-ratchet is not installed (PYTHONPATH run); pyproject comparison covers this")
     assert agent_ratchet.__version__ == installed
-
-
-def test_guard_version_alias_equal() -> None:
-    with pytest.warns(DeprecationWarning, match="agent_ratchet.version.GUARD_VERSION is deprecated"):
-        assert version.GUARD_VERSION == version.VERSION  # deprecated alias, removed in 4.0

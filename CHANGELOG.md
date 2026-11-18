@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (4.0.0)
+
+- Removed: guard_core package (tombstone), guard-core command, GUARD_VERSION, SELF_SKIP_NAMES, RELEASE_TAG_PATTERN.
+
 ## 3.5.2
 
 ### Fixed

@@ -1,4 +1,4 @@
-"""`agent-ratchet migrate-imports`: move consumer code off the deprecated ``guard_core`` alias.
+"""`agent-ratchet migrate-imports`: move consumer code off the removed ``guard_core`` package.
 
 Only import statements are rewritten. Runtime strings and other mentions are reported.
 """
@@ -25,7 +25,7 @@ OLD = "guard_core"
 NEW = "agent_ratchet"
 ROOTS = (OLD, NEW)
 SKIP_DIRS = frozenset({".git", ".venv", "venv", "node_modules", "__pycache__"})
-MANUAL_NAMES = frozenset({"SELF_SKIP_NAMES", "RELEASE_TAG_PATTERN"})
+MANUAL_NAMES = frozenset({"SELF_SKIP_NAMES", "RELEASE_TAG_PATTERN", "GUARD_TEST_NAMES"})
 _KIND_ORDER = {"rewrite": 0, "manual-import": 1, "manual-runtime": 2, "mention": 3}
 _BOM = "﻿"
 _LINE_RE = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+")

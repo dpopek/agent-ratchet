@@ -6,10 +6,9 @@ scanner and the test-baseline integrity check, extracted from the in-repo guard
 it as one installable package with no runtime dependencies.
 
 Renamed from `guard-core` in 3.1.0 (the PyPI name belongs to an unrelated
-project). Until 4.0 the old names keep working: `import guard_core.X` gives the
-`agent_ratchet.X` module, `python -m guard_core` and the `guard-core` command run
-the same CLI, and the old GitHub URL redirects. See the 3.1.0 upgrade notes in
-`CHANGELOG.md`.
+project). The old names were removed in 4.0: `import guard_core` raises
+`ModuleNotFoundError`, and the `guard-core` command and `python -m guard_core` are
+gone. The old GitHub URL redirects. See the 3.1.0 upgrade notes in `CHANGELOG.md`.
 
 ## Commands
 
@@ -86,7 +85,7 @@ a deleted guard test with a similar new file, and a renamed test is not exempt.
 
 ## Migrating off guard_core
 
-The `guard_core` package is deprecated and removed in 4.0. Through the shim:
+The `guard_core` package was removed in 4.0; this migration is required before 4.0. Through the shim:
 
 1. `scripts/guard migrate-imports` lists what is pending (exit 0: nothing).
 2. `scripts/guard migrate-imports --write` rewrites the import statements.
@@ -230,10 +229,6 @@ tests only under `tests/`; elsewhere they are scanned.
 Setting `AGENT_RATCHET_SHADOW=1` makes a run print one
 `agent-ratchet shadow: ...` line to stderr. Stdout and the exit code do not
 change; any other value leaves it off.
-
-`agent_ratchet.version.GUARD_VERSION` is a deprecated alias of `VERSION` and is
-removed in 4.0. (The `GUARD_VERSION` exported by `git_guard_io` and
-`refactoring_guard` is a separate alias of `RULES_VERSION`, also removed in 4.0.)
 
 ## Differential acceptance tool
 
