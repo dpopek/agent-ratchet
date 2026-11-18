@@ -15,6 +15,7 @@ MODULES = [
     "cognitive_complexity",
     "git_guard_io",
     "migrate",
+    "profile",
     "query_mutation_rules",
     "source_metrics",
 ]

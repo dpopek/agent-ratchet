@@ -205,6 +205,10 @@ def list_snapshot_files(ref_prefix: str, cwd: str | None = None) -> list[str]:
     return [t for t in res.stdout.decode("utf-8", errors="replace").split("\0") if t]
 
 
+ALLOWED_CONFIG_KEYS = frozenset({"extra_slop_rules", "legacy_loc_waivers", "import_roots", "self_skip", "languages", "frameworks"})
+PROFILE_VALUES = {"languages": frozenset({"php"}), "frameworks": frozenset({"magento"})}
+
+
 def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
     try:
         data = loads_bounded(raw.decode("utf-8"))
@@ -212,6 +216,8 @@ def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
         raise GuardAnalysisError(f"Malformed audit_guard_config.json at {source}: {exc}") from exc
     if not isinstance(data, dict):
         raise GuardAnalysisError(f"audit_guard_config.json at {source} must be a JSON object")
+    if unknown := sorted(set(data) - ALLOWED_CONFIG_KEYS):
+        raise GuardAnalysisError(f"Unknown key(s) in audit_guard_config.json at {source}: {unknown}")
     extra = data.get("extra_slop_rules", [])
     waivers = data.get("legacy_loc_waivers", [])
     roots = data.get("import_roots", list(DEFAULT_IMPORT_ROOTS))
@@ -231,7 +237,15 @@ def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
         if not isinstance(r, str) or not r.strip():
             raise GuardAnalysisError(f"Invalid entry in import_roots at {source}")
     fixtures = _parse_self_skip(data.get("self_skip", {}), source)
-    return {"extra_slop_rules": extra, "legacy_loc_waivers": waivers, "import_roots": roots, "fixture_paths": fixtures}
+    languages, frameworks = _parse_profile(data, "languages", source), _parse_profile(data, "frameworks", source)
+    return {"extra_slop_rules": extra, "legacy_loc_waivers": waivers, "import_roots": roots, "fixture_paths": fixtures, "languages": languages, "frameworks": frameworks}
+
+
+def _parse_profile(data: Mapping[str, Any], key: str, source: str) -> list[str]:
+    values, known = data.get(key, []), PROFILE_VALUES[key]
+    if not isinstance(values, list) or any(not isinstance(v, str) or v not in known for v in values) or len(set(values)) != len(values):
+        raise GuardAnalysisError(f"Invalid {key} in audit_guard_config.json at {source}: need a list of unique values from {sorted(known)}")
+    return list(values)
 
 
 def _valid_fixture_path(entry: object) -> bool:
@@ -257,7 +271,7 @@ def _parse_self_skip(block: object, source: str) -> list[str]:
 
 
 def default_guard_config() -> dict[str, Any]:
-    return {"extra_slop_rules": [], "legacy_loc_waivers": [], "import_roots": list(DEFAULT_IMPORT_ROOTS), "fixture_paths": []}
+    return {"extra_slop_rules": [], "legacy_loc_waivers": [], "import_roots": list(DEFAULT_IMPORT_ROOTS), "fixture_paths": [], "languages": [], "frameworks": []}
 
 
 def fixture_set(base_cfg: Mapping[str, Any] | None, target_cfg: Mapping[str, Any]) -> frozenset[str]:
@@ -267,6 +281,14 @@ def fixture_set(base_cfg: Mapping[str, Any] | None, target_cfg: Mapping[str, Any
 
 
 def load_guard_config_for_ref(ref_prefix: str, cwd: str | None = None) -> dict[str, Any]:
+    cfg = _read_guard_config_for_ref(ref_prefix, cwd)
+    from agent_ratchet.profile import require_profile_capabilities  # lazy: profile imports this module
+
+    require_profile_capabilities(cfg)
+    return cfg
+
+
+def _read_guard_config_for_ref(ref_prefix: str, cwd: str | None) -> dict[str, Any]:
     rel = "scripts/audit/audit_guard_config.json"
     default_cfg = default_guard_config()
     if ref_prefix == "WORKTREE":
@@ -398,6 +420,8 @@ def verify_audit_guard_config_monotonicity(base_prefix: str, target_prefix: str,
     b_cfg, t_cfg = load_guard_config_for_ref(base_prefix, cwd=cwd), load_guard_config_for_ref(target_prefix, cwd=cwd)
     errors = _check_extra_slop_rules_monotonicity(b_cfg.get("extra_slop_rules", []), t_cfg.get("extra_slop_rules", []))
     errors.extend(_check_import_roots_monotonicity(b_cfg["import_roots"], t_cfg["import_roots"]))
+    for key in ("languages", "frameworks"):
+        errors.extend(f"{key} entry removed: '{v}' (narrows the analysis profile)" for v in b_cfg.get(key, []) if v not in t_cfg.get(key, []))
     base_fixtures = set(b_cfg.get("fixture_paths", []))
     errors.extend(f"self_skip.fixture_paths entry added: '{p}' (widens the self-skip exemption)" for p in t_cfg.get("fixture_paths", []) if p not in base_fixtures)
     base_waivers, target_waivers = b_cfg.get("legacy_loc_waivers", []), t_cfg.get("legacy_loc_waivers", [])

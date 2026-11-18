@@ -108,6 +108,25 @@ Rules:
 Migration order: add `fixture_paths` while still pinned to any 3.x (3.x ignores unknown keys),
 merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
 
+## Analysis profile
+
+`scripts/audit/audit_guard_config.json` may request an analysis profile:
+
+```json
+{"languages": ["php"], "frameworks": ["magento"]}
+```
+
+- `languages` accepts `php`; `frameworks` accepts `magento`. Each is a list of unique values;
+  anything else is a config error (exit 2). Both default to empty.
+- A requested profile needs its extra installed: `php` needs `agent-ratchet[php]`, `magento` needs
+  `agent-ratchet[magento]`; `magento` also requires the PHP modules. Pair it with the same `EXTRAS=php|magento` line
+  in `guard.lock`. Without the extra, `scan` and `baseline-integrity` fail closed with exit 2:
+  `profile 'php' requires agent-ratchet[php] (set EXTRAS=php in guard.lock)`.
+- Removing an entry from either list is reported (`languages entry removed: 'php' (narrows the
+  analysis profile)`); adding one is allowed.
+- Unknown top-level keys are a config error. Allowed: `extra_slop_rules`, `legacy_loc_waivers`,
+  `import_roots`, `self_skip`, `languages`, `frameworks`.
+
 ## Migrating off guard_core
 
 The `guard_core` package was removed in 4.0; this migration is required before 4.0. Through the shim:
