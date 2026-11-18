@@ -20,6 +20,7 @@ from agent_ratchet.git_guard_io import (
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
 from agent_ratchet.git_batch import git_batch_session
+from agent_ratchet.json_safety import loads_bounded
 from agent_ratchet.lock_policy import LOCK_PATH, check_staged_lock, lock_check_is_local, verify_lock_transition
 
 from agent_ratchet.baseline_diff import (
@@ -70,7 +71,7 @@ def _load_json_blob(spec: str, cwd: str | None = None) -> tuple[bytes | None, di
     if raw is None:
         return None, None
     try:
-        parsed = json.loads(raw.decode("utf-8"))
+        parsed = loads_bounded(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise BaselineAnalysisError(f"Failed to parse JSON in '{spec}': {exc}") from exc
     if not isinstance(parsed, dict):
@@ -182,7 +183,7 @@ def _load_target_baseline(bf: str, t_prefix: str, cwd: str | None) -> tuple[byte
         return None, None
     try:
         c_raw = full_p.read_bytes()
-        parsed = json.loads(c_raw.decode("utf-8"))
+        parsed = loads_bounded(c_raw.decode("utf-8"))
         if not isinstance(parsed, dict):
             raise BaselineAnalysisError(f"JSON root in {bf} must be an object.")
         return c_raw, parsed

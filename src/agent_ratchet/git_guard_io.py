@@ -16,6 +16,7 @@ from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers 
     GuardAnalysisError as GuardAnalysisError, parse_python as parse_python, visit_bounded as visit_bounded,
 )
 from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
+from agent_ratchet.json_safety import loads_bounded
 from agent_ratchet.git_batch import (  # noqa: F401 -- head_commit_exists / _git_cat_bytes_oneshot re-exported
     _git_cat_bytes_oneshot as _git_cat_bytes_oneshot, active_reader_for, batch_unsafe,
     head_commit_exists as head_commit_exists,
@@ -229,7 +230,7 @@ def list_snapshot_files(ref_prefix: str, cwd: str | None = None) -> list[str]:
 
 def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
     try:
-        data = json.loads(raw.decode("utf-8"))
+        data = loads_bounded(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise GuardAnalysisError(f"Malformed audit_guard_config.json at {source}: {exc}") from exc
     if not isinstance(data, dict):
