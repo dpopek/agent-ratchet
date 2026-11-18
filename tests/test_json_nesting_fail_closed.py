@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from agent_ratchet import ai_slop_scanner, test_baseline_integrity
+from agent_ratchet.json_safety import MAX_JSON_DEPTH
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from guard_repo_harness import _commit_files, _git, _init_guard_repo, _json_bytes, _run_baseline_guard, _run_scanner, _write_files
@@ -19,6 +20,20 @@ DEPTH = 100_000
 DEEP_CONFIG = '{"extra_slop_rules": [], "legacy_loc_waivers": [], "deep": ' + "[" * DEPTH + "]" * DEPTH + "}\n"
 DEEP_BASELINE = '{"metric": "refactoring_slop", "ceiling": 0, "exemptions": ' + "[" * DEPTH + "]" * DEPTH + "}\n"
 MARKER = "nesting-marker"
+
+
+def _nest(total: int) -> str:
+    """Array nesting so that, inside one enclosing object, the document depth is exactly ``total``."""
+    inner = total - 1
+    return "[" * inner + "]" * inner
+
+
+def _config_at(total: int) -> str:
+    return '{"extra_slop_rules": [], "legacy_loc_waivers": [], "deep": ' + _nest(total) + "}\n"
+
+
+def _baseline_at(total: int) -> str:
+    return '{"metric": "refactoring_slop", "ceiling": 0, "exemptions": ' + _nest(total) + "}\n"
 
 
 @pytest.fixture
@@ -82,3 +97,38 @@ def test_injected_recursion_error_in_baseline_fails_closed(
     _inject_recursion_error(monkeypatch)
     rc = test_baseline_integrity.main(args)
     _assert_fails_closed(rc, capsys.readouterr().err)
+
+
+def _assert_no_traceback(rc: int, stderr: str) -> None:
+    assert rc in (0, 2), stderr
+    assert "Traceback" not in stderr
+
+
+def test_guard_config_at_depth_limit_has_no_traceback(repo: Path) -> None:
+    _write_files(repo, {CONFIG: _config_at(MAX_JSON_DEPTH)})
+    _git(repo, "add", CONFIG)
+    r = _run_scanner(repo, "--staged-only")
+    _assert_no_traceback(r.returncode, r.stderr)
+
+
+def test_guard_config_over_depth_limit_fails_closed(repo: Path) -> None:
+    _write_files(repo, {CONFIG: _config_at(MAX_JSON_DEPTH + 1)})
+    _git(repo, "add", CONFIG)
+    r = _run_scanner(repo, "--staged-only")
+    _assert_fails_closed(r.returncode, r.stderr)
+
+
+@pytest.mark.parametrize("args", [(), ("--staged-only",)], ids=["worktree", "staged"])
+def test_baseline_at_depth_limit_has_no_traceback(repo: Path, args: tuple[str, ...]) -> None:
+    # Committed first: a new exemption would be rejected (exit 1) on its own merits, so test parse/diff of an unchanged one.
+    _commit_files(repo, "chore: nested baseline", {BASELINE: _baseline_at(MAX_JSON_DEPTH)})
+    r = _run_baseline_guard(repo, *args)
+    _assert_no_traceback(r.returncode, r.stderr)
+
+
+@pytest.mark.parametrize("args", [(), ("--staged-only",)], ids=["worktree", "staged"])
+def test_baseline_over_depth_limit_fails_closed(repo: Path, args: tuple[str, ...]) -> None:
+    _write_files(repo, {BASELINE: _baseline_at(MAX_JSON_DEPTH + 1)})
+    _git(repo, "add", BASELINE)
+    r = _run_baseline_guard(repo, *args)
+    _assert_fails_closed(r.returncode, r.stderr)

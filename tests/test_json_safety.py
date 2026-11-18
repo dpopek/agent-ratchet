@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from agent_ratchet.json_safety import JsonTooDeepError, loads_bounded
+from agent_ratchet.json_safety import MAX_JSON_DEPTH, JsonTooDeepError, loads_bounded
 
 
 def nest(n):
@@ -15,13 +15,13 @@ def nest(n):
 
 
 def test_depth_at_limit_parses():
-    assert loads_bounded(nest(512)) is not None
+    assert loads_bounded(nest(MAX_JSON_DEPTH)) is not None
 
 
 def test_depth_over_limit_raises_with_position():
     with pytest.raises(JsonTooDeepError) as e:
-        loads_bounded(nest(513))
-    assert str(e.value).startswith("nesting deeper than 512") and e.value.pos == 512
+        loads_bounded(nest(MAX_JSON_DEPTH + 1))
+    assert str(e.value).startswith("nesting deeper than 128") and e.value.pos == MAX_JSON_DEPTH
     assert isinstance(e.value, json.JSONDecodeError)
 
 
@@ -47,3 +47,19 @@ def test_large_flat_input_is_fast():
     t = time.perf_counter()
     loads_bounded(text)
     assert time.perf_counter() - t < 0.5
+
+
+def test_unterminated_string_scan_is_linear():
+    text = '"' + '\\"' * 50_000
+    t = time.perf_counter()
+    with pytest.raises(json.JSONDecodeError) as e:
+        loads_bounded(text)
+    elapsed = time.perf_counter() - t
+    assert not isinstance(e.value, JsonTooDeepError)
+    assert elapsed < 0.5
+
+
+def test_unterminated_string_then_brackets_is_plain_decode_error():
+    with pytest.raises(json.JSONDecodeError) as e:
+        loads_bounded('"abc' + "[" * 600)
+    assert not isinstance(e.value, JsonTooDeepError)

@@ -12,10 +12,12 @@ import json
 import re
 from typing import Any
 
-MAX_JSON_DEPTH: int = 512
+MAX_JSON_DEPTH: int = 128
 
-# Strings are matched whole so brackets inside them are ignored; linear time.
-_TOKEN_RE = re.compile(r'"(?:[^"\\]|\\.)*"|[\[\]{}]', re.S)
+# Strings are matched whole so brackets inside them are ignored. The closing quote is
+# optional so an unterminated string is consumed to EOF in one pass (linear time);
+# json.loads then reports it.
+_TOKEN_RE = re.compile(r'"(?:[^"\\]|\\.)*"?|[\[\]{}]', re.S)
 
 
 class JsonTooDeepError(json.JSONDecodeError):
