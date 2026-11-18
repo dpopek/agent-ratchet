@@ -83,6 +83,31 @@ including one in a malformed manifest, is judged as before. Do not add
 look-alike files in the adoption change: git's rename detection (`-M`) can pair
 a deleted guard test with a similar new file, and a renamed test is not exempt.
 
+## Guard fixture exemptions
+
+Test files that contain deliberate slop (guard fixtures) are exempt only when listed in the
+protected config, `scripts/audit/audit_guard_config.json`:
+
+```json
+{"self_skip": {"fixture_paths": ["tests/ci/test_ai_slop_scanner.py"]}}
+```
+
+Rules:
+
+- Each entry is an exact repo-relative POSIX file path starting with `tests/`. No empty, `.` or
+  `..` segment, no trailing `/`, no `\`, none of `*?[`, and no duplicates. Anything else, a
+  non-list value, a non-object `self_skip` or an unknown key inside it is a config error (exit 2).
+- Vendored guard modules under `scripts/audit/` stay exempt by name, as before. No name-based
+  exemption under `tests/` exists any more (the built-in `GUARD_TEST_NAMES` list is gone).
+- The effective set in a base-to-target run is the intersection of the base and target lists, so
+  a file added to the list is still scanned in the change that adds it. Without a base, the
+  target list applies.
+- Adding an entry is reported as `self_skip.fixture_paths entry added: '<path>' (widens the
+  self-skip exemption)`. Removing entries is allowed.
+
+Migration order: add `fixture_paths` while still pinned to any 3.x (3.x ignores unknown keys),
+merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
+
 ## Migrating off guard_core
 
 The `guard_core` package was removed in 4.0; this migration is required before 4.0. Through the shim:

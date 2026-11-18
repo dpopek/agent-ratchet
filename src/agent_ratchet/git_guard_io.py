@@ -49,20 +49,15 @@ GUARD_MODULE_NAMES: frozenset[str] = frozenset({
     "baseline_diff.py", "cognitive_complexity.py", "guard_versions.py", "test_baseline_integrity.py",
     "test_quality_auditor.py",
 })
-# Legacy guard test files and fixtures: exempt only under tests/ (temporary; 4.0 moves to path-scoped exemptions).
-GUARD_TEST_NAMES: frozenset[str] = frozenset({
-    "test_ai_slop_scanner.py", "test_agent_slop_scanner.py", "test_baseline_integrity_guard.py",
-    "test_guard_conformance.py", "test_guard_git_conformance.py", "test_guard_cognitive_conformance.py",
-    "test_guard_topology_conformance.py", "test_suite_quality_ratchet.py", "guard_repo_harness.py",
-    "ai_slop_scanner.test.ts",
-})
-_SELF_SKIP_SCOPES: tuple[tuple[str, frozenset[str]], ...] = (("scripts/audit/", GUARD_MODULE_NAMES), ("tests/", GUARD_TEST_NAMES))
+_SELF_SKIP_SCOPES: tuple[tuple[str, frozenset[str]], ...] = (("scripts/audit/", GUARD_MODULE_NAMES),)
+NO_FIXTURES: frozenset[str] = frozenset()
+FIXTURE_PATH_PREFIX = "tests/"
 
 
-def is_self_skipped(path: str) -> bool:
-    """True only for a repo-relative POSIX path under a self-skip prefix whose basename is in that prefix's set."""
+def is_self_skipped(path: str, *, fixture_paths: frozenset[str]) -> bool:
+    """True for a guard module under scripts/audit/, or a path listed exactly in the protected config's fixture_paths."""
     name = path.rsplit("/", 1)[-1]
-    return any(path.startswith(prefix) and name in names for prefix, names in _SELF_SKIP_SCOPES)
+    return path in fixture_paths or any(path.startswith(prefix) and name in names for prefix, names in _SELF_SKIP_SCOPES)
 
 
 class SlopViolation(NamedTuple):
@@ -235,12 +230,45 @@ def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
     for r in roots:
         if not isinstance(r, str) or not r.strip():
             raise GuardAnalysisError(f"Invalid entry in import_roots at {source}")
-    return {"extra_slop_rules": extra, "legacy_loc_waivers": waivers, "import_roots": roots}
+    fixtures = _parse_self_skip(data.get("self_skip", {}), source)
+    return {"extra_slop_rules": extra, "legacy_loc_waivers": waivers, "import_roots": roots, "fixture_paths": fixtures}
+
+
+def _valid_fixture_path(entry: object) -> bool:
+    if not isinstance(entry, str) or not entry.startswith(FIXTURE_PATH_PREFIX) or entry.endswith("/"):
+        return False
+    if "\\" in entry or any(c in entry for c in "*?["):
+        return False
+    return all(seg not in ("", ".", "..") for seg in entry.split("/"))
+
+
+def _parse_self_skip(block: object, source: str) -> list[str]:
+    if not isinstance(block, dict) or set(block) - {"fixture_paths"}:
+        raise GuardAnalysisError(f"Invalid self_skip in audit_guard_config.json at {source}")
+    paths = block.get("fixture_paths", [])
+    if not isinstance(paths, list):
+        raise GuardAnalysisError(f"self_skip.fixture_paths must be a list at {source}")
+    for entry in paths:
+        if not _valid_fixture_path(entry):
+            raise GuardAnalysisError(f"Invalid self_skip.fixture_paths entry {entry!r} at {source}: need an exact tests/ file path")
+    if len(set(paths)) != len(paths):
+        raise GuardAnalysisError(f"Duplicate self_skip.fixture_paths entry at {source}")
+    return list(paths)
+
+
+def default_guard_config() -> dict[str, Any]:
+    return {"extra_slop_rules": [], "legacy_loc_waivers": [], "import_roots": list(DEFAULT_IMPORT_ROOTS), "fixture_paths": []}
+
+
+def fixture_set(base_cfg: Mapping[str, Any] | None, target_cfg: Mapping[str, Any]) -> frozenset[str]:
+    """Effective fixture exemptions: base AND target (an entry added in this change is still scanned); target alone without a base."""
+    target = frozenset(target_cfg.get("fixture_paths", ()))
+    return target if base_cfg is None else target & frozenset(base_cfg.get("fixture_paths", ()))
 
 
 def load_guard_config_for_ref(ref_prefix: str, cwd: str | None = None) -> dict[str, Any]:
     rel = "scripts/audit/audit_guard_config.json"
-    default_cfg = {"extra_slop_rules": [], "legacy_loc_waivers": [], "import_roots": list(DEFAULT_IMPORT_ROOTS)}
+    default_cfg = default_guard_config()
     if ref_prefix == "WORKTREE":
         base_dir = Path(cwd) if cwd else Path(".")
         cfg_path = base_dir / rel
@@ -370,6 +398,8 @@ def verify_audit_guard_config_monotonicity(base_prefix: str, target_prefix: str,
     b_cfg, t_cfg = load_guard_config_for_ref(base_prefix, cwd=cwd), load_guard_config_for_ref(target_prefix, cwd=cwd)
     errors = _check_extra_slop_rules_monotonicity(b_cfg.get("extra_slop_rules", []), t_cfg.get("extra_slop_rules", []))
     errors.extend(_check_import_roots_monotonicity(b_cfg["import_roots"], t_cfg["import_roots"]))
+    base_fixtures = set(b_cfg.get("fixture_paths", []))
+    errors.extend(f"self_skip.fixture_paths entry added: '{p}' (widens the self-skip exemption)" for p in t_cfg.get("fixture_paths", []) if p not in base_fixtures)
     base_waivers, target_waivers = b_cfg.get("legacy_loc_waivers", []), t_cfg.get("legacy_loc_waivers", [])
     if base_waivers == target_waivers:
         return errors
@@ -444,7 +474,7 @@ def evaluate_loc_transition(
 def check_staged_file_size_buffer(cwd: str | None = None, soft_ceiling: int = MODIFIED_FILE_SOFT_CEILING_LOC, waivers: Sequence[Mapping[str, Any]] = ()) -> list[SlopViolation]:
     violations: list[SlopViolation] = []
     for status, old_path, new_path in diff_name_status(None, None, cwd=cwd):
-        if status.startswith("D") or is_test_filename(new_path) or is_self_skipped(new_path):
+        if status.startswith("D") or is_test_filename(new_path) or is_self_skipped(new_path, fixture_paths=NO_FIXTURES):  # fixtures filtered by caller / is_test_filename
             continue
         target_bytes = git_cat_bytes(f":{new_path}", cwd)
         if target_bytes is not None:

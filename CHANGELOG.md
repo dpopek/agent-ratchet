@@ -3,6 +3,7 @@
 ## Unreleased (4.0.0)
 
 - Removed: guard_core package (tombstone), guard-core command, GUARD_VERSION, SELF_SKIP_NAMES, RELEASE_TAG_PATTERN.
+- Changed: guard test fixtures are exempt only when listed in `self_skip.fixture_paths` (exact paths under tests/); the built-in GUARD_TEST_NAMES list is gone.
 
 ## 3.5.2
 

@@ -1,4 +1,4 @@
-"""Black-box: self-skip names exempt files only under their own prefix (scripts/audit/, tests/).
+"""Black-box: self-skip names exempt files only under scripts/audit/.
 
 Drives `python -m agent_ratchet` in subprocesses only and imports nothing from agent_ratchet, so the same file
 can run against another engine via AGENT_RATCHET_ENGINE_SRC.

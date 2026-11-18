@@ -23,7 +23,7 @@ from agent_ratchet.query_mutation_rules import query_call_mutation_message, quer
 from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES as APP_CODE_PREFIXES, RULES_VERSION as RULES_VERSION, HARD_FILE_CEILING_LOC as HARD_FILE_CEILING_LOC,
     MAX_CONTROL_NESTING_DEPTH, MAX_FUNCTION_ARGS, MODIFIED_FILE_SOFT_CEILING_LOC as MODIFIED_FILE_SOFT_CEILING_LOC,
-    GuardAnalysisError as GuardAnalysisError, SlopViolation, git_show_bytes as git_show_bytes, is_self_skipped, is_test_filename, parse_python, visit_bounded
+    GuardAnalysisError as GuardAnalysisError, SlopViolation, git_show_bytes as git_show_bytes, NO_FIXTURES, is_self_skipped, is_test_filename, parse_python, visit_bounded
 )
 __all__ = ["APP_CODE_PREFIXES", "BranchKind", "DUMPING_GROUND_FILENAME_RE", "ExitKind", "FunctionVariantMetrics", "GuardAnalysisError", "HARD_FILE_CEILING_LOC", "MODIFIED_FILE_SOFT_CEILING_LOC", "ModuleAstSnapshot", "RULES_VERSION", "ScopeKind", "SlopViolation", "check_staged_file_size_buffer", "collect_full_scan_violations", "collect_refactoring_slop_entries", "compare_ast_snapshots", "evaluate_loc_transition", "extract_ast_snapshot", "extract_changed_lines_map", "git_show_bytes", "git_show_text", "scan_ast_for_refactoring_slop"]
 
@@ -432,7 +432,7 @@ class _AstSnapshotBuilder(ControlFlowVisitorMixin):
 
 
 def extract_ast_snapshot(source: str, filename: str, extra_rules: Sequence[Mapping[str, Any]] = ()) -> ModuleAstSnapshot:
-    if not filename.endswith(".py") or is_self_skipped(filename):
+    if not filename.endswith(".py") or is_self_skipped(filename, fixture_paths=NO_FIXTURES):  # fixtures filtered by caller / is_test_filename
         return ModuleAstSnapshot(filename, None, 0, {}, {}, {}, {}, [])
     try:
         tree = parse_python(source, filename)
@@ -448,7 +448,7 @@ def collect_full_scan_violations(source: str, filename: str, extra_rules: Sequen
     return list(extract_ast_snapshot(source, filename, extra_rules=extra_rules).full_violations)
 
 def scan_ast_for_refactoring_slop(content: str, filename: str, changed_lines: set[int] | None = None, extra_rules: Sequence[Mapping[str, Any]] = ()) -> list[SlopViolation]:
-    if not filename.endswith(".py") or is_self_skipped(filename):
+    if not filename.endswith(".py") or is_self_skipped(filename, fixture_paths=NO_FIXTURES):
         return []
     full = collect_full_scan_violations(content, filename, extra_rules=extra_rules)
     return full if changed_lines is None else [v for v in full if v.line in changed_lines]
