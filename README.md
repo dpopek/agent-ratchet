@@ -265,8 +265,10 @@ either, so move in separate pull requests, in this order:
    to parse (exit 2) after the bump, so fix it while still on 3.x. Skipping this step is
    irreversible: under a 4.0 base, adding entries is a finding.
 4. Pin `v4.0.0`, still without `EXTRAS`.
-5. In a separate pull request, add `EXTRAS=none|php|magento` and the matching
-   profile. Values other than `none` require a `v4.x.y` release.
+5. In a separate pull request, add `EXTRAS=none|php|magento` to `guard.lock`; merge.
+   Values other than `none` require a `v4.x.y` release.
+6. In a later pull request, add the matching `languages`/`frameworks` profile. CI runs the
+   base lock, so a profile added together with its `EXTRAS` always exits 2.
 
 Never add `EXTRAS` in the same PR that moves the base off ≤ 3.2.0.
 
