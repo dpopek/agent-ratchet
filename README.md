@@ -123,6 +123,8 @@ merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
   `agent-ratchet[magento]`; `magento` also requires the PHP modules. Pair it with the same `EXTRAS=php|magento` line
   in `guard.lock`. Without the extra, `scan` and `baseline-integrity` fail closed with exit 2:
   `profile 'php' requires agent-ratchet[php] (set EXTRAS=php in guard.lock)`.
+- Extras are tested on CPython 3.11-3.14 (Linux x86-64, macOS arm64). On 3.15 `tree-sitter` is
+  built from sdist (best-effort, not covered by CI).
 - Removing an entry from either list is reported (`languages entry removed: 'php' (narrows the
   analysis profile)`); adding one is allowed.
 - Unknown top-level keys are a config error. Allowed: `extra_slop_rules`, `legacy_loc_waivers`,
