@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -20,8 +21,6 @@ PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
-    import os
-
     env = {**os.environ, "PYTHONPATH": SRC}
     return subprocess.run([sys.executable, *args], capture_output=True, text=True, env=env, check=False)
 
@@ -89,3 +88,8 @@ def test_package_version_is_4_0_dev() -> None:
 
 def test_migrate_reports_guard_test_names_as_manual() -> None:
     assert "GUARD_TEST_NAMES" in migrate.MANUAL_NAMES
+
+
+def test_wheel_packages_ship_the_tombstone() -> None:
+    wheel = PYPROJECT["tool"]["hatch"]["build"]["targets"]["wheel"]
+    assert "src/guard_core" in wheel["packages"]

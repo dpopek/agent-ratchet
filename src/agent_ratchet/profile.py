@@ -6,7 +6,7 @@ import importlib.util
 from collections.abc import Mapping
 from typing import Any
 
-from agent_ratchet.git_guard_io import GuardAnalysisError
+from agent_ratchet.ast_safety import GuardAnalysisError
 
 REQUIRED_MODULES: dict[str, tuple[str, ...]] = {
     "php": ("tree_sitter", "tree_sitter_php"),

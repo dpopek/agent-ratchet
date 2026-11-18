@@ -448,7 +448,7 @@ def collect_full_scan_violations(source: str, filename: str, extra_rules: Sequen
     return list(extract_ast_snapshot(source, filename, extra_rules=extra_rules).full_violations)
 
 def scan_ast_for_refactoring_slop(content: str, filename: str, changed_lines: set[int] | None = None, extra_rules: Sequence[Mapping[str, Any]] = ()) -> list[SlopViolation]:
-    if not filename.endswith(".py") or is_self_skipped(filename, fixture_paths=NO_FIXTURES):
+    if not filename.endswith(".py") or is_self_skipped(filename, fixture_paths=NO_FIXTURES):  # fixtures filtered by caller / is_test_filename
         return []
     full = collect_full_scan_violations(content, filename, extra_rules=extra_rules)
     return full if changed_lines is None else [v for v in full if v.line in changed_lines]

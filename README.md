@@ -121,10 +121,12 @@ merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
   requires `languages: ["php"]`.
 - A requested profile needs its extra installed: `php` needs `agent-ratchet[php]`, `magento` needs
   `agent-ratchet[magento]`; `magento` also requires the PHP modules. Pair it with the same `EXTRAS=php|magento` line
-  in `guard.lock`. Without the extra, `scan` and `baseline-integrity` fail closed with exit 2:
+  in `guard.lock`, in two pull requests: first only `EXTRAS=php|magento` in `guard.lock` (merge it), then
+  `languages`/`frameworks` in the config. One PR with both always exits 2 in CI, because CI runs the
+  base lock (`--lock-from origin/main`) and the base has no `EXTRAS` yet. Without the extra, `scan` and `baseline-integrity` fail closed with exit 2:
   `profile 'php' requires agent-ratchet[php] (set EXTRAS=php in guard.lock)`.
-- Extras are tested on CPython 3.11-3.14 (Linux x86-64, macOS arm64). On 3.15 `tree-sitter` is
-  built from sdist (best-effort, not covered by CI).
+- Supported for extras: CPython 3.11–3.14 on Linux x86-64 and macOS arm64. On 3.15 `tree-sitter`
+  builds from sdist (best-effort).
 - Removing an entry from either list is reported (`languages entry removed: 'php' (narrows the
   analysis profile)`); adding one is allowed.
 - Unknown top-level keys are a config error. Allowed: `extra_slop_rules`, `legacy_loc_waivers`,
@@ -132,7 +134,7 @@ merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
 
 ## Migrating off guard_core
 
-The `guard_core` package was removed in 4.0; this migration is required before 4.0. Through the shim:
+The `guard_core` package was removed in 4.0; run this migration before bumping to 4.0. Through the shim:
 
 1. `scripts/guard migrate-imports` lists what is pending (exit 0: nothing).
 2. `scripts/guard migrate-imports --write` rewrites the import statements.
@@ -244,6 +246,7 @@ cannot repair it by design. Recover as follows:
    `--legacy-cmd "uvx --quiet --from git+https://github.com/dpopek/agent-ratchet@OLD guard-core --expect-sha OLD"`,
    where `OLD` is the SHA currently in the consumer's `guard.lock`. Use the
    `guard-core` command here: a 3.0.x pin has no `agent-ratchet` command.
+   `--legacy-cmd` applies only when `OLD` is a 3.0.x pin; 4.x has only `agent-ratchet`.
 
 Never move or delete a `v3.*` or `v4.*` tag and never rewrite `main`: every
 pinned SHA must stay fetchable.
@@ -257,8 +260,12 @@ either, so move in separate pull requests, in this order:
 1. Bump `guard.lock` to 3.3.0, SHA only (one line, no `EXTRAS`).
 2. Bump to 3.5.x and run `scripts/guard migrate-imports --write .` (see
    "Migrating off guard_core" above).
-3. Pin `v4.0.0`, still without `EXTRAS`.
-4. In a separate pull request, add `EXTRAS=none|php|magento` and the matching
+3. Under 3.5.x, add `self_skip.fixture_paths` to the config and remove any top-level keys
+   outside the allowed set; merge. An invalid entry added under 3.x makes the base config fail
+   to parse (exit 2) after the bump, so fix it while still on 3.x. Skipping this step is
+   irreversible: under a 4.0 base, adding entries is a finding.
+4. Pin `v4.0.0`, still without `EXTRAS`.
+5. In a separate pull request, add `EXTRAS=none|php|magento` and the matching
    profile. Values other than `none` require a `v4.x.y` release.
 
 Never add `EXTRAS` in the same PR that moves the base off ≤ 3.2.0.
@@ -271,7 +278,7 @@ The package version (`agent-ratchet version`, `agent_ratchet.__version__`,
 and detection algorithms, not byte-identical findings: the scope of an
 exemption can change without a rules bump. For example, 3.2.0 skips files named
 like guard modules only under `scripts/audit/`, and files named like guard
-tests only under `tests/`; elsewhere they are scanned.
+tests only under `tests/`; elsewhere they are scanned (4.0: replaced by `self_skip.fixture_paths`).
 
 Setting `AGENT_RATCHET_SHADOW=1` makes a run print one
 `agent-ratchet shadow: ...` line to stderr. Stdout and the exit code do not

@@ -16,6 +16,7 @@ from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers 
 )
 from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
 from agent_ratchet.json_safety import loads_bounded
+from agent_ratchet.profile import require_profile_capabilities
 from agent_ratchet.git_batch import (  # noqa: F401 -- head_commit_exists / _git_cat_bytes_oneshot re-exported
     _git_cat_bytes_oneshot as _git_cat_bytes_oneshot, active_reader_for, batch_unsafe,
     head_commit_exists as head_commit_exists,
@@ -284,7 +285,6 @@ def fixture_set(base_cfg: Mapping[str, Any] | None, target_cfg: Mapping[str, Any
 
 def load_guard_config_for_ref(ref_prefix: str, cwd: str | None = None) -> dict[str, Any]:
     cfg = _read_guard_config_for_ref(ref_prefix, cwd)
-    from agent_ratchet.profile import require_profile_capabilities  # lazy: profile imports this module
 
     require_profile_capabilities(cfg)
     return cfg
