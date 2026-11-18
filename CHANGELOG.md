@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.5.1
+
+### Fixed
+
+- `migrate-imports --write` on an explicitly given symlink rewrites the target
+  and keeps the link; each target file is processed once per run.
+- Runtime-string detection uses word boundaries: `guard-core-…`,
+  `guard-core's` and `-m guard_core_x` are mentions now. Prose starting
+  `guard-core ` is still reported as manual.
+
 ## 3.5.0
 
 ### Deprecated

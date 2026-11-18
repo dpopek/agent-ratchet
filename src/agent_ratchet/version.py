@@ -6,7 +6,7 @@ import importlib.metadata
 import json
 import warnings
 
-VERSION: str = "3.5.0"
+VERSION: str = "3.5.1"
 _GUARD_VERSION: str = VERSION  # Deprecated public alias GUARD_VERSION, served by __getattr__ until 4.0.
 _DISTRIBUTION_NAME = "agent-ratchet"
 
