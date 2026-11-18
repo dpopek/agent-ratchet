@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from agent_ratchet import ai_slop_scanner, lock_policy
+from agent_ratchet import ai_slop_scanner, lock_policy, transition_scan
 from agent_ratchet.ai_slop_scanner import _evaluate_commit_range, _evaluate_transition, check_staged_test_tampering
 from agent_ratchet.lock_policy import adopted_guard_files
 
@@ -58,7 +58,7 @@ def _tamper_paths(violations: list[ai_slop_scanner.SlopViolation]) -> set[str]:
 @pytest.fixture
 def no_remote(monkeypatch: pytest.MonkeyPatch) -> None:
     """The lock transition itself is covered by test_lock_policy; here only the tamper accounting is under test."""
-    monkeypatch.setattr(ai_slop_scanner, "verify_lock_transition", lambda *a, **k: [])
+    monkeypatch.setattr(transition_scan, "verify_lock_transition", lambda *a, **k: [])
 
 
 def test_staged_adoption_exempts_manifest_verified_test(tmp_path: Path, no_remote: None) -> None:
