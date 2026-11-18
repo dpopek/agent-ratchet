@@ -15,7 +15,7 @@ from typing import Any, Mapping, Sequence
 
 from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES, CODE_SCAN_EXTS, JS_LIKE_EXTS,
-    GuardAnalysisError as GuardAnalysisError, is_self_skipped,
+    GuardAnalysisError as GuardAnalysisError, NO_FIXTURES, default_guard_config, fixture_set, is_self_skipped,
     SlopViolation as SlopViolation, check_staged_file_size_buffer as check_staged_file_size_buffer,
     count_test_assertions as count_test_assertions, diff_name_status,
     evaluate_loc_transition, git_cat_bytes, git_show_text, head_commit_exists, is_test_filename,
@@ -177,7 +177,7 @@ def _check_added_diff_line(current_file: str, lineno: int, added_line: str) -> l
     return out
 
 
-def scan_diff_for_shortcut_escapes(diff_text: str) -> list[SlopViolation]:
+def scan_diff_for_shortcut_escapes(diff_text: str, *, fixture_paths: frozenset[str] = NO_FIXTURES) -> list[SlopViolation]:
     violations: list[SlopViolation] = []
     current_file, lineno = "", 0
     for raw_line in diff_text.splitlines():
@@ -186,7 +186,7 @@ def scan_diff_for_shortcut_escapes(diff_text: str) -> list[SlopViolation]:
         elif raw_line.startswith("@@ "):
             m = re.search(r"\+(\d+)", raw_line)
             lineno = int(m.group(1)) - 1 if m else 0
-        elif not current_file or is_self_skipped(current_file) or not current_file.endswith(CODE_SCAN_EXTS):
+        elif not current_file or is_self_skipped(current_file, fixture_paths=fixture_paths) or not current_file.endswith(CODE_SCAN_EXTS):
             continue
         elif raw_line.startswith("+") and not raw_line.startswith("+++"):
             lineno += 1
@@ -400,7 +400,7 @@ def _new_or_worsened_text_slop(base_txt: str | None, target_txt: str, new_path: 
 def _load_python_snapshot_files(ref_prefix: str, cwd: str | None = None) -> dict[str, str]:
     out: dict[str, str] = {}
     for rel in list_snapshot_files(ref_prefix, cwd=cwd):
-        if rel.endswith(".py") and rel.startswith(APP_CODE_PREFIXES) and not is_test_filename(rel) and not is_self_skipped(rel):
+        if rel.endswith(".py") and rel.startswith(APP_CODE_PREFIXES) and not is_test_filename(rel) and not is_self_skipped(rel, fixture_paths=NO_FIXTURES):  # fixtures filtered by caller / is_test_filename
             txt = git_show_text(f"{ref_prefix}:{rel}" if ref_prefix else f":{rel}", cwd=cwd)
             if txt is not None:
                 out[rel] = txt
@@ -423,13 +423,13 @@ def _py_entry_needs_a2(status: str, old_path: str, new_path: str, base_txt: str 
 
 def _evaluate_entry_transition(
     status: str, old_path: str, new_path: str, base_ref: str, target_prefix: str, cwd: str | None,
-    extra_rules: Sequence[Mapping[str, Any]], waivers: Sequence[Mapping[str, Any]], loc_ceilings: dict[str, int] | None, check_step_loc: bool,
-) -> tuple[list[SlopViolation], bool]:
+    extra_rules: Sequence[Mapping[str, Any]], waivers: Sequence[Mapping[str, Any]], loc_ceilings: dict[str, int] | None, check_step_loc: bool, fixture_paths: frozenset[str],
+) ->tuple[list[SlopViolation], bool]:
     if status.startswith("D"):
         if loc_ceilings is not None:
             loc_ceilings.pop(old_path, None)
         return [], old_path.endswith(".py") and old_path.startswith(APP_CODE_PREFIXES)
-    if is_self_skipped(new_path):
+    if is_self_skipped(new_path, fixture_paths=fixture_paths):
         return [], False
     t_spec = f"{target_prefix}:{new_path}" if target_prefix else f":{new_path}"
     target_bytes = git_cat_bytes(t_spec, cwd)
@@ -461,8 +461,9 @@ def _evaluate_transition(
 ) -> list[SlopViolation]:
     target_prefix = target_ref or ""
     has_base = base_ref != "HEAD" or head_commit_exists(cwd)
-    base_cfg = load_guard_config_for_ref(base_ref, cwd=cwd) if has_base else {"extra_slop_rules": [], "legacy_loc_waivers": [], "import_roots": [".", "src", "backend", "web", "mobile", "packages"]}
+    base_cfg = load_guard_config_for_ref(base_ref, cwd=cwd) if has_base else default_guard_config()
     cfg = load_guard_config_for_ref(target_prefix, cwd=cwd)
+    fixtures = fixture_set(base_cfg if has_base else None, cfg)
     entries = diff_name_status(base_ref, target_ref, cwd=cwd)
     diff_text = _diff_unified_zero(base_ref, target_ref, cwd=cwd)
     violations: list[SlopViolation] = []
@@ -473,7 +474,7 @@ def _evaluate_transition(
             violations.append(SlopViolation(LOCK_PATH, 1, "unjustified_lint_escape", lock_err, lock_err[:100]))
     should_run_a2 = tuple(base_cfg["import_roots"]) != tuple(cfg["import_roots"])
     for status, old_path, new_path in entries:
-        entry_v, a2_flag = _evaluate_entry_transition(status, old_path, new_path, base_ref, target_prefix, cwd, cfg["extra_slop_rules"], cfg["legacy_loc_waivers"], loc_ceilings, check_step_loc)
+        entry_v, a2_flag = _evaluate_entry_transition(status, old_path, new_path, base_ref, target_prefix, cwd, cfg["extra_slop_rules"], cfg["legacy_loc_waivers"], loc_ceilings, check_step_loc, fixtures)
         violations.extend(entry_v)
         should_run_a2 = should_run_a2 or a2_flag
     if should_run_a2 and not any(v.category == "syntax_error" for v in violations):
@@ -481,7 +482,7 @@ def _evaluate_transition(
         target_g = build_snapshot_import_graph(_load_python_snapshot_files(target_prefix, cwd=cwd), import_roots=cfg["import_roots"])
         violations.extend(compare_import_cycles(base_g, target_g, rename_map={old_p: new_p for st, old_p, new_p in entries if st.startswith("R")}))
     if diff_text:
-        violations.extend(scan_diff_for_shortcut_escapes(diff_text))
+        violations.extend(scan_diff_for_shortcut_escapes(diff_text, fixture_paths=fixtures))
     violations.extend(_check_transition_test_tampering(entries, base_ref, target_prefix, cwd=cwd))
     return violations
 
@@ -489,7 +490,7 @@ def _evaluate_transition(
 def _check_aggregate_range_loc(base_sha: str, head_sha: str, loc_ceilings: dict[str, int], cwd: str | None) -> list[SlopViolation]:
     out: list[SlopViolation] = []
     for status, old_path, new_path in diff_name_status(base_sha, head_sha, cwd=cwd):
-        if status.startswith("D") or is_test_filename(new_path) or is_self_skipped(new_path):
+        if status.startswith("D") or is_test_filename(new_path) or is_self_skipped(new_path, fixture_paths=NO_FIXTURES):  # fixtures filtered by is_test_filename
             continue
         t_bytes = git_cat_bytes(f"{head_sha}:{new_path}", cwd)
         if t_bytes is None:
@@ -565,22 +566,23 @@ def _scan_root(cwd: str | None) -> Path:
     return Path(top or cwd or os.getcwd()).resolve()
 
 
-def _is_self_skipped_target(path: Path, root: Path, cwd: str | None) -> bool:
+def _is_self_skipped_target(path: Path, root: Path, cwd: str | None, fixture_paths: frozenset[str]) -> bool:
     """Self-skip decision for a CLI target: resolved and made repo-relative POSIX; targets outside the root never skip."""
     resolved = (path if path.is_absolute() else Path(cwd or os.getcwd()) / path).resolve()
     try:
-        return is_self_skipped(resolved.relative_to(root).as_posix())
+        return is_self_skipped(resolved.relative_to(root).as_posix(), fixture_paths=fixture_paths)
     except ValueError:
         return False
 
 
 def _scan_worktree_files(targets: list[Path], cwd: str | None = None) -> list[SlopViolation]:
-    extra_rules = load_worktree_guard_config(cwd=cwd)["extra_slop_rules"]
+    wt_cfg = load_worktree_guard_config(cwd=cwd)
+    extra_rules, fixtures = wt_cfg["extra_slop_rules"], frozenset(wt_cfg["fixture_paths"])
     all_violations: list[SlopViolation] = []
     valid_exts = set(CODE_SCAN_EXTS)
     root = _scan_root(cwd)
     for path in targets:
-        if path.suffix not in valid_exts or _is_self_skipped_target(path, root, cwd):
+        if path.suffix not in valid_exts or _is_self_skipped_target(path, root, cwd, fixtures):
             continue
         try:
             content = path.read_text(encoding="utf-8")

@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import warnings
 from typing import Any, Mapping, NamedTuple, Sequence
 
 from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers re-exported
@@ -17,6 +16,7 @@ from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers 
 )
 from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
 from agent_ratchet.json_safety import loads_bounded
+from agent_ratchet.profile import require_profile_capabilities
 from agent_ratchet.git_batch import (  # noqa: F401 -- head_commit_exists / _git_cat_bytes_oneshot re-exported
     _git_cat_bytes_oneshot as _git_cat_bytes_oneshot, active_reader_for, batch_unsafe,
     head_commit_exists as head_commit_exists,
@@ -28,7 +28,6 @@ from agent_ratchet.source_metrics import (  # noqa: F401 -- lexing primitives re
 # Rule-set version: rule identifiers, thresholds and detection algorithms of Guard Core 2.3.3, not byte-identical
 # findings; exemption scope may change without a bump. The package version lives in agent_ratchet.version.
 RULES_VERSION: str = "2.3.3"
-_GUARD_VERSION: str = RULES_VERSION  # Deprecated public alias GUARD_VERSION, served by __getattr__ until 4.0.
 DEFAULT_BRANCH_CANDIDATES: tuple[str, ...] = ("origin/main", "origin/master")
 _UNREACHABLE_DISTANCE = 1 << 62
 
@@ -51,36 +50,15 @@ GUARD_MODULE_NAMES: frozenset[str] = frozenset({
     "baseline_diff.py", "cognitive_complexity.py", "guard_versions.py", "test_baseline_integrity.py",
     "test_quality_auditor.py",
 })
-# Legacy guard test files and fixtures: exempt only under tests/ (temporary; 4.0 moves to path-scoped exemptions).
-GUARD_TEST_NAMES: frozenset[str] = frozenset({
-    "test_ai_slop_scanner.py", "test_agent_slop_scanner.py", "test_baseline_integrity_guard.py",
-    "test_guard_conformance.py", "test_guard_git_conformance.py", "test_guard_cognitive_conformance.py",
-    "test_guard_topology_conformance.py", "test_suite_quality_ratchet.py", "guard_repo_harness.py",
-    "ai_slop_scanner.test.ts",
-})
-_SELF_SKIP_SCOPES: tuple[tuple[str, frozenset[str]], ...] = (("scripts/audit/", GUARD_MODULE_NAMES), ("tests/", GUARD_TEST_NAMES))
-# Deprecated since 3.2.0 (basename-only, unscoped); public SELF_SKIP_NAMES is served by __getattr__ until 4.0. Use is_self_skipped().
-_SELF_SKIP_NAMES: set[str] = set(GUARD_MODULE_NAMES | GUARD_TEST_NAMES)
+_SELF_SKIP_SCOPES: tuple[tuple[str, frozenset[str]], ...] = (("scripts/audit/", GUARD_MODULE_NAMES),)
+NO_FIXTURES: frozenset[str] = frozenset()
+FIXTURE_PATH_PREFIX = "tests/"
 
 
-_DEPRECATED_NAMES: dict[str, tuple[str, str]] = {
-    "GUARD_VERSION": ("_GUARD_VERSION", "agent_ratchet.git_guard_io.RULES_VERSION"),
-    "SELF_SKIP_NAMES": ("_SELF_SKIP_NAMES", "is_self_skipped()"),
-}
-
-
-def __getattr__(name: str) -> object:
-    if name in _DEPRECATED_NAMES:
-        private, replacement = _DEPRECATED_NAMES[name]
-        warnings.warn(f"agent_ratchet.git_guard_io.{name} is deprecated and removed in 4.0; use {replacement}", DeprecationWarning, stacklevel=2)
-        return globals()[private]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def is_self_skipped(path: str) -> bool:
-    """True only for a repo-relative POSIX path under a self-skip prefix whose basename is in that prefix's set."""
+def is_self_skipped(path: str, *, fixture_paths: frozenset[str]) -> bool:
+    """True for a guard module under scripts/audit/, or a path listed exactly in the protected config's fixture_paths."""
     name = path.rsplit("/", 1)[-1]
-    return any(path.startswith(prefix) and name in names for prefix, names in _SELF_SKIP_SCOPES)
+    return path in fixture_paths or any(path.startswith(prefix) and name in names for prefix, names in _SELF_SKIP_SCOPES)
 
 
 class SlopViolation(NamedTuple):
@@ -228,6 +206,10 @@ def list_snapshot_files(ref_prefix: str, cwd: str | None = None) -> list[str]:
     return [t for t in res.stdout.decode("utf-8", errors="replace").split("\0") if t]
 
 
+ALLOWED_CONFIG_KEYS = frozenset({"extra_slop_rules", "legacy_loc_waivers", "import_roots", "self_skip", "languages", "frameworks"})
+PROFILE_VALUES = {"languages": frozenset({"php"}), "frameworks": frozenset({"magento"})}
+
+
 def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
     try:
         data = loads_bounded(raw.decode("utf-8"))
@@ -235,6 +217,8 @@ def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
         raise GuardAnalysisError(f"Malformed audit_guard_config.json at {source}: {exc}") from exc
     if not isinstance(data, dict):
         raise GuardAnalysisError(f"audit_guard_config.json at {source} must be a JSON object")
+    if unknown := sorted(set(data) - ALLOWED_CONFIG_KEYS):
+        raise GuardAnalysisError(f"Unknown key(s) in audit_guard_config.json at {source}: {unknown}")
     extra = data.get("extra_slop_rules", [])
     waivers = data.get("legacy_loc_waivers", [])
     roots = data.get("import_roots", list(DEFAULT_IMPORT_ROOTS))
@@ -253,12 +237,62 @@ def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
     for r in roots:
         if not isinstance(r, str) or not r.strip():
             raise GuardAnalysisError(f"Invalid entry in import_roots at {source}")
-    return {"extra_slop_rules": extra, "legacy_loc_waivers": waivers, "import_roots": roots}
+    fixtures = _parse_self_skip(data.get("self_skip", {}), source)
+    languages, frameworks = _parse_profile(data, "languages", source), _parse_profile(data, "frameworks", source)
+    if "magento" in frameworks and "php" not in languages:
+        raise GuardAnalysisError(f"frameworks 'magento' requires languages 'php' in audit_guard_config.json at {source}")
+    return {"extra_slop_rules": extra, "legacy_loc_waivers": waivers, "import_roots": roots, "fixture_paths": fixtures, "languages": languages, "frameworks": frameworks}
+
+
+def _parse_profile(data: Mapping[str, Any], key: str, source: str) -> list[str]:
+    values, known = data.get(key, []), PROFILE_VALUES[key]
+    if not isinstance(values, list) or any(not isinstance(v, str) or v not in known for v in values) or len(set(values)) != len(values):
+        raise GuardAnalysisError(f"Invalid {key} in audit_guard_config.json at {source}: need a list of unique values from {sorted(known)}")
+    return list(values)
+
+
+def _valid_fixture_path(entry: object) -> bool:
+    if not isinstance(entry, str) or not entry.startswith(FIXTURE_PATH_PREFIX) or entry.endswith("/"):
+        return False
+    if "\\" in entry or any(c in entry for c in "*?["):
+        return False
+    return all(seg not in ("", ".", "..") for seg in entry.split("/"))
+
+
+def _parse_self_skip(block: object, source: str) -> list[str]:
+    if not isinstance(block, dict) or set(block) - {"fixture_paths"}:
+        raise GuardAnalysisError(f"Invalid self_skip in audit_guard_config.json at {source}")
+    paths = block.get("fixture_paths", [])
+    if not isinstance(paths, list):
+        raise GuardAnalysisError(f"self_skip.fixture_paths must be a list at {source}")
+    for entry in paths:
+        if not _valid_fixture_path(entry):
+            raise GuardAnalysisError(f"Invalid self_skip.fixture_paths entry {entry!r} at {source}: need an exact tests/ file path")
+    if len(set(paths)) != len(paths):
+        raise GuardAnalysisError(f"Duplicate self_skip.fixture_paths entry at {source}")
+    return list(paths)
+
+
+def default_guard_config() -> dict[str, Any]:
+    return {"extra_slop_rules": [], "legacy_loc_waivers": [], "import_roots": list(DEFAULT_IMPORT_ROOTS), "fixture_paths": [], "languages": [], "frameworks": []}
+
+
+def fixture_set(base_cfg: Mapping[str, Any] | None, target_cfg: Mapping[str, Any]) -> frozenset[str]:
+    """Effective fixture exemptions: base AND target (an entry added in this change is still scanned); target alone without a base."""
+    target = frozenset(target_cfg.get("fixture_paths", ()))
+    return target if base_cfg is None else target & frozenset(base_cfg.get("fixture_paths", ()))
 
 
 def load_guard_config_for_ref(ref_prefix: str, cwd: str | None = None) -> dict[str, Any]:
+    cfg = _read_guard_config_for_ref(ref_prefix, cwd)
+
+    require_profile_capabilities(cfg)
+    return cfg
+
+
+def _read_guard_config_for_ref(ref_prefix: str, cwd: str | None) -> dict[str, Any]:
     rel = "scripts/audit/audit_guard_config.json"
-    default_cfg = {"extra_slop_rules": [], "legacy_loc_waivers": [], "import_roots": list(DEFAULT_IMPORT_ROOTS)}
+    default_cfg = default_guard_config()
     if ref_prefix == "WORKTREE":
         base_dir = Path(cwd) if cwd else Path(".")
         cfg_path = base_dir / rel
@@ -388,6 +422,10 @@ def verify_audit_guard_config_monotonicity(base_prefix: str, target_prefix: str,
     b_cfg, t_cfg = load_guard_config_for_ref(base_prefix, cwd=cwd), load_guard_config_for_ref(target_prefix, cwd=cwd)
     errors = _check_extra_slop_rules_monotonicity(b_cfg.get("extra_slop_rules", []), t_cfg.get("extra_slop_rules", []))
     errors.extend(_check_import_roots_monotonicity(b_cfg["import_roots"], t_cfg["import_roots"]))
+    for key in ("languages", "frameworks"):
+        errors.extend(f"{key} entry removed: '{v}' (narrows the analysis profile)" for v in b_cfg.get(key, []) if v not in t_cfg.get(key, []))
+    base_fixtures = set(b_cfg.get("fixture_paths", []))
+    errors.extend(f"self_skip.fixture_paths entry added: '{p}' (widens the self-skip exemption)" for p in t_cfg.get("fixture_paths", []) if p not in base_fixtures)
     base_waivers, target_waivers = b_cfg.get("legacy_loc_waivers", []), t_cfg.get("legacy_loc_waivers", [])
     if base_waivers == target_waivers:
         return errors
@@ -462,7 +500,7 @@ def evaluate_loc_transition(
 def check_staged_file_size_buffer(cwd: str | None = None, soft_ceiling: int = MODIFIED_FILE_SOFT_CEILING_LOC, waivers: Sequence[Mapping[str, Any]] = ()) -> list[SlopViolation]:
     violations: list[SlopViolation] = []
     for status, old_path, new_path in diff_name_status(None, None, cwd=cwd):
-        if status.startswith("D") or is_test_filename(new_path) or is_self_skipped(new_path):
+        if status.startswith("D") or is_test_filename(new_path) or is_self_skipped(new_path, fixture_paths=NO_FIXTURES):  # fixtures filtered by caller / is_test_filename
             continue
         target_bytes = git_cat_bytes(f":{new_path}", cwd)
         if target_bytes is not None:

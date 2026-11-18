@@ -6,10 +6,9 @@ scanner and the test-baseline integrity check, extracted from the in-repo guard
 it as one installable package with no runtime dependencies.
 
 Renamed from `guard-core` in 3.1.0 (the PyPI name belongs to an unrelated
-project). Until 4.0 the old names keep working: `import guard_core.X` gives the
-`agent_ratchet.X` module, `python -m guard_core` and the `guard-core` command run
-the same CLI, and the old GitHub URL redirects. See the 3.1.0 upgrade notes in
-`CHANGELOG.md`.
+project). The old names were removed in 4.0: `import guard_core` raises
+`ModuleNotFoundError`, and the `guard-core` command and `python -m guard_core` are
+gone. The old GitHub URL redirects. See the 3.1.0 upgrade notes in `CHANGELOG.md`.
 
 ## Commands
 
@@ -84,9 +83,58 @@ including one in a malformed manifest, is judged as before. Do not add
 look-alike files in the adoption change: git's rename detection (`-M`) can pair
 a deleted guard test with a similar new file, and a renamed test is not exempt.
 
+## Guard fixture exemptions
+
+Test files that contain deliberate slop (guard fixtures) are exempt only when listed in the
+protected config, `scripts/audit/audit_guard_config.json`:
+
+```json
+{"self_skip": {"fixture_paths": ["tests/ci/test_ai_slop_scanner.py"]}}
+```
+
+Rules:
+
+- Each entry is an exact repo-relative POSIX file path starting with `tests/`. No empty, `.` or
+  `..` segment, no trailing `/`, no `\`, none of `*?[`, and no duplicates. Anything else, a
+  non-list value, a non-object `self_skip` or an unknown key inside it is a config error (exit 2).
+- Vendored guard modules under `scripts/audit/` stay exempt by name, as before. No name-based
+  exemption under `tests/` exists any more (the built-in `GUARD_TEST_NAMES` list is gone).
+- The effective set in a base-to-target run is the intersection of the base and target lists, so
+  a file added to the list is still scanned in the change that adds it. Without a base, the
+  target list applies.
+- Adding an entry is reported as `self_skip.fixture_paths entry added: '<path>' (widens the
+  self-skip exemption)`. Removing entries is allowed.
+
+Migration order: add `fixture_paths` while still pinned to any 3.x (3.x ignores unknown keys),
+merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
+
+## Analysis profile
+
+`scripts/audit/audit_guard_config.json` may request an analysis profile:
+
+```json
+{"languages": ["php"], "frameworks": ["magento"]}
+```
+
+- `languages` accepts `php`; `frameworks` accepts `magento`. Each is a list of unique values;
+  anything else is a config error (exit 2). Both default to empty. `frameworks: ["magento"]`
+  requires `languages: ["php"]`.
+- A requested profile needs its extra installed: `php` needs `agent-ratchet[php]`, `magento` needs
+  `agent-ratchet[magento]`; `magento` also requires the PHP modules. Pair it with the same `EXTRAS=php|magento` line
+  in `guard.lock`, in two pull requests: first only `EXTRAS=php|magento` in `guard.lock` (merge it), then
+  `languages`/`frameworks` in the config. One PR with both always exits 2 in CI, because CI runs the
+  base lock (`--lock-from origin/main`) and the base has no `EXTRAS` yet. Without the extra, `scan` and `baseline-integrity` fail closed with exit 2:
+  `profile 'php' requires agent-ratchet[php] (set EXTRAS=php in guard.lock)`.
+- Supported for extras: CPython 3.11–3.14 on Linux x86-64 and macOS arm64. On 3.15 `tree-sitter`
+  builds from sdist (best-effort).
+- Removing an entry from either list is reported (`languages entry removed: 'php' (narrows the
+  analysis profile)`); adding one is allowed.
+- Unknown top-level keys are a config error. Allowed: `extra_slop_rules`, `legacy_loc_waivers`,
+  `import_roots`, `self_skip`, `languages`, `frameworks`.
+
 ## Migrating off guard_core
 
-The `guard_core` package is deprecated and removed in 4.0. Through the shim:
+The `guard_core` package was removed in 4.0; run this migration before bumping to 4.0. Through the shim:
 
 1. `scripts/guard migrate-imports` lists what is pending (exit 0: nothing).
 2. `scripts/guard migrate-imports --write` rewrites the import statements.
@@ -198,6 +246,7 @@ cannot repair it by design. Recover as follows:
    `--legacy-cmd "uvx --quiet --from git+https://github.com/dpopek/agent-ratchet@OLD guard-core --expect-sha OLD"`,
    where `OLD` is the SHA currently in the consumer's `guard.lock`. Use the
    `guard-core` command here: a 3.0.x pin has no `agent-ratchet` command.
+   `--legacy-cmd` applies only when `OLD` is a 3.0.x pin; 4.x has only `agent-ratchet`.
 
 Never move or delete a `v3.*` or `v4.*` tag and never rewrite `main`: every
 pinned SHA must stay fetchable.
@@ -211,9 +260,15 @@ either, so move in separate pull requests, in this order:
 1. Bump `guard.lock` to 3.3.0, SHA only (one line, no `EXTRAS`).
 2. Bump to 3.5.x and run `scripts/guard migrate-imports --write .` (see
    "Migrating off guard_core" above).
-3. Pin `v4.0.0`, still without `EXTRAS`.
-4. In a separate pull request, add `EXTRAS=none|php|magento` and the matching
-   profile. Values other than `none` require a `v4.x.y` release.
+3. Under 3.5.x, add `self_skip.fixture_paths` to the config and remove any top-level keys
+   outside the allowed set; merge. An invalid entry added under 3.x makes the base config fail
+   to parse (exit 2) after the bump, so fix it while still on 3.x. Skipping this step is
+   irreversible: under a 4.0 base, adding entries is a finding.
+4. Pin `v4.0.0`, still without `EXTRAS`.
+5. In a separate pull request, add `EXTRAS=none|php|magento` to `guard.lock`; merge.
+   Values other than `none` require a `v4.x.y` release.
+6. In a later pull request, add the matching `languages`/`frameworks` profile. CI runs the
+   base lock, so a profile added together with its `EXTRAS` always exits 2.
 
 Never add `EXTRAS` in the same PR that moves the base off ≤ 3.2.0.
 
@@ -225,15 +280,11 @@ The package version (`agent-ratchet version`, `agent_ratchet.__version__`,
 and detection algorithms, not byte-identical findings: the scope of an
 exemption can change without a rules bump. For example, 3.2.0 skips files named
 like guard modules only under `scripts/audit/`, and files named like guard
-tests only under `tests/`; elsewhere they are scanned.
+tests only under `tests/`; elsewhere they are scanned (4.0: replaced by `self_skip.fixture_paths`).
 
 Setting `AGENT_RATCHET_SHADOW=1` makes a run print one
 `agent-ratchet shadow: ...` line to stderr. Stdout and the exit code do not
 change; any other value leaves it off.
-
-`agent_ratchet.version.GUARD_VERSION` is a deprecated alias of `VERSION` and is
-removed in 4.0. (The `GUARD_VERSION` exported by `git_guard_io` and
-`refactoring_guard` is a separate alias of `RULES_VERSION`, also removed in 4.0.)
 
 ## Differential acceptance tool
 

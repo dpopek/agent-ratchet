@@ -21,6 +21,7 @@ from agent_ratchet.git_guard_io import (
     extract_changed_lines_map,
     git_cat_bytes,
     git_show_text,
+    NO_FIXTURES,
     is_self_skipped,
 )
 
@@ -535,7 +536,7 @@ def register_snapshot_extractor(fn: Callable[[str, str, Sequence[dict[str, Any]]
 def compare_ast_snapshots(
     base_source: str | None, target_source: str, filename: str, extra_rules: Sequence[dict[str, Any]] = ()
 ) -> list[SlopViolation]:
-    if not filename.endswith(".py") or is_self_skipped(filename):
+    if not filename.endswith(".py") or is_self_skipped(filename, fixture_paths=NO_FIXTURES):  # fixtures filtered by caller / is_test_filename
         return []
     assert _SNAPSHOT_EXTRACTOR is not None, "Snapshot extractor not registered"
     target_snap = _SNAPSHOT_EXTRACTOR(target_source, filename, extra_rules)

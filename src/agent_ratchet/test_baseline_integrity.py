@@ -15,7 +15,7 @@ from typing import Any
 from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES,
     PROTECTED_GOVERNANCE_FILES, PROTECTED_GOVERNANCE_PREFIXES,
-    GuardAnalysisError, diff_name_status, git_cat_bytes, head_commit_exists, trusted_base_candidates,
+    GuardAnalysisError, diff_name_status, git_cat_bytes, head_commit_exists, load_guard_config_for_ref, trusted_base_candidates,
     is_protected_governance_path as is_protected_governance_path,
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
@@ -300,6 +300,7 @@ def _evaluate_commit_range(range_spec: str, enforce_isolation: bool, baseline_di
         raise BaselineAnalysisError(f"Invalid --commit-range '{range_spec}'; expected <base>..<head>.")
     raw_base, raw_head = range_spec.split("..", 1)
     base_sha, head_sha = verify_commit_ref(raw_base), verify_commit_ref(raw_head)
+    load_guard_config_for_ref(head_sha)  # fail closed on an unsupported profile even when the config is unchanged
     hist_ok, hist_msgs, ratchet_by_commit = _walk_commit_history(base_sha, head_sha, enforce_isolation, baseline_dir)
     if not hist_ok:
         return False, hist_msgs
@@ -319,6 +320,7 @@ def _resolve_merge_base_with_head(base_ref: str) -> tuple[str, str | None]:
 
 def _evaluate_local_state(explicit_base_ref: str | None, require_base_ref: bool, enforce_isolation: bool, baseline_dir: str | None, staged_only: bool = False) -> tuple[bool, list[str]]:
     target_mode: str | None = None if (enforce_isolation or staged_only) else "WORKTREE"
+    load_guard_config_for_ref(target_mode or "")  # fail closed on an unsupported profile even when the config is unchanged
     base_ref = resolve_base_ref(explicit_base_ref, require=require_base_ref)
     if not base_ref:
         return _check_transition_baselines(None, target_mode, baseline_dir)

@@ -8,43 +8,67 @@ from pathlib import Path
 import pytest
 
 from agent_ratchet import git_guard_io
-from agent_ratchet.git_guard_io import GUARD_MODULE_NAMES, GUARD_TEST_NAMES, is_self_skipped
+from agent_ratchet.git_guard_io import NO_FIXTURES, is_self_skipped
 
 PACKAGE_DIR = Path(__file__).resolve().parent.parent / "src" / "agent_ratchet"
 
 
-@pytest.mark.parametrize("path", [
-    "scripts/audit/source_metrics.py",
-    "scripts/audit/sub/source_metrics.py",
-    "tests/ci/test_guard_conformance.py",
-    "tests/meta_guards/test_suite_quality_ratchet.py",
-    "tests/ci/guard_repo_harness.py",
-    "tests/audit/ai_slop_scanner.test.ts",
+LISTED = "tests/ci/test_ai_slop_scanner.py"
+
+
+@pytest.mark.parametrize(("path", "fixtures"), [
+    ("scripts/audit/source_metrics.py", NO_FIXTURES),
+    ("scripts/audit/sub/source_metrics.py", NO_FIXTURES),
+    (LISTED, frozenset({LISTED})),
 ])
-def test_skipped(path: str) -> None:
-    assert is_self_skipped(path) is True
+def test_skipped(path: str, fixtures: frozenset[str]) -> None:
+    assert is_self_skipped(path, fixture_paths=fixtures) is True
 
 
-@pytest.mark.parametrize("path", [
-    "src/source_metrics.py",
-    "backend/baseline_diff.py",
-    "packages/x/git_guard_io.py",
-    "scripts/audit/custom.py",
-    "src/ai_slop_scanner.test.ts",
-    "src/test_guard_conformance.py",
-    "tests/ci/source_metrics.py",
-    "/abs/scripts/audit/source_metrics.py",
-    "./scripts/audit/source_metrics.py",
+@pytest.mark.parametrize(("path", "fixtures"), [
+    ("tests/ci/test_guard_conformance.py", NO_FIXTURES),
+    (LISTED, frozenset({"tests/other/test_ai_slop_scanner.py"})),
+    ("tests/meta_guards/test_suite_quality_ratchet.py", NO_FIXTURES),
+    ("tests/ci/guard_repo_harness.py", NO_FIXTURES),
+    ("tests/audit/ai_slop_scanner.test.ts", NO_FIXTURES),
+    ("src/source_metrics.py", NO_FIXTURES),
+    ("backend/baseline_diff.py", NO_FIXTURES),
+    ("packages/x/git_guard_io.py", NO_FIXTURES),
+    ("scripts/audit/custom.py", NO_FIXTURES),
+    ("src/ai_slop_scanner.test.ts", NO_FIXTURES),
+    ("src/test_guard_conformance.py", NO_FIXTURES),
+    ("tests/ci/source_metrics.py", NO_FIXTURES),
+    ("/abs/scripts/audit/source_metrics.py", NO_FIXTURES),
+    ("./scripts/audit/source_metrics.py", NO_FIXTURES),
 ])
-def test_scanned(path: str) -> None:
-    assert is_self_skipped(path) is False
+def test_scanned(path: str, fixtures: frozenset[str]) -> None:
+    assert is_self_skipped(path, fixture_paths=fixtures) is False
 
 
-def test_deprecated_union_is_exactly_both_sets() -> None:
-    with pytest.warns(DeprecationWarning, match="SELF_SKIP_NAMES is deprecated"):
-        deprecated = git_guard_io.SELF_SKIP_NAMES
-    assert deprecated == set(GUARD_MODULE_NAMES) | set(GUARD_TEST_NAMES)
-    assert not GUARD_MODULE_NAMES & GUARD_TEST_NAMES
+def test_guard_test_names_is_gone() -> None:
+    assert not hasattr(git_guard_io, "GUARD_TEST_NAMES")
+
+
+def _calls_without_fixture_keyword(tree: ast.AST) -> list[int]:
+    return [
+        node.lineno for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (getattr(node.func, "id", None) == "is_self_skipped" or getattr(node.func, "attr", None) == "is_self_skipped")
+        and not any(kw.arg == "fixture_paths" for kw in node.keywords)
+    ]
+
+
+def test_every_is_self_skipped_call_passes_fixture_paths_by_keyword() -> None:
+    offenders = {
+        path.name: lines
+        for path in sorted(PACKAGE_DIR.rglob("*.py"))
+        if (lines := _calls_without_fixture_keyword(ast.parse(path.read_text(encoding="utf-8"), str(path))))
+    }
+    assert offenders == {}, f"is_self_skipped() needs fixture_paths= by keyword: {offenders}"
+
+
+def test_keyword_guard_catches_positional_call() -> None:
+    assert _calls_without_fixture_keyword(ast.parse("is_self_skipped(p)\nm.is_self_skipped(p, fixture_paths=f)\n")) == [1]
 
 
 def _self_skip_references(tree: ast.AST) -> list[tuple[int, str]]:
