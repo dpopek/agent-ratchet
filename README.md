@@ -117,7 +117,8 @@ merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
 ```
 
 - `languages` accepts `php`; `frameworks` accepts `magento`. Each is a list of unique values;
-  anything else is a config error (exit 2). Both default to empty.
+  anything else is a config error (exit 2). Both default to empty. `frameworks: ["magento"]`
+  requires `languages: ["php"]`.
 - A requested profile needs its extra installed: `php` needs `agent-ratchet[php]`, `magento` needs
   `agent-ratchet[magento]`; `magento` also requires the PHP modules. Pair it with the same `EXTRAS=php|magento` line
   in `guard.lock`. Without the extra, `scan` and `baseline-integrity` fail closed with exit 2:

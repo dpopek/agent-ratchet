@@ -238,6 +238,8 @@ def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
             raise GuardAnalysisError(f"Invalid entry in import_roots at {source}")
     fixtures = _parse_self_skip(data.get("self_skip", {}), source)
     languages, frameworks = _parse_profile(data, "languages", source), _parse_profile(data, "frameworks", source)
+    if "magento" in frameworks and "php" not in languages:
+        raise GuardAnalysisError(f"frameworks 'magento' requires languages 'php' in audit_guard_config.json at {source}")
     return {"extra_slop_rules": extra, "legacy_loc_waivers": waivers, "import_roots": roots, "fixture_paths": fixtures, "languages": languages, "frameworks": frameworks}
 
 

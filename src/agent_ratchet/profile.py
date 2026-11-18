@@ -17,8 +17,6 @@ _ORDER = ("php", "magento")
 
 def requested_profiles(cfg: Mapping[str, Any]) -> list[str]:
     wanted = set(cfg.get("languages", ())) | set(cfg.get("frameworks", ()))
-    if "magento" in wanted:
-        wanted.add("php")  # magento is PHP analysis: the php extra is checked, and reported, first
     return [name for name in _ORDER if name in wanted]
 
 

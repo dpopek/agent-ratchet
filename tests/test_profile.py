@@ -26,6 +26,8 @@ MAGENTO_MESSAGE = "profile 'magento' requires agent-ratchet[magento] (set EXTRAS
     [
         b'{"language": ["php"]}',
         b'{"frameworks": ["magento"], "bogus": 1}',
+        b'{"frameworks": ["magento"]}',
+        b'{"languages": [], "frameworks": ["magento"]}',
         b'{"languages": ["python"]}',
         b'{"languages": ["php", "php"]}',
         b'{"languages": "php"}',
@@ -79,7 +81,7 @@ def test_missing_defusedxml_fails_magento(monkeypatch: pytest.MonkeyPatch) -> No
 def test_php_message_wins_for_magento_when_php_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     _missing(monkeypatch, "tree_sitter_php", "defusedxml")
     with pytest.raises(GuardAnalysisError, match=re.escape(PHP_MESSAGE)):
-        require_profile_capabilities({"languages": [], "frameworks": ["magento"]})
+        require_profile_capabilities({"languages": ["php"], "frameworks": ["magento"]})
 
 
 def test_capability_present_passes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,6 +130,15 @@ def test_removing_language_is_reported(tmp_path: Path, monkeypatch: pytest.Monke
     errors = verify_audit_guard_config_monotonicity(base, head, str(repo))
     assert "languages entry removed: 'php' (narrows the analysis profile)" in errors
     assert "frameworks entry removed: 'magento' (narrows the analysis profile)" in errors
+
+
+def test_removing_php_but_keeping_magento_is_a_parse_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _missing(monkeypatch)
+    repo = _init_guard_repo(str(tmp_path))
+    base = _commit_files(repo, "chore: initial", {CONFIG: _json_bytes({"languages": ["php"], "frameworks": ["magento"]})}, include_guards=True)
+    head = _commit_files(repo, "chore: narrow", {CONFIG: _json_bytes({"languages": [], "frameworks": ["magento"]})}, include_guards=True)
+    with pytest.raises(GuardAnalysisError, match="requires languages 'php'"):
+        verify_audit_guard_config_monotonicity(base, head, str(repo))
 
 
 def test_adding_language_is_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
