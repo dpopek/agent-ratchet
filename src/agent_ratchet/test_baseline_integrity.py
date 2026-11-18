@@ -16,7 +16,7 @@ from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES,
     PROTECTED_GOVERNANCE_FILES, PROTECTED_GOVERNANCE_PREFIXES,
     GuardAnalysisError, diff_name_status, git_cat_bytes, head_commit_exists, load_guard_config_for_ref, trusted_base_candidates,
-    is_protected_governance_path as is_protected_governance_path,
+    is_php_code_path, is_protected_governance_path as is_protected_governance_path,
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
 from agent_ratchet.git_batch import git_batch_session
@@ -110,7 +110,7 @@ def _is_atomic_baseline_tightening(entries: list[tuple[str, str, str]], gov_path
 def _check_single_commit_policy_isolation(base_ref: str, target_ref: str | None, cwd: str | None = None) -> tuple[bool, str]:
     entries = _diff_entries(base_ref, target_ref, cwd=cwd)
     touched = [new_p for _, _, new_p in entries] + [old_p for status, old_p, _ in entries if status.startswith("D")]
-    code_paths = sorted({p for p in touched if (p.startswith(ISOLATED_CODE_PREFIXES) or p.startswith("test/")) and not is_protected_governance_path(p)})
+    code_paths = sorted({p for p in touched if (p.startswith(ISOLATED_CODE_PREFIXES) or p.startswith("test/") or is_php_code_path(p)) and not is_protected_governance_path(p)})
     gov_paths = sorted({p for p in touched if is_protected_governance_path(p)})
     if not code_paths or not gov_paths:
         return True, "OK"
@@ -136,12 +136,12 @@ def _check_merge_commit_policy_isolation(commit_sha: str, parents: list[str], cw
             novel_paths.add(path)
             if len(set(p_blobs)) == 1:
                 unconflicted_novel_paths.add(path)
-    src_novel = sorted(p for p in novel_paths if p.startswith(APP_CODE_PREFIXES))
+    src_novel = sorted(p for p in novel_paths if p.startswith(APP_CODE_PREFIXES) or (is_php_code_path(p) and not is_protected_governance_path(p)))
     gov_novel = sorted(p for p in novel_paths if is_protected_governance_path(p))
     if src_novel and gov_novel:
         return False, f"Merge commit {commit_sha} introduces mixed novel governance {gov_novel} and src/ {src_novel} changes."
     unconflicted_gov = sorted(p for p in unconflicted_novel_paths if is_protected_governance_path(p))
-    any_src_changed = sorted(p for p in all_changed if p.startswith(APP_CODE_PREFIXES))
+    any_src_changed = sorted(p for p in all_changed if p.startswith(APP_CODE_PREFIXES) or (is_php_code_path(p) and not is_protected_governance_path(p)))
     if unconflicted_gov and any_src_changed:
         return False, f"Merge commit {commit_sha} introduces unconflicted governance edits {unconflicted_gov} alongside src/ merge {any_src_changed}."
     return True, "OK"

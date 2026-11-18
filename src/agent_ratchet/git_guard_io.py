@@ -104,9 +104,24 @@ PROTECTED_GOVERNANCE_PREFIXES: tuple[str, ...] = (
 _CASE_FOLDED_PIN_FILES: frozenset[str] = frozenset({"guard.lock", "scripts/guard"})
 
 
+# PHP static-analysis / test / hook configuration, matched against the basename at any depth (R7).
+PHP_QUALITY_CONFIG_RE: re.Pattern[str] = re.compile(
+    r"phpstan[^/]*\.neon(?:\.dist)?|phpstan-baseline.*|\.?phpcs\.xml(?:\.dist)?|phpunit\.xml(?:\.dist)?"
+    r"|psalm\.xml(?:\.dist)?|psalm-baseline\.xml|\.php-cs-fixer(?:\.dist)?\.php|phpmd\.xml|rector\.php|captainhook\.json"
+)
+_PHP_NON_CODE_SEGMENTS: frozenset[str] = frozenset({"vendor", "generated"})
+
+
+def is_php_code_path(rel: str) -> bool:
+    """`.php`/`.phtml` file outside any `vendor` or `generated` path segment."""
+    segments = rel.split("/")
+    return rel.endswith((".php", ".phtml")) and not _PHP_NON_CODE_SEGMENTS.intersection(segments[:-1])
+
+
 def is_protected_governance_path(rel_path: str) -> bool:
     return (
         rel_path in PROTECTED_GOVERNANCE_FILES
+        or PHP_QUALITY_CONFIG_RE.fullmatch(rel_path.rsplit("/", 1)[-1]) is not None
         or rel_path.startswith(PROTECTED_GOVERNANCE_PREFIXES)
         or rel_path.casefold() in _CASE_FOLDED_PIN_FILES
     )
