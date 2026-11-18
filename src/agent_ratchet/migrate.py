@@ -32,7 +32,7 @@ _LINE_RE = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+")
 _RUNTIME_RE = re.compile(
     r"\A(?:guard_core|guard-core)\Z"
     r"|\Aguard_core\.\w"
-    r"|\Aguard-core(?=[\s=<>!~@\[;])"
+    r"|\Aguard-core(?=[\s=<>!~@\[(;])"
     r"|(?<![\w-])-m\s+guard_core(?!\w)"
 )
 _INSIGNIFICANT = frozenset({tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER})

@@ -233,7 +233,7 @@ def test_prose_string_mentioning_guard_core_stays_mention(tmp_path):
     [
         "guard_core", "guard-core", "guard_core.cli", "guard_core.version.installed_sha",
         "guard-core scan", "guard-core==3.0", "guard-core @ git+https://x/y",
-        "guard-core[php]", "python -m guard_core scan", "-m guard_core.cli", "x -m\tguard_core",
+        "guard-core[php]", "guard-core(>=3.0)", "python -m guard_core scan", "-m guard_core.cli", "x -m\tguard_core",
         "guard-core is deprecated",  # accepted false positive (spec)
     ],
 )
