@@ -266,9 +266,11 @@ either, so move in separate pull requests, in this order:
    outside the allowed set; merge. An invalid entry added under 3.x makes the base config fail
    to parse (exit 2) after the bump, so fix it while still on 3.x. Skipping this step is
    irreversible: under a 4.0 base, adding entries is a finding.
-4. Pin `v4.0.0`, still without `EXTRAS`.
-5. In a separate pull request, add `EXTRAS=none|php|magento` to `guard.lock`; merge.
-   Values other than `none` require a `v4.x.y` release.
+4. Pin `v4.0.0`, still without `EXTRAS`. A repository without PHP stops here: a missing
+   `EXTRAS` line means `none`, so writing `EXTRAS=none` changes nothing.
+5. PHP or Magento repositories only: in a separate pull request, add `EXTRAS=php|magento`
+   to `guard.lock`; merge. These values require a `v4.x.y` release. In 4.0 the extras run
+   no rules yet (see "Analysis profile").
 6. In a later pull request, add the matching `languages`/`frameworks` profile. CI runs the
    base lock, so a profile added together with its `EXTRAS` always exits 2.
 
