@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased (4.0.0)
+## 4.0.0
 
 - Removed: guard_core package (tombstone), guard-core command, GUARD_VERSION, SELF_SKIP_NAMES, RELEASE_TAG_PATTERN.
 - Added: extras `[php]`, `[magento]`.
 - Added: `languages`/`frameworks` profile; a requested profile without its extra fails with exit 2.
+  The profile only checks that the extra is installed; PHP and Magento analysis arrives in 4.1.
 - Changed: unknown keys in audit_guard_config.json are an error.
 - Changed: guard test fixtures are exempt only when listed in `self_skip.fixture_paths` (exact paths under tests/); the built-in GUARD_TEST_NAMES list is gone.
 - Changed: `is_self_skipped()` requires keyword `fixture_paths`.

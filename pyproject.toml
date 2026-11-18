@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-ratchet"
-version = "4.0.0.dev0"
+version = "4.0.0"
 description = "Shared quality and refactoring guards for Python repositories."
 readme = "README.md"
 license = "MIT"

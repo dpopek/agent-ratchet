@@ -125,6 +125,8 @@ merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
   `languages`/`frameworks` in the config. One PR with both always exits 2 in CI, because CI runs the
   base lock (`--lock-from origin/main`) and the base has no `EXTRAS` yet. Without the extra, `scan` and `baseline-integrity` fail closed with exit 2:
   `profile 'php' requires agent-ratchet[php] (set EXTRAS=php in guard.lock)`.
+- In 4.0 the profile only checks that the extra is installed; no PHP or Magento rules run yet
+  (planned for 4.1). Removing an entry later is a finding, so add it only when you plan to keep it.
 - Supported for extras: CPython 3.11–3.14 on Linux x86-64 and macOS arm64. On 3.15 `tree-sitter`
   builds from sdist (best-effort).
 - Removing an entry from either list is reported (`languages entry removed: 'php' (narrows the
