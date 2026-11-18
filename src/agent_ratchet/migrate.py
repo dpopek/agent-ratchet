@@ -26,10 +26,15 @@ NEW = "agent_ratchet"
 ROOTS = (OLD, NEW)
 SKIP_DIRS = frozenset({".git", ".venv", "venv", "node_modules", "__pycache__"})
 MANUAL_NAMES = frozenset({"SELF_SKIP_NAMES", "RELEASE_TAG_PATTERN"})
-RUNTIME_STRINGS = frozenset({"guard_core", "guard-core"})
 _KIND_ORDER = {"rewrite": 0, "manual-import": 1, "manual-runtime": 2, "mention": 3}
 _BOM = "﻿"
 _LINE_RE = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+")
+_RUNTIME_RE = re.compile(
+    r"\A(?:guard_core|guard-core)\Z"
+    r"|\Aguard_core\.\w"
+    r"|\Aguard-core(?=[\s=<>!~@\[;])"
+    r"|(?<![\w-])-m\s+guard_core(?!\w)"
+)
 _INSIGNIFICANT = frozenset({tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER})
 
 
@@ -48,7 +53,7 @@ class FilePlan:
 
 
 def _is_runtime_string(value: str) -> bool:
-    return value in RUNTIME_STRINGS or value.startswith(("guard_core.", "guard-core")) or "-m guard_core" in value
+    return _RUNTIME_RE.search(value) is not None
 
 
 def _in_roots(module: str | None) -> bool:

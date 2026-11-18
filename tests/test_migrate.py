@@ -228,6 +228,30 @@ def test_prose_string_mentioning_guard_core_stays_mention(tmp_path):
     assert main([str(tmp_path)]) == 0
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "guard_core", "guard-core", "guard_core.cli", "guard_core.version.installed_sha",
+        "guard-core scan", "guard-core==3.0", "guard-core @ git+https://x/y",
+        "guard-core[php]", "python -m guard_core scan", "-m guard_core.cli", "x -m\tguard_core",
+        "guard-core is deprecated",  # accepted false positive (spec)
+    ],
+)
+def test_runtime_strings_are_manual(value):
+    assert kinds(plan_file(f"x = {value!r}\n", "a.py")) == [(1, "manual-runtime")]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "guard-core-legacy", "guard-core's docs", "guard-coredump", "guard-core.lock",
+        "python -m guard_core_extras", "guard_core_path", "guard_core.", "rerun-m guard_core",
+    ],
+)
+def test_prose_and_lookalikes_are_mentions(value):
+    assert kinds(plan_file(f"x = {value!r}\n", "a.py")) == [(1, "mention")]
+
+
 def test_replace_failure_exit_2_original_untouched_and_temp_removed(tmp_path, capsys, monkeypatch):
     a = tmp_path / "a.py"
     a.write_text("from guard_core.cli import main\n", encoding="utf-8")
