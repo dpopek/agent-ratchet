@@ -102,3 +102,20 @@ def test_merge_introducing_only_rector_php_allowed() -> None:
 def test_merge_introducing_phpstan_and_vendor_php_allowed() -> None:
     ok, _ = _merge_isolation({"phpstan.neon": "parameters:\n  level: 5\n", "vendor/a/X.php": "<?php\n"})
     assert ok
+
+
+def test_merge_with_unconflicted_phpstan_edit_alongside_carried_php_rejected() -> None:
+    """Governance edit novel to the merge, PHP code carried in from a side branch (not novel)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _init_guard_repo(tmp)
+        base = _commit_files(repo, "base", {"phpstan.neon": "parameters:\n  level: 5\n"})
+        _git(repo, "checkout", "-q", "-b", "side")
+        side = _commit_files(repo, "side", {"app/code/V/M/X.php": "<?php\n"})
+        _git(repo, "checkout", "-q", "-b", "main2", base)
+        _commit_files(repo, "main", {"docs/b.md": "b\n"})
+        _git(repo, "merge", "--no-ff", "--no-commit", "-q", side)
+        merge = _commit_files(repo, "merge", {"phpstan.neon": "parameters:\n  level: 0\n"})
+        parents = _git(repo, "rev-list", "--parents", "-n", "1", merge).split()[1:]
+        ok, msg = _check_merge_commit_policy_isolation(merge, parents, cwd=str(repo))
+        assert not ok
+        assert "unconflicted governance edits" in msg
