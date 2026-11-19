@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Sequence
 
 from agent_ratchet.ast_safety import GuardAnalysisError
 
@@ -36,13 +36,35 @@ def override_active() -> bool:
     return _state["override"] is not None
 
 
-def _repo_top_level(cwd: str | None) -> Path:
-    proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, text=True, check=False)
-    top = proc.stdout.strip() if proc.returncode == 0 else ""
-    return Path(top or cwd or ".").resolve()
+def _git_path(cwd: str | None, flag: str) -> str:
+    proc = subprocess.run(["git", "rev-parse", flag], cwd=cwd, capture_output=True, text=True, check=False)
+    return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def resolve_external_config(cli_value: str | None, repo_root: Path) -> Path | None:
+def _repo_roots(cwd: str | None) -> list[Path]:
+    """Top level of the scanned checkout, plus (linked worktree) the parent of the shared git dir, i.e. the main checkout."""
+    base = Path(cwd or ".")
+    roots = [Path(_git_path(cwd, "--show-toplevel") or base).resolve()]
+    common = _git_path(cwd, "--git-common-dir")
+    if common:
+        parent = (base / common).resolve().parent
+        if parent not in roots:
+            roots.append(parent)
+    return roots
+
+
+def _is_inside(path: Path, root: Path) -> bool:
+    """Identity-based containment (case-insensitive filesystems: resolved spellings may differ in case)."""
+    for candidate in (path, *path.parents):
+        try:
+            if os.path.samefile(candidate, root):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def resolve_external_config(cli_value: str | None, repo_root: Path, extra_roots: Sequence[Path] = ()) -> Path | None:
     """The validated external config path: the option wins over ``AGENT_RATCHET_CONFIG``; an empty env value is unset."""
     raw = cli_value if cli_value is not None else (os.environ.get(ENV_VAR) or None)
     if raw is None:
@@ -53,9 +75,9 @@ def resolve_external_config(cli_value: str | None, repo_root: Path) -> Path | No
         path = Path(raw).expanduser().resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         raise GuardAnalysisError(f"External config {raw!r} is unreadable or missing: {exc}") from exc
-    root = repo_root.resolve()
-    if path == root or root in path.parents:
-        raise GuardAnalysisError(f"External config {path} must lie outside the repository {root}")
+    for root in (repo_root.resolve(), *extra_roots):
+        if _is_inside(path, root):
+            raise GuardAnalysisError(f"External config {path} must lie outside the repository {root}")
     if not path.is_file():
         raise GuardAnalysisError(f"External config {path} is not a regular file")
     if os.name != "nt" and path.stat().st_mode & _UNSAFE_MODE:
@@ -77,7 +99,8 @@ def load_external_config(path: Path) -> dict[str, Any]:
 def activate_cli(cli_value: str | None, cwd: str | None = None) -> int | None:
     """CLI entry hook: install the override and print the note once. Returns exit code 2 on error, else None."""
     try:
-        path = resolve_external_config(cli_value, _repo_top_level(cwd))
+        top, *others = _repo_roots(cwd)
+        path = resolve_external_config(cli_value, top, others)
         if path is None:
             return None
         set_override(load_external_config(path))

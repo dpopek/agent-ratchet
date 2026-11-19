@@ -14,7 +14,7 @@ from agent_ratchet import external_config
 from agent_ratchet.git_guard_io import GuardAnalysisError, default_guard_config, load_guard_config_for_ref
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from guard_repo_harness import _commit_files, _init_guard_repo, _run_baseline_guard, _run_scanner
+from guard_repo_harness import _commit_files, _git, _init_guard_repo, _run_baseline_guard, _run_scanner
 from php_support import require_php
 
 PHP_FILE = "app/code/V/M/X.php"
@@ -177,6 +177,73 @@ def test_override_replaces_config_for_every_ref(tmp_path: Path) -> None:
     external_config.set_override(external_config.load_external_config(cfg))
     for ref in ("HEAD", "", "WORKTREE"):
         assert load_guard_config_for_ref(ref, cwd=str(repo))["import_roots"] == ["only_me"]
+
+
+def test_case_variant_path_inside_repo_rejected(tmp_path: Path) -> None:
+    repo, base, head = _repo(tmp_path, {"a.txt": "1\n"}, {"a.txt": "2\n"})
+    if not (tmp_path / "REPO").exists():
+        pytest.skip("case-sensitive filesystem")
+    inside = _write_config(repo / "cfg.json")
+    variant = tmp_path / "REPO" / "cfg.json"
+    assert variant.exists() and str(variant) != str(inside)
+    proc = _scan(repo, base, head, "--config-file", str(variant))
+    assert proc.returncode == 2
+    assert "outside the repository" in proc.stderr
+
+
+def _worktree(tmp_path: Path) -> tuple[Path, Path, str, str]:
+    repo, base, head = _repo(tmp_path, {"a.txt": "1\n"}, {"a.txt": "2\n"})
+    wt = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", str(wt), head)
+    return repo, wt, base, head
+
+
+@pytest.mark.parametrize("where", ["main_checkout", "git_dir"])
+def test_config_in_main_checkout_of_linked_worktree_rejected(tmp_path: Path, where: str) -> None:
+    repo, wt, base, head = _worktree(tmp_path)
+    cfg = _write_config((repo if where == "main_checkout" else repo / ".git") / "cfg.json")
+    proc = _scan(wt, base, head, "--config-file", str(cfg))
+    assert proc.returncode == 2
+    assert "outside the repository" in proc.stderr
+
+
+def test_config_outside_linked_worktree_and_main_checkout_accepted(tmp_path: Path) -> None:
+    _repo_dir, wt, base, head = _worktree(tmp_path)
+    cfg = _write_config(tmp_path / "cfg" / "c.json")
+    proc = _scan(wt, base, head, "--config-file", str(cfg))
+    assert proc.returncode == 0, proc.stderr
+
+
+MANIFEST_PATH = "scripts/audit/guard_manifest.json"
+MANIFEST = '{"guard_version": "2.3.3", "files": {}, "baseline_migrations": []}\n'
+
+
+def test_legacy_manifest_change_ignored_only_with_override(tmp_path: Path) -> None:
+    repo, base, head = _repo(tmp_path, {MANIFEST_PATH: MANIFEST}, {MANIFEST_PATH: MANIFEST.replace("2.3.3", "2.3.4")})
+    control = _scan(repo, base, head)
+    assert control.returncode != 0 and "guard_manifest.json changed" in control.stdout + control.stderr
+    cfg = _write_config(tmp_path / "cfg" / "c.json")
+    proc = _scan(repo, base, head, "--config-file", str(cfg))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_shim_change_without_lock_ignored_only_with_override(tmp_path: Path) -> None:
+    repo, base, head = _repo(tmp_path, {"scripts/guard": "#!/bin/sh\n# one\n"}, {"scripts/guard": "#!/bin/sh\n# two\n"})
+    control = _scan(repo, base, head)
+    assert control.returncode != 0 and "scripts/guard" in control.stdout + control.stderr
+    cfg = _write_config(tmp_path / "cfg" / "c.json")
+    proc = _scan(repo, base, head, "--config-file", str(cfg))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_staged_only_with_override_and_no_pin(tmp_path: Path) -> None:
+    repo, _base, _head = _repo(tmp_path, {MANIFEST_PATH: MANIFEST}, {"a.txt": "1\n"})
+    _git(repo, "rm", "-q", MANIFEST_PATH)
+    control = _run_scanner(repo, "--staged-only")
+    assert control.returncode == 2 and "guard_manifest.json was deleted" in control.stderr
+    cfg = _write_config(tmp_path / "cfg" / "c.json")
+    proc = _run_scanner(repo, "--staged-only", "--config-file", str(cfg))
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_resolve_precedence_and_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

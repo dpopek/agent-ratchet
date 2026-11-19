@@ -313,8 +313,6 @@ def staged_lock_errors(cwd: str | None = None, *, require_base_ref: bool = False
 
 def check_staged_lock(cwd: str | None = None, *, require_base_ref: bool = False) -> int | None:
     """CLI wrapper: exit code 2 on any pin violation or analysis error, None when the index may proceed."""
-    if external_config.override_active() and not _pin_present(cwd):
-        return None
     try:
         errs = staged_lock_errors(cwd, require_base_ref=require_base_ref)
     except GuardAnalysisError as exc:
