@@ -123,6 +123,7 @@ def activate_cli(
     ``refs`` / ``ranges``: the refs and commit ranges the run will read. When any of them, HEAD, the index or the
     worktree holds ``guard.lock``, the env override is ignored (only ``--config-file`` replaces the protected config).
     """
+    set_override(None)  # every run decides afresh; nothing carries over from an earlier run in this process
     try:
         top, *others = _repo_roots(cwd)
         if cli_value is None and os.environ.get(ENV_VAR) and _lock_adopted(top, refs, ranges):

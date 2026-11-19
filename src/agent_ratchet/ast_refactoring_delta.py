@@ -460,7 +460,7 @@ def _pair_overload_variants(
                 used_base.add(b_idx)
                 matched_target[t_idx] = bv
                 break
-    candidates: list[tuple[int, int, int]] = []
+    candidates: list[tuple[int, int, int, int]] = []
     for t_idx, tv in enumerate(target_list):
         if t_idx in matched_target:
             continue
@@ -469,9 +469,8 @@ def _pair_overload_variants(
             if b_idx not in used_base:
                 overlap = len(t_names & {name for _, name in bv.param_key})
                 if overlap > 0:
-                    candidates.append((overlap, -abs(tv.effective_params - bv.effective_params), (t_idx << 16) | b_idx))
-    for _, _, packed in sorted(candidates, reverse=True):
-        t_idx, b_idx = packed >> 16, packed & 0xFFFF
+                    candidates.append((overlap, -abs(tv.effective_params - bv.effective_params), t_idx, b_idx))
+    for _, _, t_idx, b_idx in sorted(candidates, reverse=True):
         if t_idx not in matched_target and b_idx not in used_base:
             used_base.add(b_idx)
             matched_target[t_idx] = base_list[b_idx]
@@ -533,19 +532,25 @@ def register_snapshot_extractor(fn: Callable[[str, str, Sequence[dict[str, Any]]
     _SNAPSHOT_EXTRACTOR = fn
 
 
+def _extractor() -> Callable[[str, str, Sequence[dict[str, Any]]], ModuleAstSnapshot]:
+    if _SNAPSHOT_EXTRACTOR is None:  # explicit check: an `assert` vanishes under `python -O`
+        raise GuardAnalysisError("AST snapshot extractor not registered (import agent_ratchet.refactoring_guard)")
+    return _SNAPSHOT_EXTRACTOR
+
+
 def compare_ast_snapshots(
     base_source: str | None, target_source: str, filename: str, extra_rules: Sequence[dict[str, Any]] = ()
 ) -> list[SlopViolation]:
     if not filename.endswith(".py") or is_self_skipped(filename, fixture_paths=NO_FIXTURES):  # fixtures filtered by caller / is_test_filename
         return []
-    assert _SNAPSHOT_EXTRACTOR is not None, "Snapshot extractor not registered"
-    target_snap = _SNAPSHOT_EXTRACTOR(target_source, filename, extra_rules)
+    extract = _extractor()
+    target_snap = extract(target_source, filename, extra_rules)
     if target_snap.parse_error is not None:
         return list(target_snap.full_violations)
     base_snap = (
         ModuleAstSnapshot(filename, None, 0, {}, {}, {}, {}, [])
         if base_source is None
-        else _SNAPSHOT_EXTRACTOR(base_source, filename, extra_rules)
+        else extract(base_source, filename, extra_rules)
     )
     if base_snap.parse_error is not None:
         return [SlopViolation(filename, base_snap.parse_lineno, "guard_analysis_error", f"Base snapshot failed AST parse: {base_snap.parse_error}", "")]
@@ -564,8 +569,7 @@ def compare_ast_snapshots(
 def collect_refactoring_slop_entries(
     source: str, filename: str, extra_rules: Sequence[dict[str, Any]] = (), allowed_kinds: set[str] | None = None
 ) -> list[dict[str, Any]]:
-    assert _SNAPSHOT_EXTRACTOR is not None, "Snapshot extractor not registered"
-    snap = _SNAPSHOT_EXTRACTOR(source, filename, extra_rules)
+    snap = _extractor()(source, filename, extra_rules)
     if snap.parse_error is not None:
         raise GuardAnalysisError(f"{filename}:{snap.parse_lineno}: {snap.parse_error}")
     entries_by_key: dict[tuple[str, str], dict[str, Any]] = {}

@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.1.4
+
+- Fixed: an external config no longer carries over between runs in one process.
+- Fixed: a missing AST extractor fails with exit 2 also under `python -O`.
+- Fixed: PHP suppressions in multi-line comments fingerprint the row PHPCS and PHPStan actually ignore.
+- Fixed: methods of PHP anonymous classes get their own symbols.
+
 ## 4.1.3
 
 - Fixed: a PHP file whose previous version had non-UTF-8 identifiers can be fixed or deleted again.

@@ -336,3 +336,14 @@ def test_env_override_ignored_when_lock_only_inside_commit_range(tmp_path: Path)
     assert proc.returncode == 1 and "no_such_key" not in proc.stdout + proc.stderr, proc.stderr
     assert "php_suppression_added" in proc.stderr  # the in-repo PHP config was read, not the external one
     assert ENV_IGNORED_NOTE in proc.stderr and "note: using external config" not in proc.stderr
+
+
+def test_activation_without_config_clears_a_previous_override(tmp_path: Path, monkeypatch) -> None:
+    """Audit D6: an override from an earlier run in the same process must not leak into the next one."""
+    monkeypatch.delenv(external_config.ENV_VAR, raising=False)
+    cfg = _write_config(tmp_path / "cfg" / "c.json", PHP_CONFIG)
+    (tmp_path / "work").mkdir()
+    assert external_config.activate_cli(str(cfg), cwd=str(tmp_path / "work")) is None
+    assert external_config.override_active()
+    assert external_config.activate_cli(None, cwd=str(tmp_path / "work")) is None
+    assert not external_config.override_active()
