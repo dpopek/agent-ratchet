@@ -51,10 +51,72 @@ def test_row2_directive_moved_with_its_statement_passes() -> None:
     assert _cats(base, target) == []
 
 
-def test_row3_window_gains_statement() -> None:
-    base = _m("// phpcs:disable Generic.X.Y\na();\n// phpcs:enable Generic.X.Y\nz();")
-    target = _m("// phpcs:disable Generic.X.Y\na();\nb();\n// phpcs:enable Generic.X.Y\nz();")
+def test_row3_window_pulls_in_existing_statement() -> None:
+    base = _m("y();\n// phpcs:disable Generic.X.Y\na();\n// phpcs:enable Generic.X.Y\nz();")
+    target = _m("// phpcs:disable Generic.X.Y\ny();\na();\n// phpcs:enable Generic.X.Y\nz();")
     assert _cats(base, target) == ["php_suppression_range_expanded"]
+
+
+# --- window pull-in semantics (R6 `php_suppression_range_expanded`, amended 19.11) -------------
+
+_WIN = "// phpcs:disable Generic.X.Y\n"
+_END = "// phpcs:enable Generic.X.Y\n"
+
+
+def _cls(body: str) -> str:
+    return f"<?php\nnamespace V\\M;\n// phpcs:disable Generic.X.Y\nclass X {{\n{body}}}\n"
+
+
+def test_new_code_under_unclosed_window_passes() -> None:
+    base = _cls("    public function run() {\n        a();\n        b();\n    }\n")
+    target = _cls(
+        "    public function run() {\n        a(1);\n        b();\n        c();\n    }\n"
+        "    public function more() {\n        d();\n    }\n"
+    )
+    assert _cats(base, target) == []
+
+
+def test_edit_under_closed_window_passes() -> None:
+    base = _m(_WIN + "a();\n" + _END + "z();")
+    assert _cats(base, _m(_WIN + "a(1);\nb();\n" + _END + "z();")) == []
+
+
+def test_disable_moved_over_existing_statement_flags() -> None:
+    base = _m("y();\n" + _WIN + "a();\n" + _END + "z();")
+    assert _cats(base, _m(_WIN + "y();\na();\n" + _END + "z();")) == ["php_suppression_range_expanded"]
+
+
+def test_enable_moved_down_over_existing_statement_flags() -> None:
+    base = _m(_WIN + "a();\n" + _END + "z();")
+    assert _cats(base, _m(_WIN + "a();\nz();\n" + _END)) == ["php_suppression_range_expanded"]
+
+
+def test_enable_removed_still_flags() -> None:
+    base = _m(_WIN + "a();\n" + _END)
+    assert _cats(base, _m(_WIN + "a();")) == ["php_suppression_range_expanded"]
+
+
+def test_new_window_identity_still_flags() -> None:
+    base = _m(_WIN + "a();\n" + _END + "z();")
+    target = _m(_WIN + "a();\n" + _END + "// phpcs:disable Other.X.Y\nz();\n// phpcs:enable Other.X.Y")
+    assert _cats(base, target) == ["php_suppression_range_expanded"]
+
+
+def test_codes_widened_still_flags() -> None:
+    base = _m(_WIN + "a();\n" + _END)
+    assert _cats(base, _m("// phpcs:disable Generic.X.Y, Other.X.Y\na();\n// phpcs:enable")) == [
+        "php_suppression_range_expanded"
+    ]
+
+
+def test_duplicate_statement_pulled_in_flags() -> None:
+    base = _m("$a++;\n" + _WIN + "$a++;\n" + _END)
+    assert _cats(base, _m(_WIN + "$a++;\n$a++;\n" + _END)) == ["php_suppression_range_expanded"]
+
+
+def test_duplicate_new_statement_under_window_passes() -> None:
+    base = _m(_WIN + "$a++;\n" + _END)
+    assert _cats(base, _m(_WIN + "$a++;\n$a++;\n" + _END)) == []
 
 
 def test_row4_deleting_enable_unclosed_window() -> None:

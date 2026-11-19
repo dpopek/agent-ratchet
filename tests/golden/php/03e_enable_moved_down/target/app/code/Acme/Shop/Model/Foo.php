@@ -4,8 +4,7 @@ class Foo {
     public function run() {
 // phpcs:disable Generic.Sample.Rule
 a();
-b();
-// phpcs:enable Generic.Sample.Rule
 z();
+// phpcs:enable Generic.Sample.Rule
     }
 }

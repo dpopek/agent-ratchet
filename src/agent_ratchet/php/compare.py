@@ -176,22 +176,37 @@ def _files(base: list[CanonicalFact], target: list[CanonicalFact], out: _Finding
             out.add(ADDED, x)
 
 
-def _grew(t: CanonicalFact, b: CanonicalFact) -> bool:
+def _grew(t: CanonicalFact, b: CanonicalFact, outside: Counter[str]) -> bool:
+    """Expanded iff the window gained a statement BASE had outside every window of its identity, or it lost its `enable`.
+
+    New or edited code under an unchanged window gains only hashes BASE never had outside, so it passes (R6, 19.11).
+    """
     gained = Counter(t.payload["statements"]) - Counter(b.payload["statements"])
-    return bool(gained) or (b.payload["closed"] and not t.payload["closed"])
+    return bool(gained & outside) or (b.payload["closed"] and not t.payload["closed"])
 
 
-def _windows(base: list[CanonicalFact], target: list[CanonicalFact], out: _Findings, key: Callable[[str], str]) -> None:
+def _windows(
+    base: list[CanonicalFact],
+    target: list[CanonicalFact],
+    out: _Findings,
+    key: Callable[[str], str],
+    statements: Sequence[str],
+) -> None:
+    """`statements`: BASE multiset of every statement's window hash in the file."""
     groups: dict[str, tuple[list[CanonicalFact], list[CanonicalFact]]] = {}
     for side, facts in ((0, base), (1, target)):
         for f in facts:
             groups.setdefault(key(f.identity["symbol"]), ([], []))[side].append(f)
+    everywhere = Counter(statements)
     for b, t in groups.values():
+        inside: dict[tuple[str, ...], Counter[str]] = {}
+        for w in b:
+            inside.setdefault(_codes(w), Counter()).update(w.payload["statements"])
         _pair(b, t, lambda x, y: _codes(x) == _codes(y) and x.payload_hash == y.payload_hash)
         pairs = _pair(b, t, lambda x, y: _codes(x) == _codes(y))
         pairs += _pair(b, t, lambda x, y: _narrower(_codes(x), _codes(y)))
         for x, y in pairs:
-            if _grew(x, y):
+            if _grew(x, y, everywhere - inside[_codes(y)]):
                 out.add(EXPANDED, x)
         for x in t:
             out.add(EXPANDED, x)
@@ -313,7 +328,7 @@ def compare_php_entry(
 
     present = ({key(s) for s in _all_symbols(b)} | {FILE_SYMBOL}, {key(s) for s in _all_symbols(t)} | {FILE_SYMBOL})
     _points(*pick(POINT), out, key, present)
-    _windows(*pick(WINDOW), out, key)
+    _windows(*pick(WINDOW), out, key, b.statement_hashes)
     _files(*pick(FILE), out)
     found = out.violations() + degraded
     return _sorted(found + _tests(*pick(TEST), target_path))

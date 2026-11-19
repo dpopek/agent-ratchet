@@ -340,7 +340,7 @@ def collect(
 
 def _window(win: dict[str, Any], anchors: list[Any], source: bytes, closed: bool) -> WindowSuppression:
     end = win["end"] if closed else len(source)
-    hashes = sorted(norm_hash(n, source) for n in anchors if win["start"] <= n.start_byte < end)
+    hashes = sorted(_statement_hash(n, source) for n in anchors if win["start"] <= n.start_byte < end)
     return WindowSuppression(
         symbol=win["symbol"],
         codes=win["codes"],
@@ -348,6 +348,17 @@ def _window(win: dict[str, Any], anchors: list[Any], source: bytes, closed: bool
         statements=tuple(hashes),
         line=win["line"],
     )
+
+
+def _statement_hash(node: Any, source: bytes) -> str:
+    """Hash of one statement in a window's `statements` multiset (whole node, R3)."""
+    return norm_hash(node, source)
+
+
+def statement_hashes(parsed: ParsedPhp) -> tuple[str, ...]:
+    """Sorted multiset of every statement's window hash in the file, so window growth can tell pulled-in code (R6)."""
+    _, anchors = _walk(parsed.tree.root_node)
+    return tuple(sorted(_statement_hash(n, parsed.source) for n in anchors))
 
 
 def namespace_resolver(root: Any, source: bytes) -> Callable[[int], str]:
