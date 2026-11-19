@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.1.0
+
+- Added: PHP analysis for the `php` profile (`agent-ratchet[php]`): blocks new or rebound suppression directives
+  (phpcs, phpstan, psalm, PHPMD), widened `phpcs:disable` windows and weakened or removed PHPUnit tests.
+- Added: config keys `php_paths` and `php_suppression_exceptions`.
+- Added: `--config-file` / `AGENT_RATCHET_CONFIG` for an operator-owned config outside the repository.
+- Added: PHP quality tool configs (phpstan, phpcs, phpunit, psalm, phpmd, ...) are protected governance paths.
+
 ## 4.0.0
 
 - Removed: guard_core package (tombstone), guard-core command, GUARD_VERSION, SELF_SKIP_NAMES, RELEASE_TAG_PATTERN.
