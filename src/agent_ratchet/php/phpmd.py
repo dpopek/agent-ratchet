@@ -16,6 +16,7 @@ DECLARATIONS = {
     "method_declaration",
     "function_definition",
 }
+_TRANSPARENT = {"comment", "use_declaration"}  # trait `use` inside a class-like body
 
 
 def annotations(comment: Any, source: bytes) -> list[tuple[tuple[str, ...], int]]:
@@ -34,9 +35,21 @@ def annotations(comment: Any, source: bytes) -> list[tuple[tuple[str, ...], int]
     return out
 
 
-def declaration_after(comment: Any) -> Any | None:
-    """The class-like, method or function declaration the docblock precedes, else `None` (orphan)."""
+def _is_doc_comment(node: Any, source: bytes) -> bool:
+    """A PHP T_DOC_COMMENT: `/**` followed by whitespace (`/**/` is a plain comment)."""
+    head = source[node.start_byte : node.start_byte + 4]
+    return head[:3] == b"/**" and head[3:].isspace()
+
+
+def declaration_after(comment: Any, source: bytes) -> Any | None:
+    """The declaration the docblock precedes, as PDepend attaches it (spec R4 "Precedes"), else `None`.
+
+    Non-doc comments and trait `use` declarations are transparent (attributes belong to the
+    declaration node); a later `/**` docblock wins, so this one is then an orphan.
+    """
     sib = comment.next_named_sibling
-    while sib is not None and sib.type == "comment":
+    while sib is not None and sib.type in _TRANSPARENT:
+        if sib.type == "comment" and _is_doc_comment(sib, source):
+            return None
         sib = sib.next_named_sibling
     return sib if sib is not None and sib.type in DECLARATIONS else None

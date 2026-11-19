@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from php_support import require_php
 
 
@@ -56,7 +57,7 @@ def test_phpmd_multiple_in_one_docblock():
         (("PHPMD.ExcessiveMethodLength",), 7),
         (("PHPMD.NPathComplexity",), 8),
     ]
-    assert {p.anchor_hash for p in pts} != {None}
+    assert pts[0].anchor_hash is not None and pts[0].anchor_hash == pts[1].anchor_hash
 
 
 def test_phpmd_anchor_header_only():
@@ -110,3 +111,62 @@ def test_phpmd_docblock_keeps_other_directives():
 
     pts, _, _ = collect(parse_php(pts_src.encode()))
     assert sorted((p.tool, p.codes) for p in pts) == [("phpmd", ("PHPMD.X",)), ("psalm", ("MixedReturn",))]
+
+
+# --- attachment follows PDepend (spec R4 "Precedes") ------------------------------------------
+
+SW = "/** @SuppressWarnings(PHPMD) */"
+
+
+def _cats(base: str, target: str) -> list[str]:
+    require_php()
+    from agent_ratchet.php.compare import compare_php_entry
+
+    path = "app/code/Acme/Shop/Model/Cart.php"
+    return [v.category for v in compare_php_entry(base.encode(), target.encode(), path, path, ())]
+
+
+def _cart(members: str, head: str = "") -> str:
+    return f"<?php\nnamespace Acme\\Shop\\Model;\n\n{head}class Cart\n{{\n{members}}}\n"
+
+
+def _fn(name: str, body: str = "return 1;") -> str:
+    return f"    public function {name}(): int\n    {{\n        {body}\n    }}\n"
+
+
+@pytest.mark.parametrize("between", ["// note", "# note", "/* note */", "/**/", "", "#[\\Acme\\Shop\\Marker]"])
+def test_phpmd_attaches_through_non_doc_comments_and_attributes(between):
+    (p,) = _phpmd(_cart(f"    {SW}\n    {between}\n" + _fn("a")))
+    assert (p.symbol, p.anchor_kind) == ("Acme\\Shop\\Model\\Cart::a", "method_declaration")
+    assert p.anchor_hash is not None
+
+
+def test_phpmd_attaches_through_trait_use():
+    (p,) = _phpmd(_cart(f"    {SW}\n    use Totals;\n    use Prices, Rates;\n\n" + _fn("a")))
+    assert (p.symbol, p.anchor_kind) == ("Acme\\Shop\\Model\\Cart::a", "method_declaration")
+
+
+def test_phpmd_intervening_docblock_orphans_the_earlier_one():
+    (p,) = _phpmd(_cart(f"    {SW}\n    /** Plain. */\n" + _fn("a")))
+    assert (p.anchor_kind, p.anchor_hash) == (None, None)
+    (q,) = _phpmd(_cart(f"    /** Plain. */\n    {SW}\n" + _fn("a")))
+    assert q.anchor_kind == "method_declaration"
+
+
+def test_phpmd_method_added_under_trait_use_docblock_is_flagged():  # review probe E1
+    base = _cart(f"    {SW}\n    use Totals;\n")
+    assert "php_suppression_added" in _cats(base, _cart(f"    {SW}\n    use Totals;\n\n" + _fn("a")))
+
+
+def test_phpmd_method_swapped_under_trait_use_docblock_is_flagged():  # review probe E1c
+    base = _cart(f"    {SW}\n    use Totals;\n\n" + _fn("a"))
+    target = _cart(f"    {SW}\n    use Totals;\n\n" + _fn("b") + "\n" + _fn("a"))
+    assert "php_suppression_added" in _cats(base, target)
+    assert _cats(base, _cart(f"    {SW}\n    use Totals;\n\n" + _fn("a", "return 2;"))) == []
+
+
+def test_phpmd_unshadowed_docblock_is_flagged():  # review probes E2, E2b
+    base = _cart(f"    {SW}\n    /** Plain. */\n" + _fn("a"))
+    assert "php_suppression_added" in _cats(base, _cart(f"    {SW}\n" + _fn("a")))
+    base_cls = _cart(_fn("a"), head=f"{SW}\n/** Plain. */\n")
+    assert "php_suppression_added" in _cats(base_cls, _cart(_fn("a"), head=f"{SW}\n"))

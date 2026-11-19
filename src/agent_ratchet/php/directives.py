@@ -334,7 +334,7 @@ def collect(
                     keep.append(win)
             open_windows = keep
     for comment in comments:  # PHPMD: header-only anchor, the annotation covers the whole declaration (R4)
-        decl = None if _has_error_ancestor(comment) else phpmd.declaration_after(comment)
+        decl = None if _has_error_ancestor(comment) else phpmd.declaration_after(comment, source)
         for codes, row in phpmd.annotations(comment, source):
             kind, digest = (None, None) if decl is None else (decl.type, header_hash(decl, source))
             points.append(PointSuppression(scope(comment if decl is None else decl), "phpmd", codes, kind, digest, row + 1))
