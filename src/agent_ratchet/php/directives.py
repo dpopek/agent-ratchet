@@ -367,7 +367,7 @@ def collect(
                 {
                     "symbol": scope(raw.comment),
                     "codes": raw.codes,
-                    "start": raw.comment.end_byte,
+                    "start": row,  # PHPCS suppresses whole rows from the disable row on (I2)
                     "end": None,
                     "line": line_no,
                 }
@@ -377,7 +377,7 @@ def collect(
             for win in open_windows:
                 covered = not raw.codes or (win["codes"] and set(win["codes"]) <= set(raw.codes))
                 if covered:
-                    win["end"] = raw.comment.start_byte
+                    win["end"] = row  # the enable row itself is not suppressed (probed)
                     done.append(win)
                 else:
                     keep.append(win)
@@ -397,8 +397,11 @@ def collect(
 
 
 def _window(win: dict[str, Any], anchors: list[Any], source: bytes, closed: bool) -> WindowSuppression:
-    end = win["end"] if closed else len(source)
-    hashes = sorted(_statement_hash(n, source) for n in anchors if win["start"] <= n.start_byte < end)
+    """Covered: every anchor whose row span meets rows [disable row, enable row), or up to EOF (spec R3, I2)."""
+    end = win["end"] if closed else source.count(b"\n") + 1
+    hashes = sorted(
+        _statement_hash(n, source) for n in anchors if n.start_point.row < end and n.end_point.row >= win["start"]
+    )
     return WindowSuppression(
         symbol=win["symbol"],
         codes=win["codes"],

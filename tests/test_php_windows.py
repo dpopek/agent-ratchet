@@ -90,3 +90,50 @@ def test_nested_statement_pulled_in_with_its_container_edited_is_expanded() -> N
     base = _m("if ($c) {\n    a();\n    b();\n}\n// phpcs:disable A.B\nz();")
     target = _m("// phpcs:disable A.B\nif ($c) {\n    a();\n    b2();\n}\nz();")
     assert _cats(base, target) == [EXPANDED]
+
+
+# --- I2: PHPCS suppresses whole rows from the disable row up to (not including) the enable row ------------
+
+
+def test_trailing_disable_covers_its_own_row() -> None:
+    _, (w,), _ = _collect("<?php\n$y = sizeof($a); // phpcs:disable A.B\nfoo();\n")
+    assert len(w.statements) == 2
+
+
+def test_trailing_enable_row_is_not_covered() -> None:
+    _, (w,), _ = _collect("<?php\n// phpcs:disable A.B\na();\nz(); // phpcs:enable\n")
+    assert (w.closed, len(w.statements)) == (True, 1)  # PHPCS 3/4 report `z()` on the enable row (probed)
+
+
+def test_disable_inside_a_multi_line_statement_covers_that_statement() -> None:
+    _, (w,), _ = _collect("<?php\n$x = bar(\n    1,\n    // phpcs:disable A.B\n    sizeof($a)\n);\nfoo();\n")
+    assert len(w.statements) == 2
+
+
+def test_disable_moved_into_call_arguments_is_expanded() -> None:  # w1
+    base = _m("$x = bar(\n    1,\n    sizeof($a)\n);\n// phpcs:disable Generic.PHP.ForbiddenFunctions\nfoo();")
+    target = _m("$x = bar(\n    1,\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    sizeof($a)\n);\nfoo();")
+    assert _cats(base, target) == [EXPANDED]
+
+
+def test_disable_moved_into_returned_array_literal_is_expanded() -> None:
+    base = _m("return [\n    1,\n    sizeof($a),\n];\n// phpcs:disable Generic.PHP.ForbiddenFunctions")
+    target = _m("return [ // phpcs:disable Generic.PHP.ForbiddenFunctions\n    1,\n    sizeof($a),\n];")
+    assert _cats(base, target) == [EXPANDED]
+
+
+def test_disable_moved_onto_the_end_of_an_existing_row_is_expanded() -> None:  # w2
+    base = _m("$y = sizeof($a);\n// phpcs:disable Generic.PHP.ForbiddenFunctions\nfoo();")
+    target = _m("$y = sizeof($a); // phpcs:disable Generic.PHP.ForbiddenFunctions\nfoo();")
+    assert _cats(base, target) == [EXPANDED]
+
+
+def test_window_also_covers_the_enclosing_declarations() -> None:
+    _, (w,), _ = _collect(_m("// phpcs:disable A.B\na();"))
+    assert len(w.statements) == 3  # a(), the method and the class all meet the window's rows
+
+
+def test_enable_moved_onto_the_end_of_the_next_row_passes() -> None:
+    base = _m("// phpcs:disable A.B\na();\n// phpcs:enable\nz();")
+    target = _m("// phpcs:disable A.B\na();\nz(); // phpcs:enable")
+    assert _cats(base, target) == []
