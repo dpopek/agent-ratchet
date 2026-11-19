@@ -115,11 +115,15 @@ def _gap_fact(path: str, symbol: str, bucket: str, origin: Origin) -> CanonicalF
     return CanonicalFact(GAP, {"path": path, "symbol": symbol}, {"bucket": bucket}, "multiset", "complete", origin)
 
 
-def analyze(blob: bytes, path: str, blob_oid: str | None = None) -> Analysis:
+def analyze(blob: bytes, path: str, blob_oid: str | None = None, lenient: bool = False) -> Analysis:
+    """`lenient` (BASE only): non-UTF-8 bytes become U+FFFD instead of a decode error, so a file that was unreadable
+    can be fixed or deleted with its tests and suppressions still compared. TARGET stays strict."""
     parsed = parse_php(blob)
     try:
         return _analyze(parsed, path, blob_oid)
     except PhpDecodeError:
+        if lenient:
+            return analyze(blob.decode("utf-8", errors="replace").encode("utf-8"), path, blob_oid)
         origin = Origin(path, blob_oid, (0, len(blob)), 1)
         return Analysis((_gap_fact(path, FILE_SYMBOL, "decode", origin),), {}, decode_error=True)
 

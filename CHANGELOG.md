@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.1.3
+
+- Fixed: a PHP file whose previous version had non-UTF-8 identifiers can be fixed or deleted again.
+- Changed: each PHP blob is parsed once per transition.
+
 ## 4.1.2
 
 - Fixed: PHPCS suppression codes compare by hierarchy: narrowing a code (`Generic` to `Generic.PHP.X`) passes, and a broader `phpcs:enable` closes a narrower window.

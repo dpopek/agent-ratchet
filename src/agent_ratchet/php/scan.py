@@ -13,7 +13,6 @@ from agent_ratchet.git_guard_io import SlopViolation, git_cat_bytes
 from agent_ratchet.php.scope import is_php_in_scope, php_profile_active
 
 PHP_CATEGORY_PREFIX = "php_"
-_REMOVED = "php_test_removed"
 
 
 def _sort_key(v: SlopViolation) -> tuple[str, int, str, str]:
@@ -64,11 +63,13 @@ def php_transition_violations(
     if not php_profile_active(cfg):
         return []
     from agent_ratchet.php.compare import (
-        compare_php_entry,
+        REMOVED,
+        analyze_pair,
+        compare_php_analyses,
         compare_php_tests_across,
         php_test_delta,
     )
-    from agent_ratchet.php.extract import TEST, analyze
+    from agent_ratchet.php.extract import TEST
 
     exceptions = base_cfg.get("php_suppression_exceptions", [])
     shadow = os.environ.get("AGENT_RATCHET_SHADOW") == "1"
@@ -85,13 +86,13 @@ def php_transition_violations(
                 raise GuardAnalysisError(f"Unable to read target git blob '{spec}'")
         if base_bytes is not None and base_bytes == target_bytes:
             continue
-        per_entry = compare_php_entry(base_bytes, target_bytes, base_path, target_path or base_path or "", exceptions, renamed=renamed)
-        found.extend(v for v in per_entry if v.category != _REMOVED)  # removals are decided across all entries below
-        base_an = analyze(base_bytes, base_path or "") if base_bytes is not None else None
-        target_an = analyze(target_bytes, target_path or "") if target_bytes is not None else None
+        path = target_path or base_path or ""
+        base_an, target_an = analyze_pair(base_bytes, target_bytes, base_path, path)
+        per_entry = compare_php_analyses(base_an, target_an, path, exceptions, renamed=renamed)
+        found.extend(v for v in per_entry if v.category != REMOVED)  # removals are decided across all entries below
         if shadow and target_an is not None and target_path:
             _shadow_counts(target_path, target_an)
-        if any(an is not None and an.decode_error for an in (base_an, target_an)):
+        if target_an is not None and target_an.decode_error:
             continue
         removed, added = php_test_delta(
             [f for f in (base_an.facts if base_an else ()) if f.kind == TEST],
