@@ -27,16 +27,43 @@ def _is_bound(tok: Token) -> bool:
     return tok[0] == "comment" and _BOUND.search(tok[1]) is not None
 
 
-def alignable(tokens: Sequence[Token]) -> tuple[Token, ...]:
-    """Tokens that take part in the alignment: everything except window bounds, i.e. phpcs directive comments and
+Unit = tuple[bytes, int, tuple[Token, ...]]  # bound comment text, its first row, the tag pair enclosing it alone
+
+
+def _split(tokens: Sequence[Token]) -> tuple[list[Token], list[Unit]]:
+    """Tokens that take part in the alignment, and the window bounds left out of it: phpcs directive comments and
     the `<?php` / `?>` pair around a bound comment that stands alone between them."""
-    drop: set[int] = set()
+    kept: list[Token] = []
+    units: list[Unit] = []
+    tags: set[int] = set()
     for k, tok in enumerate(tokens):
         if _is_bound(tok):
-            drop.add(k)
+            pair: tuple[Token, ...] = ()
             if 0 < k < len(tokens) - 1 and tokens[k - 1][0] == "php_tag" and tokens[k + 1][0] == "php_end_tag":
-                drop |= {k - 1, k + 1}
-    return tuple(t for k, t in enumerate(tokens) if k not in drop)
+                pair, tags = (tokens[k - 1], tokens[k + 1]), tags | {k - 1, k + 1}
+                if kept and kept[-1] is tokens[k - 1]:
+                    kept.pop()
+            units.append((tok[1], tok[2], pair))
+        elif k not in tags:
+            kept.append(tok)
+    return kept, units
+
+
+def _grown_tags(
+    base: list[Unit], base_spans: Sequence[Span], target: list[Unit], target_spans: Sequence[Span]
+) -> set[tuple[int, tuple[str, ...]]]:
+    """(line, codes) of TARGET windows covering a bound's tag that BASE did not cover. Units pair by bound text; a
+    tag on its own bound's row on both sides is judged with the bound, not as code (PHPCS ignores such rows)."""
+    match = SequenceMatcher(None, [u[0] for u in base], [u[0] for u in target], autojunk=False)
+    out: set[tuple[int, tuple[str, ...]]] = set()
+    for i, j, n in match.get_matching_blocks():
+        for (_, brow, btags), (_, trow, ttags) in zip(base[i : i + n], target[j : j + n], strict=True):
+            for bt, tt in zip(btags, ttags, strict=False):
+                if bt[2] == brow and tt[2] == trow:
+                    continue
+                had = _cover([bt], base_spans).get((0, 0), frozenset())
+                out |= {(line, codes) for line, codes, s, e in target_spans if s <= tt[2] < e and not _within(codes, had)}
+    return out
 
 
 def _offsets(tok: Token, start: int, end: int) -> range:
@@ -90,6 +117,46 @@ def _align(base: Sequence[Token], target: Sequence[Token]) -> dict[int, int]:
     return pairs
 
 
+def _coarse(tokens: Sequence[Token]) -> tuple[list[Token], list[int]]:
+    """Tokens with every inline HTML tag (`<name`, attributes, `>` on one row) joined into one, and the first fine
+    index of each."""
+    out: list[Token] = []
+    first: list[int] = []
+    k = 0
+    while k < len(tokens):
+        tok, n = tokens[k], 1
+        if tok[0] == "text" and tok[1].startswith(b"<") and tok[1] != b"<":
+            while k + n < len(tokens) and tokens[k + n][0] == "text" and tokens[k + n][2] == tok[2]:
+                n += 1
+                if tokens[k + n - 1][1] == b">":
+                    break
+            tok = ("text", b" ".join(t[1] for t in tokens[k : k + n]), tok[2], tok[3])
+        out.append(tok)
+        first.append(k)
+        k += n
+    first.append(len(tokens))
+    return out, first
+
+
+def _align_html(base: Sequence[Token], target: Sequence[Token]) -> dict[int, int]:
+    """`_align` with whole HTML tags as tokens, so a moved row never wins the match by its attribute count; where
+    one side's unmatched tags face the other's, their parts are aligned again, so an edited attribute leaves the
+    rest of its tag aligned."""
+    (cb, fb), (ct, ft) = _coarse(base), _coarse(target)
+    pairs: dict[int, int] = {}
+    last = (-1, -1)
+    for cj, ci in [*sorted(_align(cb, ct).items()), (len(ct), len(cb))]:
+        if cj < len(ct):
+            pairs.update({ft[cj] + k: fb[ci] + k for k in range(ft[cj + 1] - ft[cj])})
+        (bi, bj), (ti, tj) = (fb[last[1] + 1], fb[ci]), (ft[last[0] + 1], ft[cj])
+        if bi < bj and ti < tj:
+            gap = SequenceMatcher(None, [t[:2] for t in base[bi:bj]], [t[:2] for t in target[ti:tj]], autojunk=False)
+            for i, j, n in gap.get_matching_blocks():
+                pairs.update({ti + j + k: bi + i + k for k in range(n)})
+        last = (cj, ci)
+    return pairs
+
+
 def _row_groups(tokens: Sequence[Token]) -> list[int]:
     """Token counts of consecutive runs that start on the same row."""
     sizes: list[int] = []
@@ -103,14 +170,15 @@ def _row_groups(tokens: Sequence[Token]) -> list[int]:
 
 
 def grown_windows(
-    base: Sequence[Token], base_spans: Sequence[Span], target: Sequence[Token], target_spans: Sequence[Span]
+    base_tokens: Sequence[Token], base_spans: Sequence[Span], target_tokens: Sequence[Token], target_spans: Sequence[Span]
 ) -> set[tuple[int, tuple[str, ...]]]:
     """(line, codes) of every TARGET window covering an existing token row that no BASE window with an equal or
     broader code set covered."""
     if not target_spans:
         return set()
-    bcover, aligned = _cover(base, base_spans), _align(base, target)
-    return {
+    (base, bunits), (target, tunits) = _split(base_tokens), _split(target_tokens)
+    bcover, aligned = _cover(base, base_spans), _align_html(base, target)
+    return _grown_tags(bunits, base_spans, tunits, target_spans) | {
         (line, codes)
         for line, codes, start, end in target_spans
         if any(

@@ -19,7 +19,6 @@ from agent_ratchet.php.directives import (
 )
 from agent_ratchet.php.parser import NORM_DOMAIN, ParsedPhp, parse_php, token_rows
 from agent_ratchet.php.phpunit import collect_tests
-from agent_ratchet.php.window_align import alignable
 
 POINT, WINDOW, FILE = "php.suppression.point", "php.suppression.window", "php.suppression.file"
 TEST, GAP = "php.test", "php.parse_gap"
@@ -48,7 +47,7 @@ class Analysis:
     def tokens(self) -> tuple[tuple[str, bytes, int, int], ...]:
         if self.parsed is None or not self.window_spans:
             return ()
-        return alignable(token_rows(self.parsed.tree.root_node, self.parsed.source))
+        return token_rows(self.parsed.tree.root_node, self.parsed.source)
 
 
 def _bucket(length: int) -> str:

@@ -421,3 +421,45 @@ def test_tag_rows_html_edits_and_bound_blocks_pulled_in_are_expanded(case: str) 
 @pytest.mark.parametrize("case", sorted(_ROUND5_PASS))
 def test_new_html_and_windows_moved_among_repeated_tags_pass(case: str) -> None:
     assert _cats_ext(*_ROUND5_PASS[case]) == []
+
+
+# --- I2 residual round 6: bound tags on another row, attributes inside one-tag HTML rows (PHPCS 3 and 4) ------
+
+_ROUND6 = {
+    'TG1c': (
+        '<p>a</p>\n\t<?php\n// phpcs:disable Generic.WhiteSpace.DisallowTabIndent\n?>\n<p>b</p>\n',
+        '<p>a</p>\n\t<?php // phpcs:disable Generic.WhiteSpace.DisallowTabIndent\n?>\n<p>b</p>\n',
+        'phtml',
+    ),
+    'TG2c': (
+        '<?php\r\n// phpcs:disable Generic.Files.LineEndings\r\n?>\r\n<p>x</p>\r\n',
+        '<?php // phpcs:disable Generic.Files.LineEndings\r\n?>\r\n<p>x</p>\r\n',
+        'phtml',
+    ),
+    'HS1': (
+        '<div>\n<img src="/media/catalog/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.png" alt="a">\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>z</p>\n<?php // phpcs:enable ?>\n</div>\n',
+        '<div>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<img src="/media/catalog/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.png" alt="b">\n<p>z</p>\n<?php // phpcs:enable ?>\n</div>\n',
+        'phtml',
+    ),
+}
+
+_ROUND6_PASS = {
+    'BU2': (
+        '<?php // phpcs:disable Generic.PHP.ForbiddenFunctions ?>\n<p>a</p>\n\t<?php // phpcs:enable Generic.PHP.ForbiddenFunctions ?>\n<?php // phpcs:disable Generic.WhiteSpace.DisallowTabIndent ?>\n<p>b</p>\n',
+        '<?php // phpcs:disable Generic.PHP.ForbiddenFunctions ?>\n<p>a</p>\n<?php // phpcs:disable Generic.WhiteSpace.DisallowTabIndent ?>\n\t<?php // phpcs:enable Generic.PHP.ForbiddenFunctions ?>\n<p>b</p>\n',
+        'phtml',
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_ROUND6))
+def test_bound_tag_rows_and_edited_tag_attributes_pulled_in_are_expanded(case: str) -> None:
+    # TG1c/TG2c: a disable joined onto the `<?php` row of a block holding only the directive; HS1: an attribute
+    # edited in a one-tag HTML row pulled in
+    assert _cats_ext(*_ROUND6[case]) == [EXPANDED]
+
+
+@pytest.mark.parametrize("case", sorted(_ROUND6_PASS))
+def test_bound_unit_moved_whole_under_another_window_passes(case: str) -> None:
+    # BU2: PHPCS 3 and 4 report nothing on either side; the tag sits on its own bound's row in both
+    assert _cats_ext(*_ROUND6_PASS[case]) == []

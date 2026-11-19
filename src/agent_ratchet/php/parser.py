@@ -108,7 +108,7 @@ def line_hash(root: Any, source: bytes, row: int) -> str:
     return _digest(tokens) if tokens else EMPTY_LINE
 
 
-_HTML_TOKEN = re.compile(rb"<[^<>]*>?|[^<>\s]+|>")
+_HTML_TOKEN = re.compile(rb"<[^\s<>]*|[^\s<>]+|>")  # `<name`, each attribute or word, `>`
 
 
 def token_rows(root: Any, source: bytes) -> tuple[tuple[str, bytes, int, int], ...]:
@@ -118,10 +118,10 @@ def token_rows(root: Any, source: bytes) -> tuple[tuple[str, bytes, int, int], .
     stack = [root]
     while stack:
         cur = stack.pop()
-        if cur.type == "text":  # inline HTML: tags and words per row, so an edit or a moved bound tag never
+        if cur.type == "text":  # inline HTML: tag parts and words per row, so an edit or a moved bound tag never
             row = cur.start_point.row  # merges rows or hides the unchanged neighbours
             for k, seg in enumerate(source[cur.start_byte : cur.end_byte].split(b"\n")):
-                out.extend(("text", b" ".join(m.split()), row + k, row + k) for m in _HTML_TOKEN.findall(seg))
+                out.extend(("text", m, row + k, row + k) for m in _HTML_TOKEN.findall(seg))
         elif cur.child_count == 0 or cur.type == "comment":
             tok = _token(cur, source)
             if tok:
