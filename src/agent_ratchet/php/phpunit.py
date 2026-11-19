@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_ratchet.php.directives import PhpDecodeError, namespace_resolver, symbol_path
-from agent_ratchet.php.parser import ParsedPhp
+from agent_ratchet.php.parser import ParsedPhp, norm_hash
 
 EXPECT_EXCEPTION = {
     n.lower(): n
@@ -23,6 +23,7 @@ _TEST_DIRS = frozenset({"Test", "tests"})
 _TEST_TAG = re.compile(r"@test(?![\w-])")
 _PROVIDER_TAG = re.compile(r"@dataProvider[ \t]+([^\s*]+)")
 _NAMES = {"name", "qualified_name"}
+_SETUP_HOOKS = frozenset({"setup", "setupbeforeclass"})  # PHP method names are case-insensitive
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,8 @@ class TestFacts:
     data_providers: tuple[str, ...]
     line: int
     span: tuple[int, int] = (0, 0)
+    abstract: bool = False  # PHPUnit does not run an abstract class
+    body_hash: str = ""  # normalized body; removed/added tests pair only on an identical body (R6)
 
 
 def _text(node: Any, source: bytes) -> str:
@@ -186,6 +189,20 @@ def _is_test_method(method: Any, name: str, source: bytes, aliases: dict[str, st
     return any(attr == "Test" for attr, _ in _attributes(method, source, aliases))
 
 
+def _hook_counts(cls: Any, source: bytes, aliases: dict[str, str]) -> tuple[int, int]:
+    """Skips and incompletes in the class's own `setUp` / `setUpBeforeClass`: they hit every test of the class."""
+    skips = incompletes = 0
+    body = cls.child_by_field_name("body")
+    for member in body.children if body is not None else ():
+        name, hook = member.child_by_field_name("name"), member.child_by_field_name("body")
+        if member.type != "method_declaration" or name is None or hook is None:
+            continue
+        if _text(name, source).lower() in _SETUP_HOOKS:
+            c = _count_body(hook, source, aliases)
+            skips, incompletes = skips + c["s"], incompletes + c["i"]
+    return skips, incompletes
+
+
 def collect_tests(parsed: ParsedPhp, path: str = "") -> list[TestFacts]:
     """Tests of every PHPUnit test class in the file; `path` only feeds the `Test/`/`tests/` name heuristic."""
     source = parsed.source
@@ -197,6 +214,8 @@ def collect_tests(parsed: ParsedPhp, path: str = "") -> list[TestFacts]:
         if not _is_test_class(cls, source, aliases, path):
             continue
         class_fqn = symbol_path(cls, source, ns_at(cls.start_byte))
+        hook_skips, hook_incompletes = _hook_counts(cls, source, aliases)
+        abstract = any(c.type == "abstract_modifier" for c in cls.children)
         for method in (n for n in _walk(cls) if n.type == "method_declaration"):
             name_node = method.child_by_field_name("name")
             body = method.child_by_field_name("body")
@@ -213,11 +232,13 @@ def collect_tests(parsed: ParsedPhp, path: str = "") -> list[TestFacts]:
                     assertions=c["a"],
                     expects=c["e"],
                     expect_exception=tuple(sorted(c["x"])),
-                    skips=c["s"],
-                    incompletes=c["i"],
+                    skips=c["s"] + hook_skips,
+                    incompletes=c["i"] + hook_incompletes,
                     data_providers=_providers(method, source, aliases),
                     line=method.start_point.row + 1,
                     span=(method.start_byte, method.end_byte),
+                    abstract=abstract,
+                    body_hash=norm_hash(body, source),
                 )
             )
     return out

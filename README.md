@@ -153,7 +153,8 @@ What is detected (directives are read only from comments):
 - `php_suppression_range_expanded`: a `phpcs:disable` window now covers code that was outside it, or
   was widened or left unclosed. Editing code under an unchanged window is not an expansion.
 - `php_test_removed` and `php_test_weakened`: PHPUnit tests removed, or with fewer assertions or `expects()`
-  calls, lost expected exceptions or data providers, or more skips and incompletes. A pure rename passes.
+  calls, lost expected exceptions or data providers, more skips and incompletes (also in `setUp` /
+  `setUpBeforeClass`), or a test class made `abstract`. A pure rename with an unchanged body passes.
 - `php_parse_degraded` (exit 2): a changed symbol has a syntax error in the target.
 
 Removing a suppression, closing a window, or adding tests always passes. Renames and moves are paired, so a

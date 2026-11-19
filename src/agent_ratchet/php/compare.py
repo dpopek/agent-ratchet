@@ -225,11 +225,13 @@ def _weakness(b: CanonicalFact, t: CanonicalFact) -> list[str]:
     lost = Counter(bp["expect_exception"]) - Counter(tp["expect_exception"])
     why += [f"{name} dropped" for name in sorted(lost)]
     why += [f"data provider {name} dropped" for name in sorted(set(bp["data_providers"]) - set(tp["data_providers"]))]
+    if tp["abstract"] and not bp["abstract"]:
+        why.append("test class made abstract")
     return why
 
 
 def _unmatched_removed(removed: list[CanonicalFact], added: list[CanonicalFact]) -> list[CanonicalFact]:
-    """Removed tests with no added test of the same payload (a pure rename or move keeps the payload)."""
+    """Removed tests with no added test of the same payload, body hash included (a pure rename or move keeps both)."""
     pool = Counter(f.payload_hash for f in added)
     left = []
     for f in removed:

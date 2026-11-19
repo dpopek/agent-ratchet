@@ -165,6 +165,8 @@ def _analyze(parsed: ParsedPhp, path: str, oid: str | None) -> Analysis:
             "skips": t.skips,
             "incompletes": t.incompletes,
             "data_providers": list(t.data_providers),
+            "abstract": t.abstract,
+            "body_norm_hash": t.body_hash,  # in the payload hash, so removed/added tests pair only on the same body
         }
         symbol = f"{t.class_fqn}::{t.method}"
         facts.append(CanonicalFact(TEST, identity, payload, "unique_key", complete(symbol), at(t.line, t.span)))
