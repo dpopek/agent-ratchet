@@ -120,3 +120,10 @@ def header_hash(node: Any, source: bytes) -> str:
             continue
         tokens.extend(_leaf_tokens(child, source))
     return _digest(tokens)
+
+
+def declaration_name_hash(node: Any, source: bytes) -> str:
+    """`norm_hash` domain over a declaration's node type and its `name` child only (spec R4 phpmd anchor)."""
+    name = node.child_by_field_name("name")
+    tokens = [node.type.encode()] + (_leaf_tokens(name, source) if name is not None else [])
+    return _digest(tokens)

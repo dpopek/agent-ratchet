@@ -64,10 +64,36 @@ def test_phpmd_anchor_header_only():
     doc = "/** @SuppressWarnings(PHPMD.UnusedLocalVariable) */"
     (base,) = _phpmd(_method(doc))
     (body_edit,) = _phpmd(_method(doc, body="$unused = 1;\n        return $a + 1;"))
-    (param,) = _phpmd(_method(doc, signature="public function m(int $a, int $b): int"))
     (reformatted,) = _phpmd(_method(doc, signature="public  function m(\n        int $a\n    ): int"))
     assert base.anchor_hash == body_edit.anchor_hash == reformatted.anchor_hash
-    assert param.anchor_hash != base.anchor_hash
+
+
+def test_phpmd_anchor_ignores_parameters():
+    doc = "/** @SuppressWarnings(PHPMD.ExcessiveParameterList) */"
+    (base,) = _phpmd(_method(doc))
+    (param,) = _phpmd(_method(doc, signature="public function m(int $a, int $b): int"))
+    assert base.anchor_hash == param.anchor_hash
+
+
+def test_phpmd_anchor_ignores_modifiers_and_return_type():
+    doc = "/** @SuppressWarnings(PHPMD.UnusedLocalVariable) */"
+    (base,) = _phpmd(_method(doc))
+    (visibility,) = _phpmd(_method(doc, signature="protected function m(int $a): int"))
+    (retype,) = _phpmd(_method(doc, signature="public function m(int $a): ?int"))
+    (untyped,) = _phpmd(_method(doc, signature="public function m(int $a)"))
+    assert base.anchor_hash == visibility.anchor_hash == retype.anchor_hash == untyped.anchor_hash
+
+
+def test_phpmd_anchor_kind_and_name():
+    doc = "/** @SuppressWarnings(PHPMD) */"
+    (base,) = _phpmd(_method(doc))
+    (renamed,) = _phpmd(_method(doc, signature="public function n(int $a): int"))
+    assert base.anchor_hash != renamed.anchor_hash
+    as_class = f"<?php\nnamespace Acme\\Shop;\n{doc}\nclass Cart {{}}\n"
+    as_function = f"<?php\nnamespace Acme\\Shop;\n{doc}\nfunction Cart() {{}}\n"
+    (c,) = _phpmd(as_class)
+    (f,) = _phpmd(as_function)
+    assert c.anchor_hash != f.anchor_hash
 
 
 def test_phpmd_on_class_and_function():

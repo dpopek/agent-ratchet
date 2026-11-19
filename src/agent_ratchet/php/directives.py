@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_ratchet.php import phpmd
-from agent_ratchet.php.parser import ParsedPhp, header_hash, line_hash, norm_hash
+from agent_ratchet.php.parser import ParsedPhp, declaration_name_hash, header_hash, line_hash, norm_hash
 
 FILE_SYMBOL = "<file>"
 _CLASS_LIKE = {"class_declaration", "interface_declaration", "trait_declaration", "enum_declaration"}
@@ -333,10 +333,10 @@ def collect(
                 else:
                     keep.append(win)
             open_windows = keep
-    for comment in comments:  # PHPMD: header-only anchor, the annotation covers the whole declaration (R4)
+    for comment in comments:  # PHPMD: kind + name anchor, the annotation covers the whole declaration (R4)
         decl = None if _has_error_ancestor(comment) else phpmd.declaration_after(comment, source)
         for codes, row in phpmd.annotations(comment, source):
-            kind, digest = (None, None) if decl is None else (decl.type, header_hash(decl, source))
+            kind, digest = (None, None) if decl is None else (decl.type, declaration_name_hash(decl, source))
             points.append(PointSuppression(scope(comment if decl is None else decl), "phpmd", codes, kind, digest, row + 1))
     windows = [_window(w, anchors, source, closed=True) for w in done]
     windows += [_window(w, anchors, source, closed=False) for w in open_windows]
