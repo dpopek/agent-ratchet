@@ -1,4 +1,7 @@
-"""PHP suppression directives (phpstan, phpcs, psalm, phpmd) with anchors and windows (spec R3/R4)."""
+"""PHP suppression directives (phpstan, phpcs, psalm, phpmd) with anchors and windows (spec R3/R4).
+
+Keyword and code-list parsing of one comment line lives in `directive_text`.
+"""
 
 from __future__ import annotations
 
@@ -8,25 +11,19 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_ratchet.php import phpmd
-from agent_ratchet.php.parser import ParsedPhp, declaration_name_hash, header_hash, line_hash, norm_hash
+from agent_ratchet.php.directive_text import comment_lines, scan_line
+from agent_ratchet.php.parser import (
+    ParsedPhp,
+    declaration_name_hash,
+    header_hash,
+    line_hash,
+    norm_hash,
+)
 
 FILE_SYMBOL = "<file>"
 _CLASS_LIKE = {"class_declaration", "interface_declaration", "trait_declaration", "enum_declaration"}
 _CALLABLE = {"method_declaration", "function_definition"}
 _NOT_ANCHORS = {"compound_statement", "namespace_definition"}
-_DIRECTIVE = re.compile(
-    r"(?P<stan>@phpstan-ignore(?P<suffix>-next-line|-line)?(?![\w-]))"
-    r"|phpcs:(?P<cs>[a-z]+)"
-    r"|@codingStandardsIgnore(?P<legacy>Line|Start|End|File)\b"
-    r"|(?P<psalm>@psalm-suppress\b)",
-    re.IGNORECASE,
-)
-# PHPCS prefix-matches its keywords in this order (Tokenizer::createPositionMap); `set` is not modelled.
-_PHPCS_FORMS = (("set", None), ("ignorefile", "file"), ("disable", "disable"), ("enable", "enable"), ("ignore", "point"))
-# PHPCS 4 honours no legacy annotation; `End` closes nothing, so only the stricter forms are modelled (I1, 19.11).
-_LEGACY_FORMS = {"line": "point", "start": "disable", "end": None, "file": "file"}
-_PAREN = re.compile(r"\([^)]*\)")
-_PHP_TRIM = " \t\n\r\0\x0b"  # PHP trim() default set
 _PHP_TAGS = re.compile(rb"<\?(?:php)?(?=\s|$)|\?>", re.IGNORECASE)  # T_OPEN_TAG (not `<?=`) and T_CLOSE_TAG
 _LINE_SCOPED = {"phpstan", "phpcs"}  # tools that ignore one line (spec R4 "Anchor hash")
 _METRIC_WORDS = ("metrics", "complexity", "nesting")
@@ -156,64 +153,6 @@ def symbol_path(node: Any, source: bytes, namespace: str) -> str:
     return FILE_SYMBOL
 
 
-def _split_codes(text: str) -> tuple[str, ...]:
-    text = text.split("--", 1)[0]
-    text = _PAREN.sub(" ", text)
-    return tuple(sorted({c for c in re.split(r"[,\s]+", text) if c}))
-
-
-def _phpcs_codes(text: str) -> tuple[str, ...]:
-    """PHPCS code list: reason from the first ` --` on, then split on `,` only and trimmed (G5)."""
-    text = text.split(" --", 1)[0]
-    return tuple(sorted({c.strip(_PHP_TRIM) for c in text.split(",") if c.strip(_PHP_TRIM)}))
-
-
-def _comment_lines(text: str) -> list[tuple[int, str]]:
-    """Comment lines trimmed exactly as PHPCS trims them; NBSP and other Unicode spaces stay (G2/G6).
-
-    Other tools match their directives anywhere in the line and split codes on `\\s`, so they are unaffected.
-    """
-    return [(i, line.lstrip(" \t/*#").rstrip(" */\t\r\n")) for i, line in enumerate(text.split("\n"))]
-
-
-def _mid_text(line: str, start: int) -> bool:
-    """The `phpcs:` at `start` does not open the line's text (after ` \\t/*#` and an optional `@`)."""
-    prefix = line[:start].removesuffix("@")
-    return bool(prefix.strip(" \t/*#"))
-
-
-def _scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], bool]]:
-    """Return (form, tool, codes, next_line) for every directive on a line, in order."""
-    matches = list(_DIRECTIVE.finditer(line))
-    out: list[tuple[str, str, tuple[str, ...], bool]] = []
-    for i, m in enumerate(matches):
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(line)
-        rest = line[m.end() : end]
-        if m.group("stan") is not None:
-            suffix = (m.group("suffix") or "").lower()
-            codes = () if suffix else _split_codes(rest)
-            out.append(("point", "phpstan", codes, suffix == "-next-line"))
-        elif m.group("cs") is not None:  # PHPCS reads codes to the end of the line, past any later match (G5)
-            word = line[m.start("cs") :].split(" --", 1)[0]
-            rest = line[m.end() :]
-            keyword, form = next(
-                ((k, f) for k, f in _PHPCS_FORMS if word.lower().startswith(k)), ("", None)
-            )
-            if form == "enable" and _mid_text(line, m.start()):
-                continue  # PHPCS ignores a mid-text enable (G6); other mid-text keywords over-report, so they stay
-            if form is None:
-                out.append(("unknown", "phpcs-unknown", _split_codes(rest), False))
-            else:  # PHPCS skips exactly one character after the keyword, whatever it is
-                out.append((form, "phpcs", _phpcs_codes(word[len(keyword) + 1 :]), False))
-        elif m.group("legacy") is not None:
-            form = _LEGACY_FORMS[m.group("legacy").lower()]
-            if form is not None:
-                out.append((form, "phpcs", (), False))
-        else:
-            out.append(("point", "psalm", _split_codes(rest), False))
-    return out
-
-
 def _walk(root: Any) -> tuple[list[Any], list[Any]]:
     comments: list[Any] = []
     anchors: list[Any] = []
@@ -321,8 +260,8 @@ def _scan_comments(comments: list[Any], source: bytes) -> list[_Raw]:
     raws: list[_Raw] = []
     for comment in comments:
         text = source[comment.start_byte : comment.end_byte].decode("utf-8", errors="replace")
-        for offset, line in _comment_lines(text):
-            for form, tool, codes, nxt in _scan_line(line):
+        for offset, line in comment_lines(text):
+            for form, tool, codes, nxt in scan_line(line):
                 raws.append(_Raw(form, tool, codes, comment, comment.start_point.row + offset, nxt))
     return raws
 
