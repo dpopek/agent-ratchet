@@ -69,6 +69,7 @@ def test_exception_entry_validation() -> None:
         {**GOOD_EXCEPTION, "codes": "a"},
         {**GOOD_EXCEPTION, "codes": [1]},
         {**GOOD_EXCEPTION, "tool": ""},
+        {**GOOD_EXCEPTION, "symbol": ""},
         {**GOOD_EXCEPTION, "path": "../x.php"},
         "not-a-dict",
     ]
@@ -77,6 +78,14 @@ def test_exception_entry_validation() -> None:
             _parse(php_suppression_exceptions=[entry])
     with pytest.raises(GuardAnalysisError):
         _parse(php_suppression_exceptions={})
+
+
+def test_duplicate_exception_identity_exit_2() -> None:
+    twin = {**GOOD_EXCEPTION, "codes": ["a", "z"], "reason": "other reason"}
+    with pytest.raises(GuardAnalysisError, match="Duplicate"):
+        _parse(php_suppression_exceptions=[GOOD_EXCEPTION, twin])
+    other = {**GOOD_EXCEPTION, "symbol": "A\\B\\X::other"}
+    assert len(_parse(php_suppression_exceptions=[GOOD_EXCEPTION, other])["php_suppression_exceptions"]) == 2
 
 
 def test_php_profile_active() -> None:

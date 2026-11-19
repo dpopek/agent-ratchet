@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -312,3 +313,9 @@ def _window(win: dict[str, Any], anchors: list[Any], source: bytes, closed: bool
         statements=tuple(hashes),
         line=win["line"],
     )
+
+
+def namespace_resolver(root: Any, source: bytes) -> Callable[[int], str]:
+    """Return `pos -> namespace` for a parsed file (handles braced and unbraced namespaces)."""
+    ranges = _namespace_ranges(root, source)
+    return lambda pos: _namespace_at(ranges, pos)
