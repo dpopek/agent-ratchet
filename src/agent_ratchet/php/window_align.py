@@ -17,6 +17,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
 from difflib import SequenceMatcher
 
+from agent_ratchet.php.codes import covers
 from agent_ratchet.php.directive_text import comment_lines, scan_line
 
 Token = tuple[str, bytes, int, int]  # type, text, first row, last row
@@ -107,7 +108,7 @@ def _cover(tokens: Sequence[Token], spans: Sequence[Span]) -> dict[tuple[int, in
 def _within(codes: tuple[str, ...], had: frozenset[str] | None) -> bool:
     if had is _ALL:
         return True
-    return bool(codes) and all(any(c == h or c.startswith(h + ".") for h in had) for c in codes)
+    return bool(codes) and all(covers(had, c) for c in codes)
 
 
 def _align(base: Sequence[Token], target: Sequence[Token]) -> dict[int, int]:

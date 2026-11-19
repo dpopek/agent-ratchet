@@ -495,3 +495,55 @@ def test_bound_tag_joined_with_reworded_bound_or_one_sided_tag_pair_is_expanded(
     # TD1d/TD1s: the joined bound differs only in its reason or spacing; TD1e/TD1f: the tag pair encloses the bound
     # alone on one side only. PHPCS 3 and 4: the tab-indented `<?php` row is reported in BASE, silent in TARGET
     assert _cats_ext(*_ROUND7[case]) == [EXPANDED]
+
+
+# --- 4.1.2 (audit D3, D10): one PHPCS code-set rule; a code covers every dotted code under it -----------
+# Probed on PHPCS 3.13.5 and 4.0.4: `disable`/`ignore Generic.PHP` suppress Generic.PHP.ForbiddenFunctions, and
+# `enable Generic` closes `disable Generic.PHP.ForbiddenFunctions`; a narrower enable leaves the rest disabled.
+ADDED = "php_suppression_added"
+
+
+def test_phpcs_ignore_narrowed_by_hierarchy_passes() -> None:
+    base = _m("$x = sizeof($a); // phpcs:ignore Generic.PHP")
+    target = _m(f"$x = sizeof($a); // phpcs:ignore {_SIZEOF}")
+    assert _cats(base, target) == []
+
+
+def test_phpcs_ignore_widened_by_hierarchy_is_added() -> None:
+    base = _m(f"$x = sizeof($a); // phpcs:ignore {_SIZEOF}")
+    target = _m("$x = sizeof($a); // phpcs:ignore Generic.PHP")
+    assert _cats(base, target) == [ADDED]
+
+
+def test_phpcs_disable_narrowed_by_hierarchy_passes() -> None:
+    base = _m("// phpcs:disable Generic\na();\n// phpcs:enable\nz();")
+    target = _m(f"// phpcs:disable {_SIZEOF}\na();\n// phpcs:enable\nz();")
+    assert _cats(base, target) == []
+
+
+def test_phpcs_disable_respelled_with_an_equivalent_code_set_passes() -> None:
+    base = _m("// phpcs:disable Generic\na();\n// phpcs:enable\nz();")
+    target = _m("// phpcs:disable Generic, Generic.PHP\na();\n// phpcs:enable\nz();")
+    assert _cats(base, target) == []
+
+
+def test_phpstan_identifier_keeps_the_exact_rule() -> None:
+    base = _m("// @phpstan-ignore argument\n$x = f($a);")
+    target = _m("// @phpstan-ignore argument.type\n$x = f($a);")
+    assert _cats(base, target) == [ADDED]
+
+
+def test_broader_enable_closes_a_narrower_window() -> None:
+    _, (w,), _ = _collect(f"<?php\n// phpcs:disable {_SIZEOF}\na();\n// phpcs:enable Generic\nz();\n")
+    assert w.closed is True
+
+
+def test_enable_switched_to_a_broader_code_passes() -> None:
+    base = _m(f"// phpcs:disable {_SIZEOF}\na();\n// phpcs:enable {_SIZEOF}\nz();")
+    target = _m(f"// phpcs:disable {_SIZEOF}\na();\n// phpcs:enable Generic\nz();")
+    assert _cats(base, target) == []
+
+
+def test_narrower_enable_keeps_the_window_open() -> None:
+    _, (w,), _ = _collect(f"<?php\n// phpcs:disable Generic\na();\n// phpcs:enable {_SIZEOF}\nz();\n")
+    assert w.closed is False

@@ -8,6 +8,7 @@ from typing import Any
 
 from agent_ratchet.facts.model import CanonicalFact
 from agent_ratchet.git_guard_io import SlopViolation
+from agent_ratchet.php.codes import within
 from agent_ratchet.php.directives import FILE_SYMBOL
 from agent_ratchet.php.extract import FILE, GAP, POINT, TEST, WINDOW, Analysis, analyze
 from agent_ratchet.php.window_align import grown_windows
@@ -28,9 +29,9 @@ def _anchor(f: CanonicalFact) -> tuple[Any, Any]:
     return (f.payload["anchor_ast_kind"], f.payload["anchor_norm_hash"])
 
 
-def _narrower(inner: tuple[str, ...], outer: tuple[str, ...]) -> bool:
-    """`inner` suppresses strictly less than `outer` (an empty code list means every code)."""
-    return inner != outer and bool(inner) and (not outer or set(inner) < set(outer))
+def _no_wider(x: CanonicalFact, y: CanonicalFact) -> bool:
+    """`x` suppresses nothing `y` does not (PHPCS codes by hierarchy, other tools exactly; see `php.codes`)."""
+    return within(_codes(x), _codes(y), hierarchical=x.identity.get("tool") == "phpcs")
 
 
 def _symbol(f: CanonicalFact) -> str:
@@ -153,8 +154,8 @@ def _points(
         for x, _ in _pair(b, t, lambda x, y: _codes(x) == _codes(y)):
             out.add(REBOUND, x)
             flagged.append(x)
-        _pair(b, t, lambda x, y: _narrower(_codes(x), _codes(y)) and _anchor(x) == _anchor(y))
-        for x, _ in _pair(b, t, lambda x, y: _narrower(_codes(x), _codes(y))):
+        _pair(b, t, lambda x, y: _no_wider(x, y) and _anchor(x) == _anchor(y))
+        for x, _ in _pair(b, t, _no_wider):
             out.add(REBOUND, x)
             flagged.append(x)
         left_base.extend(b)
@@ -178,7 +179,7 @@ def _files(base: list[CanonicalFact], target: list[CanonicalFact], out: _Finding
         b = [f for f in base if f.identity["tool"] == tool]
         t = [f for f in target if f.identity["tool"] == tool]
         _pair(b, t, lambda x, y: _codes(x) == _codes(y))
-        _pair(b, t, lambda x, y: _narrower(_codes(x), _codes(y)))
+        _pair(b, t, _no_wider)
         for x in t:
             out.add(ADDED, x)
 
@@ -198,7 +199,7 @@ def _windows(
     for b, t in groups.values():
         pairs = _pair(b, t, lambda x, y: _codes(x) == _codes(y) and x.payload_hash == y.payload_hash)
         pairs += _pair(b, t, lambda x, y: _codes(x) == _codes(y))
-        pairs += _pair(b, t, lambda x, y: _narrower(_codes(x), _codes(y)))
+        pairs += _pair(b, t, _no_wider)
         for x, y in pairs:
             if (x.origin.line, _codes(x)) in grown or (y.payload["closed"] and not x.payload["closed"]):
                 out.add(EXPANDED, x)
