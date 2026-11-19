@@ -241,3 +241,13 @@ def test_no_bare_ast_parse_in_package() -> None:
                 if (path.name, owners.get(id(node), "")) not in allowed:
                     offenders.append(f"{path.name}:{node.lineno}")
     assert offenders == []
+
+
+def test_unregistered_snapshot_extractor_is_a_guard_analysis_error(monkeypatch) -> None:
+    """Audit D7: fails closed with GuardAnalysisError, also under `python -O` (no bare assert)."""
+    from agent_ratchet import ast_refactoring_delta
+    from agent_ratchet.git_guard_io import GuardAnalysisError
+
+    monkeypatch.setattr(ast_refactoring_delta, "_SNAPSHOT_EXTRACTOR", None)
+    with pytest.raises(GuardAnalysisError, match="not registered"):
+        ast_refactoring_delta.compare_ast_snapshots(None, "x = 1\n", "src/m.py")
