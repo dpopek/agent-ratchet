@@ -24,6 +24,7 @@ from agent_ratchet.php.parser import (
 FILE_SYMBOL = "<file>"
 _CLASS_LIKE = {"class_declaration", "interface_declaration", "trait_declaration", "enum_declaration"}
 _CALLABLE = {"method_declaration", "function_definition"}
+_ANONYMOUS = "anonymous_class"  # `new class {}`: its methods must not merge into an enclosing class
 _NOT_ANCHORS = {"compound_statement", "namespace_definition"}
 _PHP_TAGS = re.compile(rb"<\?(?:php)?(?=\s|$)|\?>", re.IGNORECASE)  # T_OPEN_TAG (not `<?=`) and T_CLOSE_TAG
 _LINE_SCOPED = {"phpstan", "phpcs"}  # tools that ignore one line (spec R4 "Anchor hash")
@@ -71,7 +72,7 @@ class _Raw:
     codes: tuple[str, ...]
     comment: Any
     line: int
-    next_line: bool = False
+    row_rule: str = ""  # see directive_text.scan_line
 
 
 def _strict(source: bytes, start: int, end: int) -> str:
@@ -130,6 +131,22 @@ def _namespace_at(ranges: list[tuple[int, int, str]], pos: int) -> str:
     return found
 
 
+def _anonymous_name(node: Any) -> str:
+    """`class@anonymous#<k>`: the k-th anonymous class in file order (PHP's own name embeds a byte offset)."""
+    root = node
+    while root.parent is not None:
+        root = root.parent
+    stack, k = [root], 0
+    while stack:
+        cur = stack.pop()
+        if cur.type == _ANONYMOUS:
+            k += 1
+            if cur.start_byte == node.start_byte:
+                break
+        stack.extend(reversed(cur.children))
+    return f"class@anonymous#{k}"
+
+
 def symbol_path(node: Any, source: bytes, namespace: str) -> str:
     """`<ns>\\<Class>::<method>`, `<ns>\\<Class>`, `<ns>\\<function>` or `<file>` for the node's scope."""
     prefix = f"{namespace}\\" if namespace else ""
@@ -140,8 +157,10 @@ def symbol_path(node: Any, source: bytes, namespace: str) -> str:
             _check_header(cur, source)
         if cur.type == "method_declaration" and name is not None:
             owner = cur.parent
-            while owner is not None and owner.type not in _CLASS_LIKE:
+            while owner is not None and owner.type not in _CLASS_LIKE and owner.type != _ANONYMOUS:
                 owner = owner.parent
+            if owner is not None and owner.type == _ANONYMOUS:
+                return f"{prefix}{_anonymous_name(owner)}::{_ident(name, source)}"
             if owner is not None:
                 _check_header(owner, source)
             cls = owner.child_by_field_name("name") if owner is not None else None
@@ -199,23 +218,37 @@ def _code_after(comment: Any, source: bytes, tags_are_code: bool = True) -> bool
     return pos < line_end and _has_code(source[pos:line_end], tags_are_code)
 
 
-def _same_row_target(raw: _Raw, source: bytes) -> int | None:
-    """Row a line-scoped directive covers when it is not the literal next row (spec R4 "Anchor hash")."""
-    if raw.next_line:
-        return None
+def _ignored_row(raw: _Raw, source: bytes) -> tuple[int, bool]:
+    """(row a directive ignores, whether code shares that row with its comment); spec R4 "Anchor hash", probes D9.
+
+    PHPCS reads a block comment row by row, so the directive's own row decides. PHPStan reads the comment as one
+    token: `-line` covers its end row, an identifier ignore its start row (trailing) or end row (code follows).
+    """
+    comment = raw.comment
+    start, end, row = comment.start_point.row, comment.end_point.row, raw.line
+    if raw.row_rule == "next":
+        return end + 1, False
     tags_are_code = raw.tool != "phpcs"  # PHPStan counts `<?php` / `?>` as code on the row, PHPCS does not
-    if _is_trailing(raw.comment, source, tags_are_code):
-        return raw.line
-    if raw.tool in _LINE_SCOPED and _code_after(raw.comment, source, tags_are_code):
-        return raw.comment.end_point.row  # PHPCS and PHPStan ignore the leading block comment's end row
-    return None
+    before = _is_trailing(comment, source, tags_are_code)
+    after = raw.tool in _LINE_SCOPED and _code_after(comment, source, tags_are_code)
+    if raw.tool == "phpcs":
+        if (row == start and before) or (row == end and after):
+            return row, True
+        return row + 1, row + 1 == end and after
+    if raw.row_rule == "end":
+        return end, after or (start == end and before)
+    if before:
+        return start, True
+    if after:
+        return end, True
+    return end + 1, False
 
 
 def _anchor_for(raw: _Raw, source: bytes, anchors: list[Any]) -> Any | None:
     if _has_error_ancestor(raw.comment):
         return None
-    row = _same_row_target(raw, source)
-    if row is not None:
+    row, shared = _ignored_row(raw, source)
+    if shared:
         best = None
         for node in anchors:
             if node.start_point.row <= row <= node.end_point.row and (
@@ -252,10 +285,7 @@ def _anchor_hash(raw: _Raw, anchor: Any, root: Any, source: bytes) -> str:
         if _body_derived(raw.tool, raw.codes):
             return norm_hash(anchor, source)  # body-derived metrics
         return header_hash(anchor, source)
-    row = _same_row_target(raw, source)  # the same row `_anchor_for` takes the anchor from
-    if row is None:
-        row = raw.comment.end_point.row + 1  # literal next row
-    return line_hash(root, source, row)
+    return line_hash(root, source, _ignored_row(raw, source)[0])  # the row `_anchor_for` reads
 
 
 def _scan_comments(comments: list[Any], source: bytes) -> list[_Raw]:
@@ -263,8 +293,8 @@ def _scan_comments(comments: list[Any], source: bytes) -> list[_Raw]:
     for comment in comments:
         text = source[comment.start_byte : comment.end_byte].decode("utf-8", errors="replace")
         for offset, line in comment_lines(text):
-            for form, tool, codes, nxt in scan_line(line):
-                raws.append(_Raw(form, tool, codes, comment, comment.start_point.row + offset, nxt))
+            for form, tool, codes, rule in scan_line(line):
+                raws.append(_Raw(form, tool, codes, comment, comment.start_point.row + offset, rule))
     return raws
 
 

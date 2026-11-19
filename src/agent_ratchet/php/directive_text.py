@@ -45,17 +45,20 @@ def _mid_text(line: str, start: int) -> bool:
     return bool(prefix.strip(" \t/*#"))
 
 
-def scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], bool]]:
-    """Return (form, tool, codes, next_line) for every directive on a line, in order."""
+def scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], str]]:
+    """Return (form, tool, codes, row_rule) for every directive on a line, in order.
+
+    `row_rule`: "next" for `@phpstan-ignore-next-line`, "end" for `@phpstan-ignore-line`, "" otherwise.
+    """
     matches = list(_DIRECTIVE.finditer(line))
-    out: list[tuple[str, str, tuple[str, ...], bool]] = []
+    out: list[tuple[str, str, tuple[str, ...], str]] = []
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(line)
         rest = line[m.end() : end]
         if m.group("stan") is not None:
             suffix = (m.group("suffix") or "").lower()
             codes = () if suffix else _split_codes(rest)
-            out.append(("point", "phpstan", codes, suffix == "-next-line"))
+            out.append(("point", "phpstan", codes, {"-next-line": "next", "-line": "end"}.get(suffix, "")))
         elif m.group("cs") is not None:  # PHPCS reads codes to the end of the line, past any later match (G5)
             word = line[m.start("cs") :].split(" --", 1)[0]
             rest = line[m.end() :]
@@ -65,13 +68,13 @@ def scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], bool]]:
             if form == "enable" and _mid_text(line, m.start()):
                 continue  # PHPCS ignores a mid-text enable (G6); other mid-text keywords over-report, so they stay
             if form is None:
-                out.append(("unknown", "phpcs-unknown", _split_codes(rest), False))
+                out.append(("unknown", "phpcs-unknown", _split_codes(rest), ""))
             else:  # PHPCS skips exactly one character after the keyword, whatever it is
-                out.append((form, "phpcs", _phpcs_codes(word[len(keyword) + 1 :]), False))
+                out.append((form, "phpcs", _phpcs_codes(word[len(keyword) + 1 :]), ""))
         elif m.group("legacy") is not None:
             form = _LEGACY_FORMS[m.group("legacy").lower()]
             if form is not None:
-                out.append((form, "phpcs", (), False))
+                out.append((form, "phpcs", (), ""))
         else:
-            out.append(("point", "psalm", _split_codes(rest), False))
+            out.append(("point", "psalm", _split_codes(rest), ""))
     return out

@@ -500,3 +500,60 @@ def test_declaration_body_edit_keeps_header_for_specific_codes(directive):
     base = _decl(directive, "public function m()")
     edited = _decl(directive, "public function m()", "if ($a) { if ($b) { return 2; } }")
     assert edited.anchor_hash == base.anchor_hash
+
+
+def _hash(body: str) -> object:
+    (p,), _, _ = _collect(_wrap(body))
+    return p.anchor_hash
+
+
+def test_phpcs_directive_on_a_later_row_of_a_trailing_block_ignores_the_following_row():
+    # PHPCS 3.13.5 / 4.0.4 read a block comment row by row: the directive's own row decides (probe D9)
+    def one(head: str, nxt: str) -> object:
+        return _hash(f"        {head} /* note\n         * phpcs:ignore X.Y.Z */\n        {nxt}")
+
+    base = one("x();", "y();")
+    assert one("x();", "z(1);") != base  # the ignored row edited: rebound
+    assert one("w(1);", "y();") == base  # the comment's start row is not covered
+
+
+def test_phpstan_identifier_ignore_in_a_trailing_block_covers_the_start_row():
+    # PHPStan 2.3.6 reads the comment as one token: a trailing one covers the row it starts on (probe D9)
+    def one(head: str, nxt: str) -> object:
+        return _hash(f"        {head} /* note\n         * @phpstan-ignore x.y */\n        {nxt}")
+
+    base = one("x();", "y();")
+    assert one("w(1);", "y();") != base
+    assert one("x();", "z(1);") == base
+
+
+@pytest.mark.parametrize("directive", ["phpcs:ignore X.Y.Z", "@phpstan-ignore-line"])
+def test_directive_covering_a_row_inside_its_own_comment_fingerprints_that_row(directive):
+    # PHPCS ignores the row after the directive's row, @phpstan-ignore-line the comment's end row: no code there
+    from agent_ratchet.php.parser import EMPTY_LINE
+
+    def one(nxt: str) -> object:
+        return _hash(f"        /*\n         * {directive}\n         */\n        {nxt}")
+
+    assert one("run();") == one("other(1);") == EMPTY_LINE
+
+
+def test_anonymous_class_methods_get_their_own_symbols():
+    require_php()
+    from agent_ratchet.php.extract import analyze
+
+    src = (
+        "<?php\nnamespace N;\nclass A {\n"
+        "    public function make() { return new class { public function x() {} }; }\n"
+        "    public function x() {}\n}\n"
+        "$y = new class { public function x() {} };\n"
+    )
+    assert analyze(src.encode(), "a.php").symbols == frozenset(
+        {"N\\A", "N\\A::make", "N\\A::x", "N\\class@anonymous#1::x", "N\\class@anonymous#2::x"}
+    )
+    pts, _, _ = _collect(src.replace("public function make() { return", "public function make() {\n// phpcs:ignore X.Y.Z\nreturn"))
+    pts2, _, _ = _collect(
+        src.replace("{ public function x() {} }; }", "{ public function x() {\n// phpcs:ignore X.Y.Z\nrun(); } }; }")
+    )
+    assert [p.symbol for p in pts] == ["N\\A::make"]
+    assert [p.symbol for p in pts2] == ["N\\class@anonymous#1::x"]
