@@ -194,7 +194,8 @@ def test_phpcs_ignore_fingerprint_ignores_body_edit():
     (edited,), _, _ = _collect(_sig("$a + 2"))
     assert base.anchor_kind == edited.anchor_kind == "method_declaration"
     assert base.anchor_hash == edited.anchor_hash
-    assert base.anchor_hash == hashlib.sha256(NORM_DOMAIN + b"public function m (").hexdigest()
+    header = b"public function m ( int $ a ) : int"
+    assert base.anchor_hash == hashlib.sha256(NORM_DOMAIN + header).hexdigest()
 
 
 def test_phpcs_ignore_fingerprint_changes_when_ignored_line_edited():
@@ -215,10 +216,67 @@ def test_trailing_ignore_fingerprints_own_line():
     assert one("if ($y)", "a();").anchor_hash != base.anchor_hash
 
 
-def test_own_line_ignore_skips_comment_only_lines():
+def test_own_line_ignore_targets_literal_next_row():
+    from agent_ratchet.php.parser import EMPTY_LINE
+
     plain, _, _ = _collect(_wrap("        // phpcs:ignore\n        run();"))
-    spaced, _, _ = _collect(_wrap("        // phpcs:ignore\n        // note\n        /* more */\n\n        run();"))
-    assert plain[0].anchor_hash == spaced[0].anchor_hash
+    blank, _, _ = _collect(_wrap("        // phpcs:ignore\n\n        run();"))
+    note, _, _ = _collect(_wrap("        // phpcs:ignore\n        // note\n        run();"))
+    assert blank[0].anchor_hash == note[0].anchor_hash == EMPTY_LINE
+    assert plain[0].anchor_hash != blank[0].anchor_hash  # deleting the blank row is a rebound
+
+
+def test_same_row_block_comment_targets_next_row():
+    base, _, _ = _collect(_wrap("        // @phpstan-ignore-next-line\n        foo();\n        ok();"))
+    tgt, _, _ = _collect(_wrap("        /* @phpstan-ignore-next-line */ foo();\n        bad();"))
+    assert base[0].anchor_hash != tgt[0].anchor_hash
+    base, _, _ = _collect(_wrap("        // phpcs:ignore X.Y\n        foo();\n        ok();"))
+    tgt, _, _ = _collect(_wrap("        /* phpcs:ignore X.Y */ foo();\n        bad();"))
+    assert base[0].anchor_hash != tgt[0].anchor_hash
+
+
+def test_trailing_multiline_block_uses_directive_row():
+    a, _, _ = _collect(_wrap("        foo(); /* note\n        @phpstan-ignore-line */ bar();"))
+    b, _, _ = _collect(_wrap("        foo(); /* note\n        @phpstan-ignore-line */ baz();"))
+    assert a[0].anchor_hash != b[0].anchor_hash
+
+
+def test_fingerprint_counts_tokens_spanning_the_row():
+    a, _, _ = _collect(_wrap('        foo("a\nb"); // phpcs:ignore X.Y'))
+    b, _, _ = _collect(_wrap('        foo("z\nb"); // phpcs:ignore X.Y'))
+    assert a[0].anchor_hash != b[0].anchor_hash
+
+
+def _decl(directive: str, sig: str, body: str = "return 1;") -> object:
+    src = f"<?php\nnamespace A\\B;\nclass C {{\n    // {directive}\n    {sig} {{\n        {body}\n    }}\n}}\n"
+    (p,), _, _ = _collect(src)
+    return p
+
+
+def test_declaration_anchor_uses_header_hash():
+    for directive in ("@phpstan-ignore Code.X", "@phpstan-ignore-next-line", "phpcs:ignore A.B"):
+        base = _decl(directive, "public function m(\n        int $a\n    ): int")
+        assert base.anchor_kind == "method_declaration"
+        for sig in (
+            "public function m(\n        int $a, int $b\n    ): int",
+            "public function m(\n        int $a\n    )",
+        ):
+            assert _decl(directive, sig).anchor_hash != base.anchor_hash, (directive, sig)
+    base = _decl("phpcs:ignore A.B", "public\n    function m()")
+    assert _decl("phpcs:ignore A.B", "public\n    static function m()").anchor_hash != base.anchor_hash
+    coded = _decl("phpcs:ignore A.B", "public function m()")
+    assert _decl("phpcs:ignore A.B", "public function m()", "return 2;").anchor_hash == coded.anchor_hash
+
+
+def test_declaration_anchor_keeps_node_hash_for_all_codes_and_metrics():
+    for directive in ("phpcs:ignore", "phpcs:ignore Generic.Metrics.CyclomaticComplexity"):
+        base = _decl(directive, "public function m()")
+        assert _decl(directive, "public function m()", "return 2;").anchor_hash != base.anchor_hash
+    src = "<?php\nnamespace A\\B;\n// phpcs:ignore\nclass C {\n    public function a() {}\n    public function b() {}\n}\n"
+    (full,), _, _ = _collect(src)
+    (deleted,), _, _ = _collect(src.replace("    public function b() {}\n", ""))
+    assert full.anchor_kind == deleted.anchor_kind == "class_declaration"
+    assert full.anchor_hash != deleted.anchor_hash
 
 
 def test_phpstan_ignore_next_line_uses_fingerprint():
@@ -247,3 +305,10 @@ def test_fingerprint_crlf_and_reindent_stable():
     (crlf,), _, _ = _collect(_sig().replace("\n", "\r\n"))
     (reindented,), _, _ = _collect(_sig(first="public   function   m (").replace("    ", "\t"))
     assert base.anchor_hash == crlf.anchor_hash == reindented.anchor_hash
+
+
+def test_comment_before_directive_on_its_row_is_not_trailing():
+    a, _, _ = _collect(_wrap("        /* a */ // phpcs:ignore X.Y\n        foo();"))
+    b, _, _ = _collect(_wrap("        /* a */ // phpcs:ignore X.Y\n        bar();"))
+    assert a[0].anchor_kind == "expression_statement"
+    assert a[0].anchor_hash != b[0].anchor_hash

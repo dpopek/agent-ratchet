@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from agent_ratchet.php.parser import ParsedPhp, first_token_row, line_hash, norm_hash
+from agent_ratchet.php.parser import ParsedPhp, header_hash, line_hash, norm_hash
 
 FILE_SYMBOL = "<file>"
 _CLASS_LIKE = {"class_declaration", "interface_declaration", "trait_declaration", "enum_declaration"}
@@ -208,8 +208,12 @@ def _walk(root: Any) -> tuple[list[Any], list[Any]]:
 
 
 def _is_trailing(comment: Any, source: bytes) -> bool:
+    """Trailing only if code (not just other comments) precedes the comment on its row."""
     line_start = source.rfind(b"\n", 0, comment.start_byte) + 1
-    return bool(source[line_start : comment.start_byte].strip())
+    end, prev = comment.start_byte, comment.prev_sibling
+    while prev is not None and prev.type == "comment" and prev.end_byte > line_start:
+        end, prev = prev.start_byte, prev.prev_sibling
+    return bool(source[line_start:end].strip())
 
 
 def _anchor_for(
@@ -234,15 +238,19 @@ def _anchor_for(
 
 
 def _anchor_hash(raw: _Raw, anchor: Any, root: Any, source: bytes) -> str:
-    """Line-scoped tools fingerprint the ignored line; psalm keeps the whole-node hash."""
+    """Line-scoped tools fingerprint the ignored line or declaration header (spec R4 "Anchor hash")."""
     if raw.tool not in _LINE_SCOPED:
-        return norm_hash(anchor, source)
+        return norm_hash(anchor, source)  # psalm: the declaration/statement is its scope
+    if anchor.type in _CLASS_LIKE or anchor.type in _CALLABLE:
+        if not raw.codes or any(c.startswith("Generic.Metrics.") for c in raw.codes):
+            return norm_hash(anchor, source)  # body-derived metrics
+        return header_hash(anchor, source)
     comment = raw.comment
     if _is_trailing(comment, source) and not raw.next_line:
-        row: int | None = comment.start_point.row
+        row = raw.line  # the same row `_anchor_for` takes the anchor from
     else:
-        row = first_token_row(root, source, comment.end_byte)
-    return line_hash(root, source, row) if row is not None else norm_hash(anchor, source)
+        row = comment.end_point.row + 1  # literal next row, even after a same-row block comment
+    return line_hash(root, source, row)
 
 
 def _scan_comments(comments: list[Any], source: bytes) -> list[_Raw]:

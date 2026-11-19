@@ -87,23 +87,11 @@ def norm_hash(node: Any, source: bytes) -> str:
     return _digest(_leaf_tokens(node, source))
 
 
-def first_token_row(root: Any, source: bytes, after_byte: int) -> int | None:
-    """Row of the first non-comment, non-empty leaf token starting at or after `after_byte`."""
-    stack = [root]
-    while stack:
-        cur = stack.pop()
-        if cur.type == "comment" or cur.end_byte <= after_byte:
-            continue
-        if cur.child_count == 0:
-            if cur.start_byte >= after_byte and _token(cur, source):
-                return int(cur.start_point.row)
-        else:
-            stack.extend(reversed(cur.children))
-    return None
+EMPTY_LINE = "empty-line"  # fingerprint of a blank or comment-only row (never a hex digest)
 
 
 def line_hash(root: Any, source: bytes, row: int) -> str:
-    """`norm_hash` domain over the non-comment leaf tokens whose start row equals `row` (spec R4)."""
+    """`norm_hash` domain over non-comment leaf tokens that start on or span `row` (spec R4)."""
     tokens: list[bytes] = []
     stack = [root]
     while stack:
@@ -112,8 +100,23 @@ def line_hash(root: Any, source: bytes, row: int) -> str:
             continue
         if cur.child_count == 0:
             tok = _token(cur, source)
-            if tok and cur.start_point.row == row:
+            if tok:
                 tokens.append(tok)
         else:
             stack.extend(reversed(cur.children))
+    return _digest(tokens) if tokens else EMPTY_LINE
+
+
+def header_hash(node: Any, source: bytes) -> str:
+    """`norm_hash` domain over a declaration's tokens except its `body` field (spec R4)."""
+    body = node.child_by_field_name("body")
+    tokens: list[bytes] = []
+    for child in node.children:
+        if body is not None and (child.start_byte, child.end_byte, child.type) == (
+            body.start_byte,
+            body.end_byte,
+            body.type,
+        ):
+            continue
+        tokens.extend(_leaf_tokens(child, source))
     return _digest(tokens)
