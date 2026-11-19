@@ -365,7 +365,9 @@ def _run_baseline_check(args: argparse.Namespace) -> int:
             print(f"FAIL: Simulated baseline violation detected: {res.reason}", file=sys.stderr)
             return 1
         return 0
-    config_rc = external_config.activate_cli(args.config_file)
+    config_rc = external_config.activate_cli(
+        args.config_file, refs=[args.base_ref] if args.base_ref else [], ranges=[args.commit_range] if args.commit_range else []
+    )
     if config_rc is not None:
         return config_rc
     lock_rc = None if (args.commit_range or args.base_ref) else check_staged_lock(require_base_ref=args.require_base_ref)

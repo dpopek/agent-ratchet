@@ -166,7 +166,8 @@ def _emit_shadow_report(violations: Sequence[SlopViolation]) -> None:
 def _run_scan(args: argparse.Namespace) -> int:
     if args.test_fixtures:
         return 0 if run_fixtures_self_test() else 1
-    config_rc = external_config.activate_cli(args.config_file)
+    refs = [args.diff_base, args.head_ref] if args.diff_base else []
+    config_rc = external_config.activate_cli(args.config_file, refs=refs, ranges=[args.commit_range] if args.commit_range else [])
     if config_rc is not None:
         return config_rc
     lock_rc = check_staged_lock() if args.staged_only else None

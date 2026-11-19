@@ -16,6 +16,8 @@ from typing import Any, Sequence
 from agent_ratchet.ast_safety import GuardAnalysisError
 
 ENV_VAR = "AGENT_RATCHET_CONFIG"
+LOCK_FILE = "guard.lock"  # lock_policy.LOCK_PATH (not imported: lock_policy imports this module)
+ENV_IGNORED_NOTE = f"note: ignoring {ENV_VAR} because {LOCK_FILE} is present; using the in-repo config"
 _UNSAFE_MODE = 0o022
 _state: dict[str, Any] = {"override": None, "noted": False}
 
@@ -96,10 +98,38 @@ def load_external_config(path: Path) -> dict[str, Any]:
     return parse_guard_config_bytes(raw, str(path))
 
 
-def activate_cli(cli_value: str | None, cwd: str | None = None) -> int | None:
-    """CLI entry hook: install the override and print the note once. Returns exit code 2 on error, else None."""
+def _git_ok(top: Path, *args: str) -> str | None:
+    proc = subprocess.run(["git", *args], cwd=top, capture_output=True, text=True, check=False)
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _lock_adopted(top: Path, refs: Sequence[str], ranges: Sequence[str]) -> bool:
+    """``guard.lock`` in the worktree, the index, HEAD, an explicit ref, or any commit of a range (a superset of BASE/TARGET)."""
+    if (top / LOCK_FILE).exists() or (top / LOCK_FILE).is_symlink():
+        return True
+    if (_git_ok(top, "ls-files", "--stage", "--", LOCK_FILE) or "").strip():
+        return True
+    ends = [end for spec in ranges for end in spec.replace("...", "..").split("..") if end]
+    if any(_git_ok(top, "cat-file", "-e", f"{ref}:{LOCK_FILE}") is not None for ref in ("HEAD", *refs, *ends)):
+        return True
+    return any((_git_ok(top, "rev-list", "-n", "1", spec, "--", LOCK_FILE) or "").strip() for spec in ranges)
+
+
+def activate_cli(
+    cli_value: str | None, cwd: str | None = None, refs: Sequence[str] = (), ranges: Sequence[str] = ()
+) -> int | None:
+    """CLI entry hook: install the override and print the note once. Returns exit code 2 on error, else None.
+
+    ``refs`` / ``ranges``: the refs and commit ranges the run will read. When any of them, HEAD, the index or the
+    worktree holds ``guard.lock``, the env override is ignored (only ``--config-file`` replaces the protected config).
+    """
     try:
         top, *others = _repo_roots(cwd)
+        if cli_value is None and os.environ.get(ENV_VAR) and _lock_adopted(top, refs, ranges):
+            if not _state["noted"]:
+                _state["noted"] = True
+                print(ENV_IGNORED_NOTE, file=sys.stderr)
+            return None
         path = resolve_external_config(cli_value, top, others)
         if path is None:
             return None

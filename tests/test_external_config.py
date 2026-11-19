@@ -264,3 +264,72 @@ def test_load_external_config_fills_defaults(tmp_path: Path) -> None:
     assert cfg["php_paths"] == default_guard_config()["php_paths"]
     with pytest.raises(GuardAnalysisError):
         external_config.load_external_config(tmp_path / "absent.json")
+
+
+# --- I4: a repository that adopted guard.lock ignores AGENT_RATCHET_CONFIG (only --config-file overrides) ----
+
+LOCK = "guard.lock"
+LOCK_BODY = "ab" * 20 + "\n"
+ENV_IGNORED_NOTE = "note: ignoring AGENT_RATCHET_CONFIG because guard.lock is present; using the in-repo config"
+
+
+def _lock_repo(tmp_path: Path, lock_base: bool, lock_head: bool) -> tuple[Path, str, str]:
+    """In-repo config requests the php profile; guard.lock present at BASE and/or HEAD as asked."""
+    (tmp_path / "repo").mkdir()
+    repo = _init_guard_repo(str(tmp_path / "repo"))
+    (repo / "scripts" / "audit" / "audit_guard_config.json").write_text(json.dumps(PHP_CONFIG), encoding="utf-8")
+    base = _commit_files(repo, "base", {PHP_FILE: PHP_BASE, **({LOCK: LOCK_BODY} if lock_base else {})}, include_guards=True)
+    if lock_base and not lock_head:
+        _git(repo, "rm", "-q", LOCK)
+    head = _commit_files(repo, "head", {PHP_FILE: PHP_HEAD, **({LOCK: LOCK_BODY} if lock_head and not lock_base else {})})
+    return repo, base, head
+
+
+@pytest.mark.parametrize(("lock_base", "lock_head"), [(True, True), (True, False), (False, True)])
+def test_env_override_ignored_when_lock_at_base_or_target(tmp_path: Path, lock_base: bool, lock_head: bool) -> None:
+    require_php()
+    repo, base, head = _lock_repo(tmp_path, lock_base, lock_head)
+    off = _write_config(tmp_path / "cfg" / "off.json", {"no_such_key": 1})  # would be exit 2 if it were read
+    proc = _scan(repo, base, head, env={"AGENT_RATCHET_CONFIG": str(off)})
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert ENV_IGNORED_NOTE in proc.stderr and "note: using external config" not in proc.stderr
+    if lock_base and lock_head:
+        assert "php_suppression_added" in proc.stdout + proc.stderr
+
+
+def test_env_override_ignored_on_staged_scan_with_lock(tmp_path: Path) -> None:
+    require_php()
+    repo, _base, _head = _lock_repo(tmp_path, True, True)
+    (repo / PHP_FILE).write_text(PHP_HEAD.replace("Generic.Foo", "Generic.Bar"), encoding="utf-8")
+    _git(repo, "add", PHP_FILE)
+    off = _write_config(tmp_path / "cfg" / "off.json", {})
+    proc = _run_scanner(repo, "--staged-only", extra_env={"AGENT_RATCHET_CONFIG": str(off)})
+    assert proc.returncode == 1 and "php_suppression_added" in proc.stdout + proc.stderr, proc.stderr
+    assert ENV_IGNORED_NOTE in proc.stderr
+
+
+def test_config_file_option_still_honoured_with_lock(tmp_path: Path) -> None:
+    require_php()
+    repo, base, head = _lock_repo(tmp_path, True, True)
+    off = _write_config(tmp_path / "cfg" / "off.json", {})
+    proc = _scan(repo, base, head, "--config-file", str(off), env={"AGENT_RATCHET_CONFIG": str(off)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"note: using external config {off.resolve()}" in proc.stderr and ENV_IGNORED_NOTE not in proc.stderr
+
+
+def test_env_override_ignored_by_baseline_integrity_with_lock(tmp_path: Path) -> None:
+    repo, base, _head = _lock_repo(tmp_path, True, True)
+    off = _write_config(tmp_path / "cfg" / "off.json", {"no_such_key": 1})
+    proc = _run_baseline_guard(repo, "--base-ref", base, extra_env={"AGENT_RATCHET_CONFIG": str(off)})
+    assert proc.returncode != 2, proc.stderr
+    assert ENV_IGNORED_NOTE in proc.stderr
+
+
+def test_env_override_ignored_when_lock_only_inside_commit_range(tmp_path: Path) -> None:
+    repo, base, head = _lock_repo(tmp_path, False, True)
+    _git(repo, "rm", "-q", LOCK)
+    tip = _commit_files(repo, "drop lock", {"a.txt": "1\n"})
+    off = _write_config(tmp_path / "cfg" / "off.json", {"no_such_key": 1})
+    proc = _run_scanner(repo, "--commit-range", f"{base}..{tip}", extra_env={"AGENT_RATCHET_CONFIG": str(off)})
+    assert proc.returncode != 2 or "no_such_key" not in proc.stderr, proc.stderr
+    assert ENV_IGNORED_NOTE in proc.stderr

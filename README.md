@@ -189,10 +189,16 @@ Scope and exceptions in `scripts/audit/audit_guard_config.json`:
 For a local run without committing anything to the repository, `scan` and `baseline-integrity` accept
 `--config-file PATH` (or `AGENT_RATCHET_CONFIG`; the option wins). That file, with the same schema as
 `audit_guard_config.json`, is used for both base and target; in-repo configs are ignored and config
-monotonicity is not checked. The file must exist, lie outside the repository, and not be writable by group or
-others (POSIX), otherwise the run exits 2. `php_suppression_exceptions` in it apply as written. Lock checks are
-skipped when the repository has no `guard.lock`. Each run prints `note: using external config <path>` to
+monotonicity is not checked. The file must exist, lie outside the repository (and, in a linked worktree,
+outside the main checkout and the shared git directory), and not be writable by group or others (POSIX),
+otherwise the run exits 2. `php_suppression_exceptions` in it apply as written. Lock checks are skipped only
+when neither base nor target has a `guard.lock`. Each run prints `note: using external config <path>` to
 stderr. This offers no CI protection and is only as safe as the file's permissions.
+
+In a repository that uses `guard.lock` (in the worktree, the index, `HEAD`, the scanned refs or any commit of
+the scanned range), `AGENT_RATCHET_CONFIG` is ignored: the run keeps the protected in-repo config and prints
+`note: ignoring AGENT_RATCHET_CONFIG because guard.lock is present; using the in-repo config`. Only an
+explicit `--config-file` replaces the config there, so hooks that need an external config must pass the option.
 
 ## Migrating off guard_core
 
