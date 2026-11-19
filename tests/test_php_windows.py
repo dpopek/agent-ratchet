@@ -137,3 +137,34 @@ def test_enable_moved_onto_the_end_of_the_next_row_passes() -> None:
     base = _m("// phpcs:disable A.B\na();\n// phpcs:enable\nz();")
     target = _m("// phpcs:disable A.B\na();\nz(); // phpcs:enable")
     assert _cats(base, target) == []
+
+
+# --- I2 residual: covered rows are fingerprinted, not only covered statements ---------------------------
+
+_FN = "<?php\nfunction run($a) {{\n{body}\n}}\n"
+_SIZEOF = "Generic.PHP.ForbiddenFunctions"
+
+
+def test_disable_moved_up_inside_an_already_touched_call_is_expanded() -> None:  # p1
+    base = _FN.format(body=f"    $x = bar(\n        1,\n        sizeof($a)\n    ); // phpcs:disable {_SIZEOF}\n    foo($x);")
+    target = _FN.format(body=f"    $x = bar(\n        1,\n        // phpcs:disable {_SIZEOF}\n        sizeof($a)\n    );\n    foo($x);")
+    assert _cats(base, target) == [EXPANDED]
+
+
+def test_disable_moved_up_inside_an_already_touched_array_is_expanded() -> None:  # p2
+    base = _FN.format(body=f"    return [\n        1,\n        sizeof($a),\n        2,\n        // phpcs:disable {_SIZEOF}\n    ];")
+    target = _FN.format(body=f"    return [ // phpcs:disable {_SIZEOF}\n        1,\n        sizeof($a),\n        2,\n    ];")
+    assert _cats(base, target) == [EXPANDED]
+
+
+def test_window_moved_with_its_unchanged_rows_passes() -> None:
+    block = f"    // phpcs:disable {_SIZEOF}\n    $n = sizeof($a);\n    // phpcs:enable\n"
+    base = _FN.format(body=f"    a();\n{block}    b();")
+    target = _FN.format(body=f"{block}    a();\n    b();")
+    assert _cats(base, target) == []
+
+
+def test_new_rows_under_an_unchanged_window_pass() -> None:
+    base = _FN.format(body=f"    // phpcs:disable {_SIZEOF}\n    $n = sizeof($a);\n    // phpcs:enable\n    if ($a) {{\n        b();\n    }}")
+    target = base.replace("$n = sizeof($a);", "$n = sizeof($a);\n    if ($n) {\n        c($n);\n    }")
+    assert _cats(base, target) == []
