@@ -85,6 +85,13 @@ def test_file_scan_states_its_limited_scope_on_stderr(tmp_path, monkeypatch, cap
     )
 
 
+def test_file_scan_reports_python_syntax_error_with_exit_2(tmp_path, monkeypatch, capsys) -> None:
+    (tmp_path / "broken.py").write_text("def f(:\n    return 1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert ai_slop_scanner.main(["broken.py"]) == 2
+    assert "broken.py:1 -> [syntax_error]" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("sub", ["scan", "baseline-integrity"])
 def test_help_carries_no_stale_version(sub: str) -> None:
     rc, out = _capture_help(cli.main, [sub, "--help"])
