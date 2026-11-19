@@ -6,10 +6,11 @@ import contextlib
 import hashlib
 import os
 from pathlib import Path
+import selectors
 import subprocess
 import sys
 import time
-from typing import Callable
+from typing import Callable, NoReturn
 
 import pytest
 
@@ -188,6 +189,30 @@ def test_timeout_falls_back_to_oneshot(repo: Path) -> None:
         # Disabled for the rest of the scan: every later read is one-shot, with no batch process restarted.
         assert reader.read_spec("HEAD:new_name.py") == b"z = 3\n"
         assert _outcome(lambda: reader.read_spec("HEAD:dir")) == _outcome(lambda: _git_cat_bytes_oneshot("HEAD:dir", cwd))
+        assert reader._proc is None
+
+
+def test_windows_disables_batch_and_reads_oneshot(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # `selectors` cannot watch pipes on Windows: the reader must never start a batch process there.
+    monkeypatch.setattr(git_batch, "_batch_supported", lambda: False)
+    cwd = str(repo)
+    with GitBatchReader(cwd) as reader:
+        for spec in READ_SPECS:
+            assert _outcome(lambda: reader.read_spec(spec)) == _outcome(lambda: _git_cat_bytes_oneshot(spec, cwd))
+        assert reader._proc is None
+
+
+def test_selector_oserror_disables_batch(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class _NoPipes(selectors.DefaultSelector):
+        def register(self, *args: object, **kwargs: object) -> NoReturn:
+            raise OSError("pipes are not selectable")
+
+    monkeypatch.setattr(git_batch.selectors, "DefaultSelector", _NoPipes)
+    cwd = str(repo)
+    with GitBatchReader(cwd) as reader:
+        assert reader.read_spec("HEAD:a.py") == b"x = 1\n"
+        assert reader._proc is None
+        assert reader.read_spec("HEAD:latin1.py") == b"# caf\xe9\nq = 1\n"
         assert reader._proc is None
 
 
