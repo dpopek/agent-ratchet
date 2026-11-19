@@ -132,7 +132,7 @@ merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
 - Removing an entry from either list is reported (`languages entry removed: 'php' (narrows the
   analysis profile)`); adding one is allowed.
 - Unknown top-level keys are a config error. Allowed: `extra_slop_rules`, `legacy_loc_waivers`,
-  `import_roots`, `self_skip`, `languages`, `frameworks`.
+  `import_roots`, `self_skip`, `languages`, `frameworks`, `php_paths`, `php_suppression_exceptions`.
 
 ### PHP rules
 
