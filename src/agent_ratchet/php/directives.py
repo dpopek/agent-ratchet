@@ -25,6 +25,7 @@ _DIRECTIVE = re.compile(
 _PHPCS_FORMS = (("set", None), ("ignorefile", "file"), ("disable", "disable"), ("enable", "enable"), ("ignore", "point"))
 _LEGACY_FORMS = {"line": "point", "start": "disable", "end": "enable", "file": "file"}
 _PAREN = re.compile(r"\([^)]*\)")
+_PHP_TAGS = re.compile(rb"<\?(?:php)?(?=\s|$)|\?>", re.IGNORECASE)  # T_OPEN_TAG (not `<?=`) and T_CLOSE_TAG
 _LINE_SCOPED = {"phpstan", "phpcs"}  # tools that ignore one line (spec R4 "Anchor hash")
 _METRIC_WORDS = ("metrics", "complexity", "nesting")
 
@@ -159,6 +160,12 @@ def _split_codes(text: str) -> tuple[str, ...]:
     return tuple(sorted({c for c in re.split(r"[,\s]+", text) if c}))
 
 
+def _phpcs_codes(text: str) -> tuple[str, ...]:
+    """PHPCS code list: reason from the first ` --` on, then split on `,` only and trimmed (G5)."""
+    text = text.split(" --", 1)[0]
+    return tuple(sorted({c.strip() for c in text.split(",") if c.strip()}))
+
+
 def _comment_lines(text: str) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
     for i, line in enumerate(text.split("\n")):
@@ -181,14 +188,14 @@ def _scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], bool]]:
             codes = () if suffix else _split_codes(rest)
             out.append(("point", "phpstan", codes, suffix == "-next-line"))
         elif m.group("cs") is not None:
-            word = line[m.start("cs") : end]
+            word = line[m.start("cs") : end].split(" --", 1)[0]
             keyword, form = next(
                 ((k, f) for k, f in _PHPCS_FORMS if word.lower().startswith(k)), ("", None)
             )
             if form is None:
                 out.append(("unknown", "phpcs-unknown", _split_codes(rest), False))
             else:  # PHPCS skips exactly one character after the keyword, whatever it is
-                out.append((form, "phpcs", _split_codes(word[len(keyword) + 1 :]), False))
+                out.append((form, "phpcs", _phpcs_codes(word[len(keyword) + 1 :]), False))
         elif m.group("legacy") is not None:
             form = _LEGACY_FORMS[m.group("legacy").lower()]
             out.append((form, "phpcs", (), False))
@@ -214,34 +221,41 @@ def _walk(root: Any) -> tuple[list[Any], list[Any]]:
     return comments, anchors
 
 
-def _is_trailing(comment: Any, source: bytes) -> bool:
+def _has_code(segment: bytes, tags_are_code: bool) -> bool:
+    if not tags_are_code:  # PHPCS skips T_OPEN_TAG / T_CLOSE_TAG when looking for row content (G4)
+        segment = _PHP_TAGS.sub(b"", segment)
+    return bool(segment.strip())
+
+
+def _is_trailing(comment: Any, source: bytes, tags_are_code: bool = True) -> bool:
     """Trailing only if code (not just other comments) precedes the comment on its row."""
     line_start = source.rfind(b"\n", 0, comment.start_byte) + 1
     end, prev = comment.start_byte, comment.prev_sibling
     while prev is not None and prev.type == "comment" and prev.end_byte > line_start:
         end, prev = prev.start_byte, prev.prev_sibling
-    return bool(source[line_start:end].strip())
+    return _has_code(source[line_start:end], tags_are_code)
 
 
-def _code_after(comment: Any, source: bytes) -> bool:
+def _code_after(comment: Any, source: bytes, tags_are_code: bool = True) -> bool:
     """Code (not just other comments) follows the comment on its end row."""
     line_end = source.find(b"\n", comment.end_byte)
     line_end = len(source) if line_end < 0 else line_end
     pos, nxt = comment.end_byte, comment.next_sibling
     while nxt is not None and nxt.type == "comment" and nxt.start_byte < line_end:
-        if source[pos : nxt.start_byte].strip():
+        if _has_code(source[pos : nxt.start_byte], tags_are_code):
             return True
         pos, nxt = nxt.end_byte, nxt.next_sibling
-    return pos < line_end and bool(source[pos:line_end].strip())
+    return pos < line_end and _has_code(source[pos:line_end], tags_are_code)
 
 
 def _same_row_target(raw: _Raw, source: bytes) -> int | None:
     """Row a line-scoped directive covers when it is not the literal next row (spec R4 "Anchor hash")."""
     if raw.next_line:
         return None
-    if _is_trailing(raw.comment, source):
+    tags_are_code = raw.tool != "phpcs"  # PHPStan counts `<?php` / `?>` as code on the row, PHPCS does not
+    if _is_trailing(raw.comment, source, tags_are_code):
         return raw.line
-    if raw.tool in _LINE_SCOPED and _code_after(raw.comment, source):
+    if raw.tool in _LINE_SCOPED and _code_after(raw.comment, source, tags_are_code):
         return raw.comment.end_point.row  # PHPCS and PHPStan ignore the leading block comment's end row
     return None
 

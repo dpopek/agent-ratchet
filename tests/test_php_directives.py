@@ -102,6 +102,39 @@ def test_window_closed_and_statements():
     assert len(w.statements) == 2 and list(w.statements) == sorted(w.statements)
 
 
+@pytest.mark.parametrize(
+    ("directive", "codes"),
+    [
+        ("phpcs:ignore A.B C.D", ("A.B C.D",)),
+        ("phpcs:ignore (A.B)", ("(A.B)",)),
+        ("phpcs:ignore A.B--x", ("A.B--x",)),
+        ("phpcs:ignore A.B -- why, C.D", ("A.B",)),
+        ("phpcs:ignore B.Y , A.X,,A.X", ("A.X", "B.Y")),
+        ("phpcs:ignore -- why", ()),
+        ("phpcs:ignore,A.B", ("A.B",)),
+    ],
+)
+def test_phpcs_codes_follow_phpcs_comma_list(directive, codes):
+    (p,), _, _ = _collect(_wrap(f"        // {directive}\n        run();"))
+    assert (p.tool, p.codes) == ("phpcs", codes)
+
+
+@pytest.mark.parametrize(
+    ("enable", "closes"),
+    [
+        ("phpcs:enable A.B C.D", False),
+        ("phpcs:enable (A.B)", False),
+        ("phpcs:enable A.B--x", False),
+        ("phpcs:enable A.B -- done", True),
+        ("phpcs:enable C.D, A.B", True),
+    ],
+)
+def test_phpcs_enable_closes_only_on_phpcs_code_match(enable, closes):
+    _, wins, _ = _collect(f"<?php\n// phpcs:disable A.B\n$a = 1;\n// {enable}\n$b = 2;\n")
+    (w,) = wins
+    assert (w.codes, w.closed, len(w.statements)) == (("A.B",), closes, 1 if closes else 2)
+
+
 def test_window_unclosed_runs_to_eof():
     src = "<?php\n// phpcs:disable\n$b = 2;\n$c = 3;\n"
     _, wins, _ = _collect(src)
@@ -257,6 +290,50 @@ def test_only_comments_after_block_directive_keep_next_row():
     (trailing,), _, _ = _collect(_wrap("        x(); // phpcs:ignore\n        run();"))
     assert only[0].anchor_hash == own[0].anchor_hash
     assert code[0].anchor_hash == trailing.anchor_hash
+
+
+def _row_hashes(src: str) -> tuple[object, list[str]]:
+    from agent_ratchet.php.parser import line_hash, parse_php
+
+    (p,), _, _ = _collect(src)
+    parsed = parse_php(src.encode())
+    rows = src.count("\n") + 1
+    return p, [line_hash(parsed.tree.root_node, parsed.source, r) for r in range(rows)]
+
+
+_TAG_ROW = "<?php\n$a = [];\n{row}\n<?php sizeof($a);\n"  # directive on row 2, next row 3
+_PHTML = "<div>\n{row}\n<?php sizeof($a); ?>\n"  # directive on row 1, next row 2
+
+
+@pytest.mark.parametrize(
+    ("template", "row", "target"),
+    [
+        # PHPCS skips the open and close tags when it looks for content on the directive's row (G4)
+        (_TAG_ROW, "// phpcs:ignore ?>", 3),
+        (_TAG_ROW, "/* phpcs:ignore */ ?>", 3),
+        (_PHTML, "<?php // phpcs:ignore ?>", 2),
+        (_PHTML, "<?php /* phpcs:ignore */ ?>", 2),
+        (_TAG_ROW, "// @codingStandardsIgnoreLine ?>", 3),
+        (_TAG_ROW, "$b = 1; /* phpcs:ignore */ ?>", 2),  # real code on the row keeps it there
+        (_TAG_ROW, "/* phpcs:ignore */ $b = 1; ?>", 2),
+        # PHPStan counts the tags as code: the directive's own row (anchor may be unresolved there)
+        (_PHTML, "<?php // @phpstan-ignore x ?>", 1),
+        (_TAG_ROW, "/* @phpstan-ignore x */ ?>", 2),
+        (_TAG_ROW, "// @phpstan-ignore x ?>", 2),
+        (_TAG_ROW, "// @phpstan-ignore-next-line ?>", 3),
+        (_TAG_ROW, "/* @phpstan-ignore-next-line */ ?>", 3),
+        (_PHTML, "<?php // @phpstan-ignore-next-line ?>", 2),
+    ],
+)
+def test_php_tags_on_directive_row_follow_each_tool(template, row, target):
+    p, rows = _row_hashes(template.format(row=row))
+    if p.anchor_hash is None:
+        assert p.tool == "phpstan" and target != len(rows) - 2, "only PHPStan's own tag row may stay unanchored"
+    else:
+        assert p.anchor_hash == rows[target]
+    if target == len(rows) - 2:  # the next row is the one ignored: editing it must rebind
+        edited, _ = _row_hashes(template.format(row=row).replace("sizeof($a)", "sizeof($b)"))
+        assert edited.anchor_hash != p.anchor_hash
 
 
 def test_next_line_block_comment_with_code_still_targets_next_row():
