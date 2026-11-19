@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.1.0
+
+- Added: PHP analysis for the `php` profile (`agent-ratchet[php]`): blocks new or rebound suppression directives
+  (phpcs, phpstan, psalm, PHPMD), widened `phpcs:disable` windows and weakened or removed PHPUnit tests.
+- Added: config keys `php_paths` and `php_suppression_exceptions`.
+- Added: `--config-file` / `AGENT_RATCHET_CONFIG` for an operator-owned config outside the repository;
+  the variable is ignored where `guard.lock` is present.
+- Added: PHP quality tool configs (phpstan, phpcs, phpunit, psalm, phpmd, ...) are protected governance paths.
+
 ## 4.0.1
 
 - Fixed: on Windows the git blob reader no longer crashes the scan; it reads one-shot instead of batching.

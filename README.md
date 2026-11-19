@@ -127,14 +127,85 @@ merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
   `languages`/`frameworks` in the config. One PR with both always exits 2 in CI, because CI runs the
   base lock (`--lock-from origin/main`) and the base has no `EXTRAS` yet. Without the extra, `scan` and `baseline-integrity` fail closed with exit 2:
   `profile 'php' requires agent-ratchet[php] (set EXTRAS=php in guard.lock)`.
-- In 4.0 the profile only checks that the extra is installed; no PHP or Magento rules run yet
-  (planned for 4.1). Removing an entry later is a finding, so add it only when you plan to keep it.
+- Since 4.1 the `php` profile runs PHP rules (below); `magento` adds no rules of its own yet.
+  Removing an entry later is a finding, so add it only when you plan to keep it.
 - Supported for extras: CPython 3.11–3.14 on Linux x86-64 and macOS arm64. On 3.15 `tree-sitter`
   builds from sdist (best-effort).
 - Removing an entry from either list is reported (`languages entry removed: 'php' (narrows the
   analysis profile)`); adding one is allowed.
 - Unknown top-level keys are a config error. Allowed: `extra_slop_rules`, `legacy_loc_waivers`,
-  `import_roots`, `self_skip`, `languages`, `frameworks`.
+  `import_roots`, `self_skip`, `languages`, `frameworks`, `php_paths`, `php_suppression_exceptions`.
+
+### PHP rules
+
+With `languages: ["php"]` (or `frameworks: ["magento"]`), `scan` compares base and target for each
+changed `.php` / `.phtml` file in scope. PHP is parsed with tree-sitter; no PHP binary or Composer runs.
+File-scan mode (no ref) is unchanged: the rules are diff-based.
+
+What is detected (directives are read only from comments):
+
+- Suppression directives for phpcs (`phpcs:ignore`, `phpcs:disable`/`enable`, `phpcs:ignoreFile`, legacy
+  `@codingStandardsIgnore*`), phpstan (`@phpstan-ignore*`), psalm (`@psalm-suppress`) and PHPMD
+  (`@SuppressWarnings(...)` on a class-like or function declaration). PHPCS keywords
+  follow PHPCS's own prefix rules (`phpcs:disabled` is a `disable`); any other unrecognized `phpcs:<word>`
+  counts as a suppression too.
+- `php_suppression_added`: more directives of the same kind, codes and symbol than before.
+- `php_suppression_rebound`: a directive now applies to different code than in base.
+- `php_suppression_anchor_unknown`: a new or changed directive whose target cannot be determined.
+- `php_suppression_range_expanded`: a `phpcs:disable` window now covers code that was outside it, or
+  was widened or left unclosed. Editing code under an unchanged window is not an expansion.
+- `php_test_removed` and `php_test_weakened`: PHPUnit tests removed, or with fewer assertions or `expects()`
+  calls, lost expected exceptions or data providers, more skips and incompletes (also in `setUp` /
+  `setUpBeforeClass`), or a test class made `abstract`. A pure rename with an unchanged body passes.
+- `php_parse_degraded` (exit 2): a changed symbol has a syntax error in the target.
+
+Removing a suppression, closing a window, or adding tests always passes. Renames and moves are paired, so a
+moved file or renamed method keeps its existing directives.
+
+Scope and exceptions in `scripts/audit/audit_guard_config.json`:
+
+```json
+{
+  "languages": ["php"],
+  "php_paths": ["app/code/", "src/"],
+  "php_suppression_exceptions": [
+    {"path": "src/Legacy/Foo.php", "symbol": "App\\Legacy\\Foo::bar", "tool": "phpcs",
+     "codes": ["Generic.Files.LineLength"], "reason": "generated table, reviewed"}
+  ]
+}
+```
+
+- `php_paths`: repo-relative directory prefixes ending in `/`; same path rules as `fixture_paths`. Default
+  `["app/code/", "app/design/", "packages/", "src/"]`. A file is in scope when it ends in `.php` or `.phtml`,
+  starts with one of the prefixes and has no `vendor` or `generated` path segment. Removing an entry is
+  reported (`php_paths entry removed: '<p>' (narrows PHP analysis scope)`); adding one is allowed. The
+  default does not cover a root `tests/` directory; list it explicitly to analyse those tests.
+- `php_suppression_exceptions`: entries with exactly `path`, `symbol`, `tool`, `codes` (list) and a non-empty
+  `reason`. An entry silences the matching added, rebound or range-expanded finding only if the same entry is
+  already in the base config; an entry added in the same change has no effect. Malformed or duplicate entries
+  are a config error (exit 2). Exceptions apply per identity, not per occurrence: one entry covers every
+  directive with that `path`, `symbol`, `tool` and `codes`, including ones added later.
+- Agent-ratchet before 4.1 rejects `php_paths` and `php_suppression_exceptions` as unknown keys, and CI runs
+  the base lock. Merge the `guard.lock` bump to 4.1 first, then add these keys in a separate change.
+- Configs of PHP quality tools (phpstan, phpcs, phpunit, psalm, phpmd, php-cs-fixer, rector, captainhook)
+  are protected governance files. A change touching them together with PHP code is rejected; make it in a
+  separate change.
+
+#### External config
+
+For a local run without committing anything to the repository, `scan` and `baseline-integrity` accept
+`--config-file PATH` (or `AGENT_RATCHET_CONFIG`; the option wins). That file, with the same schema as
+`audit_guard_config.json`, is used for both base and target; in-repo configs are ignored and config
+monotonicity is not checked. The file must exist, lie outside the repository (and, in a linked worktree,
+outside the main checkout and the shared git directory), and not be writable by group or others (POSIX),
+otherwise the run exits 2. `php_suppression_exceptions` in it apply as written. Lock checks are skipped only
+when neither base nor target has a `guard.lock`. Each run prints `note: using external config <path>` to
+stderr. This offers no CI protection and is only as safe as the file's permissions.
+
+In a repository that uses `guard.lock` (in the worktree, the index, `HEAD`, the scanned refs or any commit of
+the scanned range), `AGENT_RATCHET_CONFIG` is ignored: the run keeps the protected in-repo config and prints
+`note: ignoring AGENT_RATCHET_CONFIG because guard.lock is present; using the in-repo config`. Only an
+explicit `--config-file` replaces the config there, so hooks that need an external config must pass the option.
 
 ## Migrating off guard_core
 

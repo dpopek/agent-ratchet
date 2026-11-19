@@ -1,0 +1,10 @@
+<?php
+namespace Acme\Shop\Model;
+class Foo {
+    public function run() {
+// phpcs:disable Generic.Sample.Rule
+a();
+// done here phpcs:enable Generic.Sample.Rule
+z();
+    }
+}

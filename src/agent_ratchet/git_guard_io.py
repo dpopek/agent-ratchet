@@ -14,9 +14,12 @@ from typing import Any, Mapping, NamedTuple, Sequence
 from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers re-exported
     GuardAnalysisError as GuardAnalysisError, parse_python as parse_python, visit_bounded as visit_bounded,
 )
+from agent_ratchet import external_config
 from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
 from agent_ratchet.json_safety import loads_bounded
+from agent_ratchet.php.scope import DEFAULT_PHP_PATHS, validate_exceptions, validate_php_paths
 from agent_ratchet.profile import require_profile_capabilities
+from agent_ratchet.rel_path import clean_rel_segments
 from agent_ratchet.git_batch import (  # noqa: F401 -- head_commit_exists / _git_cat_bytes_oneshot re-exported
     _git_cat_bytes_oneshot as _git_cat_bytes_oneshot, active_reader_for, batch_unsafe,
     head_commit_exists as head_commit_exists,
@@ -102,9 +105,24 @@ PROTECTED_GOVERNANCE_PREFIXES: tuple[str, ...] = (
 _CASE_FOLDED_PIN_FILES: frozenset[str] = frozenset({"guard.lock", "scripts/guard"})
 
 
+# PHP static-analysis / test / hook configuration, matched against the basename at any depth (R7).
+PHP_QUALITY_CONFIG_RE: re.Pattern[str] = re.compile(
+    r"phpstan[^/]*\.neon(?:\.dist)?|phpstan-baseline.*|\.?phpcs\.xml(?:\.dist)?|phpunit\.xml(?:\.dist)?"
+    r"|psalm\.xml(?:\.dist)?|psalm-baseline\.xml|\.php-cs-fixer(?:\.dist)?\.php|phpmd\.xml|rector\.php|captainhook\.json"
+)
+_PHP_NON_CODE_SEGMENTS: frozenset[str] = frozenset({"vendor", "generated"})
+
+
+def is_php_code_path(rel: str) -> bool:
+    """`.php`/`.phtml` file outside any `vendor` or `generated` path segment."""
+    segments = rel.split("/")
+    return rel.endswith((".php", ".phtml")) and not _PHP_NON_CODE_SEGMENTS.intersection(segments[:-1])
+
+
 def is_protected_governance_path(rel_path: str) -> bool:
     return (
         rel_path in PROTECTED_GOVERNANCE_FILES
+        or PHP_QUALITY_CONFIG_RE.fullmatch(rel_path.rsplit("/", 1)[-1]) is not None
         or rel_path.startswith(PROTECTED_GOVERNANCE_PREFIXES)
         or rel_path.casefold() in _CASE_FOLDED_PIN_FILES
     )
@@ -206,7 +224,7 @@ def list_snapshot_files(ref_prefix: str, cwd: str | None = None) -> list[str]:
     return [t for t in res.stdout.decode("utf-8", errors="replace").split("\0") if t]
 
 
-ALLOWED_CONFIG_KEYS = frozenset({"extra_slop_rules", "legacy_loc_waivers", "import_roots", "self_skip", "languages", "frameworks"})
+ALLOWED_CONFIG_KEYS = frozenset({"extra_slop_rules", "legacy_loc_waivers", "import_roots", "self_skip", "languages", "frameworks", "php_paths", "php_suppression_exceptions"})
 PROFILE_VALUES = {"languages": frozenset({"php"}), "frameworks": frozenset({"magento"})}
 
 
@@ -241,7 +259,9 @@ def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
     languages, frameworks = _parse_profile(data, "languages", source), _parse_profile(data, "frameworks", source)
     if "magento" in frameworks and "php" not in languages:
         raise GuardAnalysisError(f"frameworks 'magento' requires languages 'php' in audit_guard_config.json at {source}")
-    return {"extra_slop_rules": extra, "legacy_loc_waivers": waivers, "import_roots": roots, "fixture_paths": fixtures, "languages": languages, "frameworks": frameworks}
+    return {"extra_slop_rules": extra, "legacy_loc_waivers": waivers, "import_roots": roots, "fixture_paths": fixtures, "languages": languages, "frameworks": frameworks,
+            "php_paths": validate_php_paths(data.get("php_paths", list(DEFAULT_PHP_PATHS)), source),
+            "php_suppression_exceptions": validate_exceptions(data.get("php_suppression_exceptions", []), source)}
 
 
 def _parse_profile(data: Mapping[str, Any], key: str, source: str) -> list[str]:
@@ -254,9 +274,7 @@ def _parse_profile(data: Mapping[str, Any], key: str, source: str) -> list[str]:
 def _valid_fixture_path(entry: object) -> bool:
     if not isinstance(entry, str) or not entry.startswith(FIXTURE_PATH_PREFIX) or entry.endswith("/"):
         return False
-    if "\\" in entry or any(c in entry for c in "*?["):
-        return False
-    return all(seg not in ("", ".", "..") for seg in entry.split("/"))
+    return clean_rel_segments(entry)
 
 
 def _parse_self_skip(block: object, source: str) -> list[str]:
@@ -274,7 +292,8 @@ def _parse_self_skip(block: object, source: str) -> list[str]:
 
 
 def default_guard_config() -> dict[str, Any]:
-    return {"extra_slop_rules": [], "legacy_loc_waivers": [], "import_roots": list(DEFAULT_IMPORT_ROOTS), "fixture_paths": [], "languages": [], "frameworks": []}
+    return {"extra_slop_rules": [], "legacy_loc_waivers": [], "import_roots": list(DEFAULT_IMPORT_ROOTS), "fixture_paths": [], "languages": [], "frameworks": [],
+            "php_paths": list(DEFAULT_PHP_PATHS), "php_suppression_exceptions": []}
 
 
 def fixture_set(base_cfg: Mapping[str, Any] | None, target_cfg: Mapping[str, Any]) -> frozenset[str]:
@@ -284,7 +303,7 @@ def fixture_set(base_cfg: Mapping[str, Any] | None, target_cfg: Mapping[str, Any
 
 
 def load_guard_config_for_ref(ref_prefix: str, cwd: str | None = None) -> dict[str, Any]:
-    cfg = _read_guard_config_for_ref(ref_prefix, cwd)
+    cfg = external_config.active_override() or _read_guard_config_for_ref(ref_prefix, cwd)
 
     require_profile_capabilities(cfg)
     return cfg
@@ -411,6 +430,8 @@ def _check_import_roots_monotonicity(base_roots: Sequence[str], target_roots: Se
 
 
 def verify_audit_guard_config_monotonicity(base_prefix: str, target_prefix: str, cwd: str | None = None) -> list[str]:
+    if external_config.override_active():
+        return []  # one operator-owned version of the config: nothing to compare
     if not base_prefix or (base_prefix == "HEAD" and not head_commit_exists(cwd)):
         return []
     rel = "scripts/audit/audit_guard_config.json"
@@ -424,6 +445,8 @@ def verify_audit_guard_config_monotonicity(base_prefix: str, target_prefix: str,
     errors.extend(_check_import_roots_monotonicity(b_cfg["import_roots"], t_cfg["import_roots"]))
     for key in ("languages", "frameworks"):
         errors.extend(f"{key} entry removed: '{v}' (narrows the analysis profile)" for v in b_cfg.get(key, []) if v not in t_cfg.get(key, []))
+    kept_php = set(t_cfg.get("php_paths", DEFAULT_PHP_PATHS))
+    errors.extend(f"php_paths entry removed: '{p}' (narrows PHP analysis scope)" for p in b_cfg.get("php_paths", DEFAULT_PHP_PATHS) if p not in kept_php)
     base_fixtures = set(b_cfg.get("fixture_paths", []))
     errors.extend(f"self_skip.fixture_paths entry added: '{p}' (widens the self-skip exemption)" for p in t_cfg.get("fixture_paths", []) if p not in base_fixtures)
     base_waivers, target_waivers = b_cfg.get("legacy_loc_waivers", []), t_cfg.get("legacy_loc_waivers", [])

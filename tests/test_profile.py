@@ -45,7 +45,7 @@ def test_unknown_keys_listed_sorted() -> None:
 
 
 def test_allowed_keys_constant() -> None:
-    assert ALLOWED_CONFIG_KEYS == {"extra_slop_rules", "legacy_loc_waivers", "import_roots", "self_skip", "languages", "frameworks"}
+    assert ALLOWED_CONFIG_KEYS == {"extra_slop_rules", "legacy_loc_waivers", "import_roots", "self_skip", "languages", "frameworks", "php_paths", "php_suppression_exceptions"}
 
 
 def test_profile_parses() -> None:

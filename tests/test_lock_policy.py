@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from agent_ratchet import ai_slop_scanner, lock_policy, test_baseline_integrity
+from agent_ratchet import ai_slop_scanner, lock_policy, test_baseline_integrity, transition_scan
 from agent_ratchet.git_guard_io import GuardAnalysisError, is_protected_governance_path
 from agent_ratchet.lock_policy import (
     GUARD_CORE_URL,
@@ -604,7 +604,7 @@ def test_commit_range_x_z_x_judges_every_hop(tmp_path: Path, remote: Remote, mon
         judged.append((base_prefix, target_prefix))
         return verify_lock_transition(base_prefix, target_prefix, cwd=cwd, local=local, repo_url=remote.url)
 
-    monkeypatch.setattr(ai_slop_scanner, "verify_lock_transition", _recording)
+    monkeypatch.setattr(transition_scan, "verify_lock_transition", _recording)
     monkeypatch.setattr(test_baseline_integrity, "verify_lock_transition", _recording)
     assert verify_lock_transition(base, head, cwd=str(repo), local=False, repo_url=remote.url) == []
 
