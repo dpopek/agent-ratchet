@@ -244,9 +244,36 @@ def test_non_utf8_identifier_is_degraded_not_crash() -> None:
     assert _cats(None, bad) == ["php_parse_degraded"]
     assert _cats(b"<?php\nclass C {}\n", bad) == ["php_parse_degraded"]
     assert _cats(bad, bad) == []
-    assert _cats(bad, b"<?php\nclass C {}\n") == ["php_parse_degraded"]
-    assert _cats(bad, None) == ["php_parse_degraded"]
     assert _cats(b"<?php\nclass C {}\n", bad.replace(b"C\xff", b"C\xfe")) == ["php_parse_degraded"]
+    assert _cats(bad.replace(b"C\xff", b"C\xfe"), bad) == ["php_parse_degraded"]  # TARGET stays strict
+
+
+# --- 4.1.3: an unreadable BASE does not block its own fix or deletion (audit D2) --------------------
+
+_BAD_TEST = _t("$this->assertTrue(true);").encode().replace(b"class XTest", b"class X\xffTest")
+_FIXED_TEST = _BAD_TEST.replace(b"X\xffTest", b"XTest")
+
+
+def test_fixing_a_non_utf8_base_passes() -> None:
+    bad = b"<?php\nnamespace A\\B;\nclass C\xff {\n    public function m() {\n        run();\n    }\n}\n"
+    assert _cats(bad, bad.replace(b"C\xff", b"C")) == []
+    assert _cats(_BAD_TEST, _FIXED_TEST, base_path=TEST_PATH, target_path=TEST_PATH) == []
+
+
+def test_deleting_a_non_utf8_base_without_tests_passes() -> None:
+    assert _cats(b"<?php\nclass C\xff {}\n", None) == []
+
+
+def test_non_utf8_base_still_reports_test_removal() -> None:
+    assert _cats(_BAD_TEST, None, base_path=TEST_PATH, target_path=TEST_PATH) == ["php_test_removed"]
+    dropped = _FIXED_TEST.replace(b"$this->assertTrue(true);", b"").replace(b"testIt", b"helperIt")
+    assert "php_test_removed" in _cats(_BAD_TEST, dropped, base_path=TEST_PATH, target_path=TEST_PATH)
+
+
+def test_non_utf8_base_does_not_hide_an_added_suppression() -> None:
+    bad = b"<?php\nnamespace A\\B;\nclass C\xff {\n    public function m() {\n        run();\n    }\n}\n"
+    fixed = bad.replace(b"C\xff", b"C").replace(b"        run();", b"        // phpcs:ignore\n        run();")
+    assert _cats(bad, fixed) == ["php_suppression_added"]
 
 
 def test_non_utf8_in_test_class_name_is_degraded() -> None:
@@ -525,3 +552,20 @@ def test_unchanged_gap_in_renamed_namespace_file_passes() -> None:
     target = _cart(body, ns="Acme\\Shop\\Checkout\\Model")
     assert _moved(base, target) == []
     assert _cats(base, target, base_path=_OLD_PATH, target_path=_NEW_PATH) == ["php_parse_degraded"]
+
+
+# --- 4.1.3: one analysis per blob in a transition (audit D8) -----------------------------------------
+
+
+def test_transition_parses_each_blob_once(monkeypatch) -> None:
+    require_php()
+    from agent_ratchet.php import extract, scan
+
+    blobs = {f"BASE:{PATH}": _m("a();").encode(), f":{PATH}": _m("a();\nb();").encode()}
+    monkeypatch.setattr(scan, "git_cat_bytes", lambda spec, cwd=None: blobs[spec])
+    parsed: list[bytes] = []
+    real = extract.parse_php
+    monkeypatch.setattr(extract, "parse_php", lambda blob: parsed.append(blob) or real(blob))
+    cfg = {"languages": ["php"], "frameworks": [], "php_paths": ["app/code/"]}
+    assert scan.php_transition_violations([("M", PATH, PATH)], "BASE", "", cfg, cfg) == []
+    assert sorted(parsed) == sorted(blobs.values())

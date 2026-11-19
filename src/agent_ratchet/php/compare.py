@@ -307,15 +307,32 @@ def compare_php_entry(
     """
     if base is not None and base == target:
         return []
-    old_path = base_path or target_path
-    b = analyze(base, old_path) if base is not None else _EMPTY
+    b, t = analyze_pair(base, target, base_path, target_path)
+    return compare_php_analyses(b, t, target_path, exceptions, renamed)
+
+
+def analyze_pair(
+    base: bytes | None, target: bytes | None, base_path: str | None, target_path: str
+) -> tuple[Analysis | None, Analysis | None]:
+    """BASE analyzed leniently (an unreadable file can still be fixed or deleted), TARGET strictly."""
+    b = analyze(base, base_path or target_path, lenient=True) if base is not None else None
+    return b, (analyze(target, target_path) if target is not None else None)
+
+
+def compare_php_analyses(
+    base: Analysis | None,
+    target: Analysis | None,
+    target_path: str,
+    exceptions: Sequence[Mapping[str, Any]],
+    renamed: bool = False,
+) -> list[SlopViolation]:
+    """`compare_php_entry` on analyses already made by `analyze_pair` (the scan reuses them for the test delta)."""
+    b = base or _EMPTY
     if target is None:
-        if b.decode_error:
-            return [_decode_violation(old_path, "BASE")]
         return _sorted([_removed_violation(f) for f in b.facts if f.kind == TEST])
-    t = analyze(target, target_path)
-    if t.decode_error or b.decode_error:
-        return [_decode_violation(target_path, "TARGET" if t.decode_error else "BASE")]
+    t = target
+    if t.decode_error:
+        return [_decode_violation(target_path, "TARGET")]
     key = _symbol_key(b, t, renamed)
     degraded, dead = _degraded(b, t, target_path, key)  # only symbols that already block are skipped below
     out = _Findings(target_path, exceptions)
