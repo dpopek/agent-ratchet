@@ -350,3 +350,74 @@ def test_covered_rows_released_elsewhere_never_offset_new_coverage(case: str) ->
 @pytest.mark.parametrize("case", sorted(_ROUND4_PASS))
 def test_new_code_or_moved_windows_with_their_rows_still_pass(case: str) -> None:
     assert _cats_ext(*_ROUND4_PASS[case]) == []
+
+
+# --- I2 residual round 5: bound tags, bound recognition and inline HTML granularity (probed on PHPCS 3 and 4) ----
+
+_ROUND5 = {
+    'TG1': (
+        '<div>\n<?php\n// phpcs:disable Generic.PHP.CharacterBeforePHPOpeningTag\nfoo();\n?>\n</div>\n',
+        '<div>\n<?php // phpcs:disable Generic.PHP.CharacterBeforePHPOpeningTag\nfoo();\n?>\n</div>\n',
+        'phtml',
+    ),
+    'TG1b': (
+        '<p>a</p>\n\t<?php\n// phpcs:disable Generic.WhiteSpace.DisallowTabIndent\nfoo();\n?>\n',
+        '<p>a</p>\n\t<?php // phpcs:disable Generic.WhiteSpace.DisallowTabIndent\nfoo();\n?>\n',
+        'phtml',
+    ),
+    'TG2b': (
+        '<?php\r\n// phpcs:disable Generic.Files.LineEndings\r\nfoo();\r\n',
+        '<?php // phpcs:disable Generic.Files.LineEndings\r\nfoo();\r\n',
+        'php',
+    ),
+    'BC1b': (
+        '<?php // phpcs:disable Generic.WhiteSpace.DisallowTabIndent ?>\n<p>a</p>\n<?php // phpcs:enable ?>\n\t<?php /* see phpcs: docs */ ?>\n',
+        '<?php // phpcs:disable Generic.WhiteSpace.DisallowTabIndent ?>\n<p>a</p>\n\t<?php /* see phpcs: docs */ ?>\n<?php // phpcs:enable ?>\n',
+        'phtml',
+    ),
+    'HE1': (
+        '<div>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>z</p>\n<?php // phpcs:enable ?>\n</div>\n',
+        '<div>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<p>z</p>\n<?php // phpcs:enable ?>\n</div>\n',
+        'phtml',
+    ),
+    'HE2': (
+        '<div>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>z</p>\n<?php // phpcs:enable ?>\n</div>\n',
+        '<div>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p><p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<p>z</p>\n<?php // phpcs:enable ?>\n</div>\n',
+        'phtml',
+    ),
+    'PH3': (
+        '<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php\n// phpcs:disable Generic.Files.LineLength\n?>\n<p>x</p>\n',
+        '<?php\n// phpcs:disable Generic.Files.LineLength\n?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<p>x</p>\n',
+        'phtml',
+    ),
+    'PH4': (
+        '<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>a</p>\n<?php\n// phpcs:enable\n?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<p>x</p>\n',
+        '<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>a</p>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php\n// phpcs:enable\n?>\n<p>x</p>\n',
+        'phtml',
+    ),
+}
+
+_ROUND5_PASS = {
+    'NZ1': (
+        '<ul>\n<li>a</li>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<li>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</li>\n<?php // phpcs:enable ?>\n</ul>\n',
+        '<ul>\n<li>b</li>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<li>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</li>\n<li>c</li>\n<?php // phpcs:enable ?>\n</ul>\n',
+        'phtml',
+    ),
+    'NZ2': (
+        '<ul>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<li>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</li>\n<?php // phpcs:enable ?>\n<li>b</li>\n</ul>\n',
+        '<ul>\n<li>new</li>\n<li>b</li>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<li>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</li>\n<?php // phpcs:enable ?>\n</ul>\n',
+        'phtml',
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_ROUND5))
+def test_tag_rows_html_edits_and_bound_blocks_pulled_in_are_expanded(case: str) -> None:
+    # TG: a disable joined onto an open-tag row; BC1b: `phpcs:` mid-text is no bound; HE: an HTML row edited or
+    # merged while pulled in; PH3/PH4: a multi-row `<?php // phpcs:… ?>` block moved across HTML
+    assert _cats_ext(*_ROUND5[case]) == [EXPANDED]
+
+
+@pytest.mark.parametrize("case", sorted(_ROUND5_PASS))
+def test_new_html_and_windows_moved_among_repeated_tags_pass(case: str) -> None:
+    assert _cats_ext(*_ROUND5_PASS[case]) == []

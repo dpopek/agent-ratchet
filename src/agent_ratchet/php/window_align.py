@@ -1,8 +1,8 @@
 """phpcs window growth by token alignment (spec R6, I2).
 
-TARGET leaf tokens (comments and inline HTML rows included, whitespace ignored) are aligned to BASE tokens by their
+TARGET leaf tokens (comments and inline HTML tags and words included, whitespace ignored) are aligned to BASE tokens by their
 (type, text) sequence. Window bounds are not code and are left out, so a moved bound never displaces the alignment
-of the code it moved over: comments that carry phpcs directives, and the `<?php` / `?>` tags on their rows. Every
+of the code it moved over: phpcs directive comments, and the `<?php` / `?>` pair that encloses one alone. Every
 token row on a covered TARGET row that aligns to a BASE token must have been covered in BASE by windows with an
 equal or broader code set; unaligned tokens are inserted code. Nothing offsets growth: PHPCS suppresses every
 covered row, so rows a window releases elsewhere do not count. Multi-row tokens (strings, heredocs) are checked
@@ -19,19 +19,24 @@ from difflib import SequenceMatcher
 Token = tuple[str, bytes, int, int]  # type, text, first row, last row
 Span = tuple[int, tuple[str, ...], int, int]  # disable line, codes, first covered row, end row (exclusive)
 _ALL = None  # a window without codes covers every code
-_BOUND = re.compile(rb"phpcs:|@codingStandardsIgnore", re.IGNORECASE)
-_TAGS = frozenset({"php_tag", "php_end_tag"})
+# a comment line that starts (after ` \t/*#` and an optional `@`) with a phpcs keyword (R4 G2, G6)
+_BOUND = re.compile(rb"^[ \t/*#]*@?(?:phpcs:|codingStandardsIgnore)", re.IGNORECASE | re.MULTILINE)
+
+
+def _is_bound(tok: Token) -> bool:
+    return tok[0] == "comment" and _BOUND.search(tok[1]) is not None
 
 
 def alignable(tokens: Sequence[Token]) -> tuple[Token, ...]:
-    """Tokens that take part in the alignment: everything except window bounds (phpcs directive comments and the
-    PHP open/close tags on their rows)."""
-    bound = {t[2] for t in tokens if t[0] == "comment" and _BOUND.search(t[1])}
-    return tuple(
-        t
-        for t in tokens
-        if not ((t[0] == "comment" and _BOUND.search(t[1])) or (t[0] in _TAGS and t[2] in bound))
-    )
+    """Tokens that take part in the alignment: everything except window bounds, i.e. phpcs directive comments and
+    the `<?php` / `?>` pair around a bound comment that stands alone between them."""
+    drop: set[int] = set()
+    for k, tok in enumerate(tokens):
+        if _is_bound(tok):
+            drop.add(k)
+            if 0 < k < len(tokens) - 1 and tokens[k - 1][0] == "php_tag" and tokens[k + 1][0] == "php_end_tag":
+                drop |= {k - 1, k + 1}
+    return tuple(t for k, t in enumerate(tokens) if k not in drop)
 
 
 def _offsets(tok: Token, start: int, end: int) -> range:

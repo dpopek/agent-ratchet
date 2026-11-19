@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -107,18 +108,20 @@ def line_hash(root: Any, source: bytes, row: int) -> str:
     return _digest(tokens) if tokens else EMPTY_LINE
 
 
+_HTML_TOKEN = re.compile(rb"<[^<>]*>?|[^<>\s]+|>")
+
+
 def token_rows(root: Any, source: bytes) -> tuple[tuple[str, bytes, int, int], ...]:
-    """`(type, text, first row, last row)` of every leaf token, comments and inline HTML rows included, in source order
+    """`(type, text, first row, last row)` of every leaf token, comments and inline HTML tags and words included, in source order
     (spec R6, I2)."""
     out: list[tuple[str, bytes, int, int]] = []
     stack = [root]
     while stack:
         cur = stack.pop()
-        if cur.type == "text":  # inline HTML: one token per row, so a moved bound tag never merges two rows
-            row = cur.start_point.row
+        if cur.type == "text":  # inline HTML: tags and words per row, so an edit or a moved bound tag never
+            row = cur.start_point.row  # merges rows or hides the unchanged neighbours
             for k, seg in enumerate(source[cur.start_byte : cur.end_byte].split(b"\n")):
-                if tok := b" ".join(seg.split()):
-                    out.append(("text", tok, row + k, row + k))
+                out.extend(("text", b" ".join(m.split()), row + k, row + k) for m in _HTML_TOKEN.findall(seg))
         elif cur.child_count == 0 or cur.type == "comment":
             tok = _token(cur, source)
             if tok:
