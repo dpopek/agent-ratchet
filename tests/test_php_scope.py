@@ -93,3 +93,25 @@ def test_php_profile_active() -> None:
     assert php_profile_active({"languages": [], "frameworks": ["magento"]})
     assert not php_profile_active({"languages": [], "frameworks": []})
     assert not php_profile_active({})
+
+
+def test_pair_entries_marks_only_two_sided_renames_and_copies() -> None:
+    from agent_ratchet.php.scan import pair_entries
+
+    paths = ["app/code/"]
+    entries = [
+        ("R100", "app/code/A/B/X.php", "app/code/A/C/X.php"),
+        ("C090", "lib/X.php", "app/code/A/B/Y.php"),
+        ("C090", "app/code/A/B/X.php", "app/code/A/B/Z.php"),
+        ("A", "app/code/A/B/N.php", "app/code/A/B/N.php"),
+        ("D", "app/code/A/B/O.php", "app/code/A/B/O.php"),
+        ("M", "app/code/A/B/M.php", "app/code/A/B/M.php"),
+    ]
+    assert pair_entries(entries, paths) == [
+        ("app/code/A/B/X.php", "app/code/A/C/X.php", True),
+        (None, "app/code/A/B/Y.php", False),
+        ("app/code/A/B/X.php", "app/code/A/B/Z.php", True),
+        (None, "app/code/A/B/N.php", False),
+        ("app/code/A/B/O.php", None, False),
+        ("app/code/A/B/M.php", "app/code/A/B/M.php", False),
+    ]

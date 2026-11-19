@@ -48,6 +48,30 @@ def _keep(symbol: str) -> str:
     return symbol
 
 
+def _all_symbols(an: Analysis) -> set[str]:
+    return set(an.symbols) | {_symbol(f) for f in an.facts}
+
+
+def _symbol_key(b: Analysis, t: Analysis, renamed: bool) -> Callable[[str], str]:
+    """Grouping key: namespace stripped for `R`/`C` entries, unless the stripped symbol is ambiguous on either side.
+
+    Ambiguity is decided per declaration head (the part before `::`), so a class and its methods share one key form.
+    """
+    if not renamed:
+        return _keep
+    clash: set[str] = set()
+    for an in (b, t):
+        heads = {s.partition("::")[0] for s in _all_symbols(an)}
+        seen: Counter[str] = Counter(_strip_namespace(h) for h in heads)
+        clash |= {h for h, n in seen.items() if n > 1}
+
+    def key(symbol: str) -> str:
+        short = _strip_namespace(symbol)
+        return symbol if short.partition("::")[0] in clash else short
+
+    return key
+
+
 def _under(symbol: str, dead: set[str]) -> bool:
     return symbol in dead or any(d != FILE_SYMBOL and symbol.startswith(d + "::") for d in dead)
 
@@ -103,9 +127,13 @@ def _same_directive(x: CanonicalFact, y: CanonicalFact) -> bool:
 
 
 def _points(
-    base: list[CanonicalFact], target: list[CanonicalFact], out: _Findings, key: Callable[[str], str], present: set[str]
+    base: list[CanonicalFact],
+    target: list[CanonicalFact],
+    out: _Findings,
+    key: Callable[[str], str],
+    present: tuple[set[str], set[str]],
 ) -> None:
-    """`present`: keyed symbols that still have a declaration or facts in TARGET (an origin there was not renamed)."""
+    """`present`: keyed symbols with a declaration or facts in (BASE, TARGET)."""
     groups: dict[tuple[str, str], tuple[list[CanonicalFact], list[CanonicalFact]]] = {}
     for side, facts in ((0, base), (1, target)):
         for f in facts:
@@ -124,8 +152,12 @@ def _points(
             flagged.append(x)
         left_base.extend(b)
         left_target.extend(t)
-    # Renamed declaration (R6): an unchanged directive pairs across symbols only when its BASE symbol is gone.
-    _pair([f for f in left_base if key(f.identity["symbol"]) not in present], left_target, _same_directive)
+    # Renamed declaration (R6): an unchanged directive pairs across symbols only from a gone origin to a new destination.
+    in_base, in_target = present
+    gone = [f for f in left_base if key(f.identity["symbol"]) not in in_target]
+    new = [f for f in left_target if key(f.identity["symbol"]) not in in_base]
+    for x, _ in _pair(gone, new, _same_directive):
+        left_target.remove(x)
     for x in left_target:
         out.add(ADDED, x)
         flagged.append(x)
@@ -220,17 +252,19 @@ def compare_php_tests_across(removed: list[CanonicalFact], added: list[Canonical
     return sorted((_removed_violation(f) for f in _unmatched_removed(removed, added)), key=lambda v: (v.file, v.line, v.message))
 
 
-def _degraded(b: Analysis, t: Analysis, path: str) -> tuple[list[SlopViolation], set[str]]:
+def _degraded(b: Analysis, t: Analysis, path: str, key: Callable[[str], str]) -> tuple[list[SlopViolation], set[str]]:
+    """Parse-degraded findings and the keyed symbols they make dead."""
     lines = {f.identity["symbol"]: f.origin.line or 1 for f in reversed(t.facts) if f.kind == GAP}
+    base_gaps = {key(s): digest for s, digest in b.gap_hashes.items()}
     out: list[SlopViolation] = []
     dead: set[str] = set()
     for symbol, digest in sorted(t.gap_hashes.items()):
-        gap = FactState("unknown", symbol, digest, loss_reason="syntax_error")
+        gap = FactState("unknown", key(symbol), digest, loss_reason="syntax_error")
         # An unchanged symbol that already had the gap is unknown -> unknown; anything else was readable before.
-        before = gap if b.gap_hashes.get(symbol) == digest else FactState("pass", symbol, "readable-or-different")
+        before = gap if base_gaps.get(key(symbol)) == digest else FactState("pass", key(symbol), "readable-or-different")
         if evaluate(before, gap, ctx_delta=False).code == "degraded_epistemic":
             out.append(SlopViolation(path, lines.get(symbol, 1), DEGRADED, f"PHP parse gap in changed code: {symbol}", symbol))
-            dead.add(symbol)
+            dead.add(key(symbol))
     return out, dead
 
 
@@ -239,8 +273,8 @@ def _decode_violation(path: str, side: str) -> SlopViolation:
     return SlopViolation(path, 1, DEGRADED, msg, side)
 
 
-def _live(an: Analysis, kind: str, dead: set[str]) -> list[CanonicalFact]:
-    return [f for f in an.facts if f.kind == kind and not _under(_symbol(f), dead)]
+def _live(an: Analysis, kind: str, dead: set[str], key: Callable[[str], str]) -> list[CanonicalFact]:
+    return [f for f in an.facts if f.kind == kind and not _under(key(_symbol(f)), dead)]
 
 
 def _sorted(items: list[SlopViolation]) -> list[SlopViolation]:
@@ -270,14 +304,14 @@ def compare_php_entry(
     t = analyze(target, target_path)
     if t.decode_error or b.decode_error:
         return [_decode_violation(target_path, "TARGET" if t.decode_error else "BASE")]
-    degraded, dead = _degraded(b, t, target_path)  # only symbols that already block are skipped below
+    key = _symbol_key(b, t, renamed)
+    degraded, dead = _degraded(b, t, target_path, key)  # only symbols that already block are skipped below
     out = _Findings(target_path, exceptions)
 
     def pick(kind: str) -> tuple[list[CanonicalFact], list[CanonicalFact]]:
-        return _live(b, kind, dead), _live(t, kind, dead)
+        return _live(b, kind, dead, key), _live(t, kind, dead, key)
 
-    key = _strip_namespace if renamed else _keep
-    present = {key(s) for s in t.symbols} | {key(_symbol(f)) for f in t.facts} | {FILE_SYMBOL}
+    present = ({key(s) for s in _all_symbols(b)} | {FILE_SYMBOL}, {key(s) for s in _all_symbols(t)} | {FILE_SYMBOL})
     _points(*pick(POINT), out, key, present)
     _windows(*pick(WINDOW), out, key)
     _files(*pick(FILE), out)

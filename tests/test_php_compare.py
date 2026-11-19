@@ -14,9 +14,13 @@ def _cats(base, target, *, base_path=PATH, target_path=None, exceptions=(), rena
     from agent_ratchet.php.compare import compare_php_entry
 
     enc = lambda s: s.encode() if isinstance(s, str) else s
-    extra = {"renamed": True} if renamed else {}
     found = compare_php_entry(
-        None if base is None else enc(base), None if target is None else enc(target), base_path, target_path or PATH, exceptions, **extra
+        None if base is None else enc(base),
+        None if target is None else enc(target),
+        base_path,
+        target_path or PATH,
+        exceptions,
+        renamed=renamed,
     )
     return [v.category for v in found]
 
@@ -392,8 +396,50 @@ def test_move_to_identical_statement_in_other_existing_method_is_added() -> None
 def test_non_rename_pair_keeps_full_symbol() -> None:
     # Namespace edited in place and the ignored line edited: without R status the symbols differ, so the directive is a
     # new identity (added); the same edit under a rename strips the namespace and is a re-pointed identity (rebound).
-    # A namespace-only in-place edit passes through the renamed-declaration clause (origin symbol gone), not the strip.
+    # A namespace-only in-place edit passes through the renamed-declaration clause (origin gone, destination new), not
+    # the strip.
     base = _cart(_IGNORED)
     target = _cart("// phpcs:ignore Generic.Sample.Rule\na(1);\nb();", ns="Acme\\Shop\\Checkout\\Model")
     assert _cats(base, target, base_path=_OLD_PATH, target_path=_OLD_PATH) == ["php_suppression_added"]
     assert _moved(base, target) == ["php_suppression_rebound"]
+
+
+# --- task 10a fix round 1: new destination required, unique strip, keyed parse gaps -------------
+
+_FUNCS = "<?php\nnamespace Acme\\Shop\\Model;\n%s"
+_FN = "function %s() {\n%s    f();\n}\n"
+_IG = "    // phpcs:ignore Generic.Sample.Rule\n"
+
+
+def test_rename_origin_and_move_directive_to_existing_method_is_added() -> None:
+    base = _FUNCS % (_FN % ("a", _IG) + _FN % ("b", ""))
+    target = _FUNCS % (_FN % ("a2", "") + _FN % ("b", _IG))
+    assert _cats(base, target, base_path=_OLD_PATH, target_path=_OLD_PATH) == ["php_suppression_added"]
+
+
+def test_delete_origin_and_move_directive_to_existing_method_is_added() -> None:
+    base = _FUNCS % (_FN % ("a", _IG) + _FN % ("b", ""))
+    target = _FUNCS % (_FN % ("b", _IG))
+    assert _cats(base, target, base_path=_OLD_PATH, target_path=_OLD_PATH) == ["php_suppression_added"]
+
+
+def _braced(a_body: str, b_body: str, prefix: str = "Acme\\Shop") -> str:
+    cls = "namespace %s\\%s {\nclass Cart {\n    public function run() {\n%s        a();\n    }\n}\n}\n"
+    return "<?php\n" + cls % (prefix, "A", a_body) + cls % (prefix, "B", b_body)
+
+
+def test_braced_namespaces_same_class_name_keep_full_symbol_under_rename() -> None:
+    ig = "        // phpcs:ignore Generic.Sample.Rule\n"
+    assert _moved(_braced(ig, ""), _braced("", ig)) == ["php_suppression_added"]
+    assert _moved(_braced(ig, ""), _braced(ig, "")) == []
+    other = "    public function x() {\n        // phpcs:ignore Generic.Sample.Rule\n        a();\n    }\n"
+    only_a = _braced("", "").replace("class Cart {\n", "class Cart {\n" + other, 1)
+    assert _moved(_braced("", ""), only_a) == ["php_suppression_added"]
+
+
+def test_unchanged_gap_in_renamed_namespace_file_passes() -> None:
+    body = "$a = 1;\nreturn foo(;"
+    base = _cart(body)
+    target = _cart(body, ns="Acme\\Shop\\Checkout\\Model")
+    assert _moved(base, target) == []
+    assert _cats(base, target, base_path=_OLD_PATH, target_path=_NEW_PATH) == ["php_parse_degraded"]
