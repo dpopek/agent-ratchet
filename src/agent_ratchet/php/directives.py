@@ -12,10 +12,15 @@ FILE_SYMBOL = "<file>"
 _CLASS_LIKE = {"class_declaration", "interface_declaration", "trait_declaration", "enum_declaration"}
 _CALLABLE = {"method_declaration", "function_definition"}
 _NOT_ANCHORS = {"compound_statement", "namespace_definition"}
-_PHPSTAN = re.compile(r"@phpstan-ignore(-next-line|-line)?(?![\w-])")
-_PHPCS = re.compile(r"phpcs:([A-Za-z]+)")
-_LEGACY = re.compile(r"@codingStandardsIgnore(Line|Start|End|File)\b")
-_PSALM = re.compile(r"@psalm-suppress\b")
+_DIRECTIVE = re.compile(
+    r"(?P<stan>@phpstan-ignore(?P<suffix>-next-line|-line)?(?![\w-]))"
+    r"|phpcs:(?P<cs>[a-z]+)"
+    r"|@codingStandardsIgnore(?P<legacy>Line|Start|End|File)\b"
+    r"|(?P<psalm>@psalm-suppress\b)",
+    re.IGNORECASE,
+)
+_PHPCS_FORMS = {"ignore": "point", "disable": "disable", "enable": "enable", "ignorefile": "file"}
+_LEGACY_FORMS = {"line": "point", "start": "disable", "end": "enable", "file": "file"}
 _PAREN = re.compile(r"\([^)]*\)")
 
 
@@ -58,6 +63,7 @@ class _Raw:
     codes: tuple[str, ...]
     comment: Any
     line: int
+    next_line: bool = False
 
 
 def _strict(source: bytes, start: int, end: int) -> str:
@@ -157,33 +163,29 @@ def _comment_lines(text: str) -> list[tuple[int, str]]:
     return out
 
 
-def _scan_line(line: str) -> tuple[str, str, tuple[str, ...]] | None:
-    """Return (form, tool, codes) for the first directive on a line."""
-    hits: list[tuple[int, str, str, tuple[str, ...]]] = []
-    if m := _PHPSTAN.search(line):
-        codes = () if m.group(1) else _split_codes(line[m.end() :])
-        hits.append((m.start(), "point", "phpstan", codes))
-    if m := _PHPCS.search(line):
-        word, codes = m.group(1), _split_codes(line[m.end() :])
-        if word == "ignore":
-            hits.append((m.start(), "point", "phpcs", codes))
-        elif word == "disable":
-            hits.append((m.start(), "disable", "phpcs", codes))
-        elif word == "enable":
-            hits.append((m.start(), "enable", "phpcs", codes))
-        elif word == "ignoreFile":
-            hits.append((m.start(), "file", "phpcs", codes))
+def _scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], bool]]:
+    """Return (form, tool, codes, next_line) for every directive on a line, in order."""
+    matches = list(_DIRECTIVE.finditer(line))
+    out: list[tuple[str, str, tuple[str, ...], bool]] = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(line)
+        rest = line[m.end() : end]
+        if m.group("stan") is not None:
+            suffix = (m.group("suffix") or "").lower()
+            codes = () if suffix else _split_codes(rest)
+            out.append(("point", "phpstan", codes, suffix == "-next-line"))
+        elif m.group("cs") is not None:
+            form = _PHPCS_FORMS.get(m.group("cs").lower())
+            if form is None:
+                out.append(("unknown", "phpcs-unknown", _split_codes(rest), False))
+            else:
+                out.append((form, "phpcs", _split_codes(rest), False))
+        elif m.group("legacy") is not None:
+            form = _LEGACY_FORMS[m.group("legacy").lower()]
+            out.append((form, "phpcs", (), False))
         else:
-            hits.append((m.start(), "unknown", "phpcs-unknown", codes))
-    if m := _LEGACY.search(line):
-        form = {"Line": "point", "Start": "disable", "End": "enable", "File": "file"}[m.group(1)]
-        hits.append((m.start(), form, "phpcs", ()))
-    if m := _PSALM.search(line):
-        hits.append((m.start(), "point", "psalm", _split_codes(line[m.end() :])))
-    if not hits:
-        return None
-    _, form, tool, codes = min(hits, key=lambda h: h[0])
-    return form, tool, codes
+            out.append(("point", "psalm", _split_codes(rest), False))
+    return out
 
 
 def _walk(root: Any) -> tuple[list[Any], list[Any]]:
@@ -208,10 +210,12 @@ def _is_trailing(comment: Any, source: bytes) -> bool:
     return bool(source[line_start : comment.start_byte].strip())
 
 
-def _anchor_for(comment: Any, line_row: int, source: bytes, anchors: list[Any]) -> Any | None:
+def _anchor_for(
+    comment: Any, line_row: int, source: bytes, anchors: list[Any], next_line: bool = False
+) -> Any | None:
     if _has_error_ancestor(comment):
         return None
-    if _is_trailing(comment, source):
+    if _is_trailing(comment, source) and not next_line:
         best = None
         for node in anchors:
             if node.start_point.row <= line_row <= node.end_point.row and (
@@ -232,11 +236,8 @@ def _scan_comments(comments: list[Any], source: bytes) -> list[_Raw]:
     for comment in comments:
         text = source[comment.start_byte : comment.end_byte].decode("utf-8", errors="replace")
         for offset, line in _comment_lines(text):
-            hit = _scan_line(line)
-            if hit is None:
-                continue
-            form, tool, codes = hit
-            raws.append(_Raw(form, tool, codes, comment, comment.start_point.row + offset))
+            for form, tool, codes, nxt in _scan_line(line):
+                raws.append(_Raw(form, tool, codes, comment, comment.start_point.row + offset, nxt))
     return raws
 
 
@@ -259,7 +260,7 @@ def collect(
         row = raw.line
         line_no = row + 1
         if raw.form in ("point", "unknown"):
-            anchor = _anchor_for(raw.comment, row, source, anchors)
+            anchor = _anchor_for(raw.comment, row, source, anchors, raw.next_line)
             tool = raw.tool
             points.append(
                 PointSuppression(

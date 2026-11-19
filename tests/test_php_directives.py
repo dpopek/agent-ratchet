@@ -141,3 +141,38 @@ def test_non_utf8_identifier_is_degraded_not_crash():
     src = b"<?php\nnamespace A\\B;\nclass C\xff {\n    public function m() {\n        // phpcs:ignore\n        run();\n    }\n}\n"
     with pytest.raises(PhpDecodeError):
         _collect(src)
+
+
+def test_directives_are_case_insensitive():
+    pts, _, _ = _collect(_wrap("        // PHPCS:ignore A.X\n        run();"))
+    assert [(p.tool, p.codes) for p in pts] == [("phpcs", ("A.X",))]
+    _, wins, _ = _collect("<?php\n// PhpCs:Disable\n$a = 1;\n// PhpCs:Enable\n$b = 2;\n")
+    assert len(wins) == 1 and wins[0].closed and len(wins[0].statements) == 1
+    pts, _, files = _collect("<?php\n// PHPCS:IGNOREFILE\n// @CodingStandardsIgnoreLine\n$a = 1;\n")
+    assert [f.tool for f in files] == ["phpcs"] and pts[0].anchor_kind == "expression_statement"
+    pts, _, _ = _collect(_wrap("        run(); // @PHPStan-Ignore-Line"))
+    assert [(p.tool, p.codes) for p in pts] == [("phpstan", ())]
+    pts, _, _ = _collect(_wrap("        // PHPCS:Bogus\n        run();"))
+    assert pts[0].tool == "phpcs-unknown"
+
+
+def test_directive_inside_reason_is_still_recorded():
+    base, _, _ = _collect(_wrap("        run(); // phpcs:ignore X.Y -- because"))
+    tgt, _, _ = _collect(_wrap("        run(); // phpcs:ignore X.Y -- @phpstan-ignore-line"))
+    assert [p.tool for p in base] == ["phpcs"]
+    assert sorted((p.tool, p.codes) for p in tgt) == [("phpcs", ("X.Y",)), ("phpstan", ())]
+
+
+def test_multiple_directives_on_one_line_split_codes():
+    pts, _, _ = _collect(
+        _wrap("        /** @psalm-suppress A @phpstan-ignore x.y */\n        run();")
+    )
+    assert sorted((p.tool, p.codes) for p in pts) == [("phpstan", ("x.y",)), ("psalm", ("A",))]
+
+
+def test_trailing_next_line_anchors_next_statement():
+    a, _, _ = _collect(_wrap("        a(); // @phpstan-ignore-next-line\n        b();"))
+    b, _, _ = _collect(_wrap("        a(); // @phpstan-ignore-next-line\n        bad();"))
+    own, _, _ = _collect(_wrap("        a();\n        // @phpstan-ignore-next-line\n        b();"))
+    assert a[0].anchor_hash != b[0].anchor_hash
+    assert a[0].anchor_hash == own[0].anchor_hash
