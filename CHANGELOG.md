@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: on Windows the git blob reader no longer crashes the scan; it reads one-shot instead of batching.
+
 ## 4.0.0
 
 - Removed: guard_core package (tombstone), guard-core command, GUARD_VERSION, SELF_SKIP_NAMES, RELEASE_TAG_PATTERN.
