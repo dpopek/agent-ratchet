@@ -40,6 +40,7 @@ class PointSuppression:
     anchor_kind: str | None
     anchor_hash: str | None
     line: int
+    header_hash: str | None = None  # phpmd only: full declaration header, gates cross-symbol pairing
 
 
 @dataclass(frozen=True)
@@ -337,7 +338,10 @@ def collect(
         decl = None if _has_error_ancestor(comment) else phpmd.declaration_after(comment, source)
         for codes, row in phpmd.annotations(comment, source):
             kind, digest = (None, None) if decl is None else (decl.type, declaration_name_hash(decl, source))
-            points.append(PointSuppression(scope(comment if decl is None else decl), "phpmd", codes, kind, digest, row + 1))
+            header = None if decl is None else header_hash(decl, source)
+            points.append(
+                PointSuppression(scope(comment if decl is None else decl), "phpmd", codes, kind, digest, row + 1, header)
+            )
     windows = [_window(w, anchors, source, closed=True) for w in done]
     windows += [_window(w, anchors, source, closed=False) for w in open_windows]
     windows.sort(key=lambda w: (w.line, w.symbol, w.codes))

@@ -60,7 +60,7 @@ def test_phpmd_multiple_in_one_docblock():
     assert pts[0].anchor_hash is not None and pts[0].anchor_hash == pts[1].anchor_hash
 
 
-def test_phpmd_anchor_header_only():
+def test_phpmd_anchor_ignores_body_and_formatting():
     doc = "/** @SuppressWarnings(PHPMD.UnusedLocalVariable) */"
     (base,) = _phpmd(_method(doc))
     (body_edit,) = _phpmd(_method(doc, body="$unused = 1;\n        return $a + 1;"))
@@ -196,3 +196,44 @@ def test_phpmd_unshadowed_docblock_is_flagged():  # review probes E2, E2b
     assert "php_suppression_added" in _cats(base, _cart(f"    {SW}\n" + _fn("a")))
     base_cls = _cart(_fn("a"), head=f"{SW}\n/** Plain. */\n")
     assert "php_suppression_added" in _cats(base_cls, _cart(_fn("a"), head=f"{SW}\n"))
+
+
+# --- cross-symbol pairing needs an equal declaration header (task 10f fix round 1) ------------
+
+_SW = "/** @SuppressWarnings(PHPMD.UnusedLocalVariable) */"
+
+
+def _cats(base: str, target: str) -> list[str]:
+    require_php()
+    from agent_ratchet.php.compare import compare_php_entry
+
+    path = "app/code/Acme/Shop/Model/Cart.php"
+    found = compare_php_entry(base.encode(), target.encode(), path, path, (), renamed=False)
+    return [v.category for v in found]
+
+
+def _cls(name: str, sig: str = "public function m(int $a): int", body: str = "return $a;", doc: str = _SW) -> str:
+    return f"class {name} {{\n    {doc}\n    {sig}\n    {{\n        {body}\n    }}\n}}\n"
+
+
+_HEAD = "<?php\nnamespace Acme\\Shop;\n"
+
+
+def test_phpmd_deleted_class_recreated_with_other_header_is_added():
+    base = _HEAD + _cls("A")
+    target = _HEAD + _cls("B", sig="protected function m(string $s, int $n): string", body="return $s;")
+    assert _cats(base, target) == ["php_suppression_added"]
+
+
+def test_phpmd_deleted_method_recreated_elsewhere_with_other_header_is_added():
+    base = _HEAD + _cls("A") + "class Keep {}\n"
+    target = _HEAD + "class A {}\n" + _cls("B", sig="protected function m(string $s): string", body="return $s;")
+    assert _cats(base, target) == ["php_suppression_added"]
+
+
+def test_phpmd_pure_class_rename_with_identical_header_pairs():
+    assert _cats(_HEAD + _cls("A"), _HEAD + _cls("B", body="$x = 1;\n        return $a;")) == []
+
+
+def test_phpmd_same_symbol_header_change_still_passes():
+    assert _cats(_HEAD + _cls("A"), _HEAD + _cls("A", sig="protected function m(int $a, int $b): ?int")) == []

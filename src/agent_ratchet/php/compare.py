@@ -123,7 +123,13 @@ _MESSAGES = {
 
 
 def _same_directive(x: CanonicalFact, y: CanonicalFact) -> bool:
-    return x.identity["tool"] == y.identity["tool"] and _codes(x) == _codes(y) and _anchor(x) == _anchor(y)
+    """Cross-symbol pairing; phpmd (name-only anchor) also needs an equal full declaration header."""
+    return (
+        x.identity["tool"] == y.identity["tool"]
+        and _codes(x) == _codes(y)
+        and _anchor(x) == _anchor(y)
+        and x.payload.get("header_hash") == y.payload.get("header_hash")
+    )
 
 
 def _points(
