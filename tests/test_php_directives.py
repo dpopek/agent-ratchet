@@ -76,7 +76,7 @@ def test_legacy_ignore_line_start_end_file():
     assert [(f.tool, f.codes) for f in files] == [("phpcs", ())]
     assert pts[0].tool == "phpcs" and pts[0].anchor_kind == "expression_statement"
     (w,) = wins
-    assert w.closed is True and len(w.statements) == 2
+    assert w.closed is False and len(w.statements) == 3  # PHPCS 4 honours no legacy End, so the window runs to EOF
 
 
 def test_phpcs_keyword_prefix_semantics():
@@ -146,7 +146,7 @@ def test_phpcs_enable_closes_only_on_phpcs_code_match(enable, closes):
         ("/* phpcs:enable */", True),
         ("/**\n * note\n * phpcs:enable\n */", True),
         ("/*\n   phpcs:enable A.B */", True),
-        ("// note @codingStandardsIgnoreEnd", True),  # legacy form: PHPCS uses strpos, so mid-text still counts
+        ("// note @codingStandardsIgnoreEnd", False),  # PHPCS 4 ignores legacy annotations: End closes nothing
         # PHPCS trims only " \t/*#" before a keyword: NBSP or form feed makes it mid-text (G2/G6, probed 4.0.4)
         ("//  phpcs:enable", False),
         ("//\u000cphpcs:enable", False),

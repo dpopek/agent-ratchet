@@ -23,7 +23,8 @@ _DIRECTIVE = re.compile(
 )
 # PHPCS prefix-matches its keywords in this order (Tokenizer::createPositionMap); `set` is not modelled.
 _PHPCS_FORMS = (("set", None), ("ignorefile", "file"), ("disable", "disable"), ("enable", "enable"), ("ignore", "point"))
-_LEGACY_FORMS = {"line": "point", "start": "disable", "end": "enable", "file": "file"}
+# PHPCS 4 honours no legacy annotation; `End` closes nothing, so only the stricter forms are modelled (I1, 19.11).
+_LEGACY_FORMS = {"line": "point", "start": "disable", "end": None, "file": "file"}
 _PAREN = re.compile(r"\([^)]*\)")
 _PHP_TRIM = " \t\n\r\0\x0b"  # PHP trim() default set
 _PHP_TAGS = re.compile(rb"<\?(?:php)?(?=\s|$)|\?>", re.IGNORECASE)  # T_OPEN_TAG (not `<?=`) and T_CLOSE_TAG
@@ -206,7 +207,8 @@ def _scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], bool]]:
                 out.append((form, "phpcs", _phpcs_codes(word[len(keyword) + 1 :]), False))
         elif m.group("legacy") is not None:
             form = _LEGACY_FORMS[m.group("legacy").lower()]
-            out.append((form, "phpcs", (), False))
+            if form is not None:
+                out.append((form, "phpcs", (), False))
         else:
             out.append(("point", "psalm", _split_codes(rest), False))
     return out
