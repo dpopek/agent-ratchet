@@ -318,6 +318,7 @@ def test_config_file_option_still_honoured_with_lock(tmp_path: Path) -> None:
 
 
 def test_env_override_ignored_by_baseline_integrity_with_lock(tmp_path: Path) -> None:
+    require_php()
     repo, base, _head = _lock_repo(tmp_path, True, True)
     off = _write_config(tmp_path / "cfg" / "off.json", {"no_such_key": 1})
     proc = _run_baseline_guard(repo, "--base-ref", base, extra_env={"AGENT_RATCHET_CONFIG": str(off)})
@@ -326,6 +327,7 @@ def test_env_override_ignored_by_baseline_integrity_with_lock(tmp_path: Path) ->
 
 
 def test_env_override_ignored_when_lock_only_inside_commit_range(tmp_path: Path) -> None:
+    require_php()
     repo, base, head = _lock_repo(tmp_path, False, True)
     _git(repo, "rm", "-q", LOCK)
     tip = _commit_files(repo, "drop lock", {"a.txt": "1\n"})
