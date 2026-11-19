@@ -16,7 +16,7 @@ from agent_ratchet.php.directives import (
     namespace_resolver,
     symbol_path,
 )
-from agent_ratchet.php.parser import NORM_DOMAIN, ParsedPhp, norm_hash, parse_php
+from agent_ratchet.php.parser import NORM_DOMAIN, ParsedPhp, parse_php
 from agent_ratchet.php.phpunit import collect_tests
 
 POINT, WINDOW, FILE = "php.suppression.point", "php.suppression.window", "php.suppression.file"
@@ -48,6 +48,11 @@ def _walk(node: Any):
         stack.extend(reversed(cur.children))
 
 
+def _raw_hash(node: Any, source: bytes) -> str:
+    """Hash of a symbol's exact bytes: comments count, because directives and docblock tags live in them."""
+    return hashlib.sha256(NORM_DOMAIN + b"raw\0" + source[node.start_byte : node.end_byte]).hexdigest()
+
+
 def _file_hash(root: Any, source: bytes) -> str:
     """Hash of top-level code outside every class/function body (so edits inside symbols do not move it)."""
     h = hashlib.sha256(NORM_DOMAIN + b"file\0")
@@ -58,7 +63,7 @@ def _file_hash(root: Any, source: bytes) -> str:
         if body is not None:
             pending.extend(reversed(body.children))
         elif node.type not in _SYMBOL_NODES:
-            h.update(norm_hash(node, source).encode())
+            h.update(_raw_hash(node, source).encode())
     return h.hexdigest()
 
 
@@ -78,7 +83,7 @@ def _gaps(parsed: ParsedPhp) -> list[tuple[str, str, tuple[int, int]]]:
         inside = [n for n in nodes if _contains(n, start, end)]
         node = min(inside, key=lambda n: n.end_byte - n.start_byte, default=None)
         if node is not None:
-            out.append((symbol_path(node, source, ns_at(node.start_byte)), norm_hash(node, source), (start, end)))
+            out.append((symbol_path(node, source, ns_at(node.start_byte)), _raw_hash(node, source), (start, end)))
             continue
         file_hash = file_hash or [_file_hash(root, source)]
         out.append((FILE_SYMBOL, file_hash[0], (start, end)))

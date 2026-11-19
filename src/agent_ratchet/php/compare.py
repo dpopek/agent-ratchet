@@ -197,16 +197,18 @@ def compare_php_tests_across(removed: list[CanonicalFact], added: list[Canonical
     return sorted((_removed_violation(f) for f in _unmatched_removed(removed, added)), key=lambda v: (v.file, v.line, v.message))
 
 
-def _degraded(b: Analysis, t: Analysis, path: str) -> list[SlopViolation]:
+def _degraded(b: Analysis, t: Analysis, path: str) -> tuple[list[SlopViolation], set[str]]:
     lines = {f.identity["symbol"]: f.origin.line or 1 for f in reversed(t.facts) if f.kind == GAP}
-    out = []
+    out: list[SlopViolation] = []
+    dead: set[str] = set()
     for symbol, digest in sorted(t.gap_hashes.items()):
         gap = FactState("unknown", symbol, digest, loss_reason="syntax_error")
         # An unchanged symbol that already had the gap is unknown -> unknown; anything else was readable before.
         before = gap if b.gap_hashes.get(symbol) == digest else FactState("pass", symbol, "readable-or-different")
         if evaluate(before, gap, ctx_delta=False).code == "degraded_epistemic":
             out.append(SlopViolation(path, lines.get(symbol, 1), DEGRADED, f"PHP parse gap in changed code: {symbol}", symbol))
-    return out
+            dead.add(symbol)
+    return out, dead
 
 
 def _decode_violation(path: str, side: str) -> SlopViolation:
@@ -214,12 +216,8 @@ def _decode_violation(path: str, side: str) -> SlopViolation:
     return SlopViolation(path, 1, DEGRADED, msg, side)
 
 
-def _live(an: Analysis, kind: str, dead: set[str], *, drop_incomplete: bool) -> list[CanonicalFact]:
-    return [
-        f
-        for f in an.facts
-        if f.kind == kind and not _under(_symbol(f), dead) and not (drop_incomplete and f.completeness == "incomplete")
-    ]
+def _live(an: Analysis, kind: str, dead: set[str]) -> list[CanonicalFact]:
+    return [f for f in an.facts if f.kind == kind and not _under(_symbol(f), dead)]
 
 
 def _sorted(items: list[SlopViolation]) -> list[SlopViolation]:
@@ -245,14 +243,14 @@ def compare_php_entry(
     t = analyze(target, target_path)
     if t.decode_error or b.decode_error:
         return [_decode_violation(target_path, "TARGET" if t.decode_error else "BASE")]
-    dead = set(t.gap_hashes)
+    degraded, dead = _degraded(b, t, target_path)  # only symbols that already block are skipped below
     out = _Findings(target_path, exceptions)
 
     def pick(kind: str) -> tuple[list[CanonicalFact], list[CanonicalFact]]:
-        return _live(b, kind, dead, drop_incomplete=False), _live(t, kind, dead, drop_incomplete=True)
+        return _live(b, kind, dead), _live(t, kind, dead)
 
     _points(*pick(POINT), out)
     _windows(*pick(WINDOW), out)
     _files(*pick(FILE), out)
-    found = out.violations() + _degraded(b, t, target_path)
+    found = out.violations() + degraded
     return _sorted(found + _tests(*pick(TEST), target_path))

@@ -310,3 +310,35 @@ def test_phtml_gets_no_test_rules() -> None:
     src = _t(_FULL)
     path = "app/design/frontend/V/M/templates/x.phtml"
     assert _cats(src, src.replace("$this->assertSame(1, 1);", ""), base_path=path, target_path=path) == []
+
+
+# --- fix round 1: comment-only edits inside a symbol that already has a parse gap ---------------
+
+_GAP_METHOD = "$a = 1;\n%sreturn foo(;"
+
+
+def test_directive_added_inside_preexisting_gap_symbol_is_degraded() -> None:  # probes A, B
+    base = _m(_GAP_METHOD % "")
+    for directive in ("// @phpstan-ignore foo.bar\n", "// phpcs:disable\n"):
+        assert _cats(base, _m(_GAP_METHOD % directive)) == ["php_parse_degraded"]
+
+
+def test_directive_in_clean_method_of_class_with_class_level_gap_is_not_hidden() -> None:  # probe C
+    cls = "<?php\nnamespace V\\M;\nclass X {\n    public $p = ;\n    public function ok() {\n%s        a();\n    }\n}\n"
+    assert _cats(cls % "", cls % "        // phpcs:ignore\n") == ["php_parse_degraded"]
+    assert _cats(cls % "", cls % "") == []
+
+
+def test_suppression_in_clean_method_beside_unchanged_gap_method_is_added() -> None:
+    src = "<?php\nnamespace V\\M;\nclass X {\n    public function a() {\n        return foo(;\n    }\n    public function ok() {\n%s        b();\n    }\n}\n"
+    assert _cats(src % "", src % "        // phpcs:ignore A.B\n") == ["php_suppression_added"]
+
+
+def test_test_weakened_beside_unchanged_gap_is_still_flagged() -> None:  # probe D: the docblock sits outside the method
+    gap = _FULL + "\nreturn foo(;"
+    assert _cats(_t(gap, doc=_DOC), _t(gap), base_path=TEST_PATH, target_path=TEST_PATH) == ["php_test_weakened"]
+
+
+def test_test_annotation_dropped_in_class_with_class_level_gap_is_not_hidden() -> None:  # probe E
+    cls = "<?php\nnamespace V\\M\\Test;\nuse PHPUnit\\Framework\\TestCase;\nclass XTest extends TestCase {\n    public $p = ;\n%s    public function itWorks() { $this->assertTrue(1); }\n}\n"
+    assert _cats(cls % "    /** @test */\n", cls % "", base_path=TEST_PATH, target_path=TEST_PATH) == ["php_parse_degraded"]
