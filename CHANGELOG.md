@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.1.1
+
+- Fixed: a plain file scan reports Python syntax errors again (exit 2).
+
 ## 4.1.0
 
 - Added: PHP analysis for the `php` profile (`agent-ratchet[php]`): blocks new or rebound suppression directives
