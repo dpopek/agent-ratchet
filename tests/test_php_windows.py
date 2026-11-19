@@ -218,3 +218,45 @@ def test_window_sliding_to_another_copy_of_a_statement_passes() -> None:
     base = _FN.format(body=f"    // phpcs:disable {_SIZEOF}\n    $n = sizeof($a);\n    // phpcs:enable\n    d();\n    $n = sizeof($a);")
     target = _FN.format(body=f"    $n = sizeof($a);\n    d();\n    // phpcs:disable {_SIZEOF}\n    $n = sizeof($a);\n    // phpcs:enable")
     assert _cats(base, target) == []
+
+
+# --- I2 residual round 3: covered TARGET tokens aligned to BASE tokens must have been covered ------------
+
+_ROUND3 = {
+    'S1': (
+        '<?php\nfunction run($a, $b) {\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    $x = bar(1, 2, 3, 4, 5, 6,\n        // phpcs:enable\n        sizeof($a));\n    foo($x);\n}\n',
+        '<?php\nfunction run($a, $b) {\n    $x = bar(1, 2, 3, 4, 5, 6,\n        // phpcs:disable Generic.PHP.ForbiddenFunctions\n        sizeof($a));\n    // phpcs:enable\n    foo($x);\n}\n',
+    ),
+    'S2': (
+        '<?php\nfunction run($a, $b) {\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    a();\n    // phpcs:enable\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    $x = bar(1,\n        // phpcs:enable\n        sizeof($a));\n    z();\n}\n',
+        '<?php\nfunction run($a, $b) {\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    a();\n    $x = bar(1,\n        sizeof($a));\n    // phpcs:enable\n    z();\n    y();\n}\n',
+    ),
+    'S4': (
+        '<?php\nfunction run($a, $b) {\n    if ($a\n        ==\n        $b) { // phpcs:disable Squiz.Operators.ComparisonOperatorUsage\n        d();\n    }\n}\n',
+        '<?php\nfunction run($a, $b) {\n    if ($a\n        // phpcs:disable Squiz.Operators.ComparisonOperatorUsage\n        ==\n        $b) {\n        e();\n    }\n}\n',
+    ),
+    'S5': (
+        '<?php\nfunction run(\n    $a = 1,\n    $b\n) {\n    // phpcs:disable PEAR.Functions.ValidDefaultValue\n    d();\n}\n',
+        '<?php\nfunction run(\n    // phpcs:disable PEAR.Functions.ValidDefaultValue\n    $a = 1,\n    $b\n) {\n    e();\n}\n',
+    ),
+    'S11': (
+        '<?php\nfunction run($a, $b) {\n    $n = sizeof($a);\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    foo();\n}\n',
+        '<?php\nfunction run($a, $b) {\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    $n = sizeof(($a));\n    foo();\n}\n',
+    ),
+    'S12': (
+        '<?php\nnamespace A\\B;\n// phpcs:disable PSR2.Namespaces.NamespaceDeclaration\nuse C\\D;\nclass K {}\n',
+        '<?php\n// phpcs:disable PSR2.Namespaces.NamespaceDeclaration\nnamespace A\\B;\nuse C\\D;\nclass K {}\n',
+    ),
+    'H': (
+        '<?php\nfunction run($a, $b) {\n    $x = bar(\n        1,\n        sizeof($a)\n    ); // phpcs:disable Generic.PHP.ForbiddenFunctions\n    foo($x);\n}\n',
+        '<?php\nfunction run($a, $b) {\n    $x = bar(\n        1,\n        // phpcs:disable Generic.PHP.ForbiddenFunctions\n        sizeof($a, 0)\n    );\n    foo($x);\n}\n',
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_ROUND3))
+def test_existing_code_newly_covered_is_expanded_whatever_else_changed(case: str) -> None:
+    # bounds moved within one statement, windows merged, the enclosing code edited, the pulled-in code edited,
+    # or rows outside every anchor (probed on PHPCS 3 and 4)
+    assert _cats(*_ROUND3[case]) == [EXPANDED]
+

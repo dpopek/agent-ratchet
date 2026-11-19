@@ -6,7 +6,6 @@ Keyword and code-list parsing of one comment line lives in `directive_text`.
 from __future__ import annotations
 
 import re
-from bisect import bisect_left
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -17,7 +16,6 @@ from agent_ratchet.php.parser import (
     ParsedPhp,
     declaration_name_hash,
     header_hash,
-    leaf_spans,
     line_hash,
     norm_hash,
 )
@@ -53,7 +51,7 @@ class WindowSuppression:
     closed: bool
     statements: tuple[str, ...]
     line: int
-    coverage: tuple[tuple[str, int], ...] = ()  # (statement hash, leaf tokens on covered rows), sorted (I2)
+    rows: tuple[int, int] = (0, 0)  # covered rows [disable row, enable row or EOF) (spec R6, I2)
 
 
 @dataclass(frozen=True)
@@ -332,47 +330,24 @@ def collect(
             points.append(
                 PointSuppression(scope(comment if decl is None else decl), "phpmd", codes, kind, digest, row + 1, header)
             )
-    leaves = leaf_spans(root, source) if done or open_windows else []
-    windows = [_window(w, anchors, source, leaves, closed=True) for w in done]
-    windows += [_window(w, anchors, source, leaves, closed=False) for w in open_windows]
+    windows = [_window(w, anchors, source, closed=True) for w in done]
+    windows += [_window(w, anchors, source, closed=False) for w in open_windows]
     windows.sort(key=lambda w: (w.line, w.symbol, w.codes))
     return points, windows, files
 
 
-def _window(
-    win: dict[str, Any], anchors: list[Any], source: bytes, leaves: list[tuple[int, int, int]], closed: bool
-) -> WindowSuppression:
-    """Covered: every anchor whose row span meets rows [disable row, enable row), or up to EOF (spec R3, I2), and per
-    anchor how many of its leaf tokens sit on those rows (reflow-invariant: whitespace never moves a token)."""
+def _window(win: dict[str, Any], anchors: list[Any], source: bytes, closed: bool) -> WindowSuppression:
+    """Covered: whole rows [disable row, enable row), or up to EOF, and every anchor whose row span meets them (R3, I2)."""
     start, end = win["start"], win["end"] if closed else source.count(b"\n") + 1
-    prefix = [0]
-    for _, first, last in leaves:
-        prefix.append(prefix[-1] + (first < end and last >= start))
-    starts = [b for b, _, _ in leaves]
-    met = [n for n in anchors if n.start_point.row < end and n.end_point.row >= start]
-    cover = [
-        (_statement_hash(n, source), prefix[bisect_left(starts, n.end_byte)] - prefix[bisect_left(starts, n.start_byte)])
-        for n in met
-    ]
+    hashes = sorted(norm_hash(n, source) for n in anchors if n.start_point.row < end and n.end_point.row >= start)
     return WindowSuppression(
         symbol=win["symbol"],
         codes=win["codes"],
         closed=closed,
-        statements=tuple(sorted(h for h, _ in cover)),
+        statements=tuple(hashes),
         line=win["line"],
-        coverage=tuple(sorted(cover)),
+        rows=(start, end),
     )
-
-
-def _statement_hash(node: Any, source: bytes) -> str:
-    """Hash of one statement in a window's `statements` multiset (whole node, R3)."""
-    return norm_hash(node, source)
-
-
-def statement_hashes(parsed: ParsedPhp) -> tuple[str, ...]:
-    """Sorted multiset of every statement's window hash in the file, so window growth can tell pulled-in code (R6)."""
-    _, anchors = _walk(parsed.tree.root_node)
-    return tuple(sorted(_statement_hash(n, parsed.source) for n in anchors))
 
 
 def namespace_resolver(root: Any, source: bytes) -> Callable[[int], str]:

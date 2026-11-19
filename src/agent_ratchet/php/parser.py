@@ -107,20 +107,19 @@ def line_hash(root: Any, source: bytes, row: int) -> str:
     return _digest(tokens) if tokens else EMPTY_LINE
 
 
-def leaf_spans(root: Any, source: bytes) -> list[tuple[int, int, int]]:
-    """`(start_byte, start_row, end_row)` of every non-comment leaf token in source order (window coverage, I2)."""
-    spans: list[tuple[int, int, int]] = []
+def token_rows(root: Any, source: bytes) -> tuple[tuple[str, bytes, int, int], ...]:
+    """`(type, text, first row, last row)` of every leaf token, comments included, in source order (spec R6, I2)."""
+    out: list[tuple[str, bytes, int, int]] = []
     stack = [root]
     while stack:
         cur = stack.pop()
-        if cur.type == "comment":
-            continue
-        if cur.child_count == 0:
-            if _token(cur, source):
-                spans.append((cur.start_byte, cur.start_point.row, cur.end_point.row))
+        if cur.child_count == 0 or cur.type == "comment":
+            tok = _token(cur, source)
+            if tok:
+                out.append((cur.type, tok, cur.start_point.row, cur.end_point.row))
         else:
             stack.extend(reversed(cur.children))
-    return spans
+    return tuple(out)
 
 
 def header_hash(node: Any, source: bytes) -> str:

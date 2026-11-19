@@ -10,6 +10,7 @@ from agent_ratchet.facts.model import CanonicalFact
 from agent_ratchet.git_guard_io import SlopViolation
 from agent_ratchet.php.directives import FILE_SYMBOL
 from agent_ratchet.php.extract import FILE, GAP, POINT, TEST, WINDOW, Analysis, analyze
+from agent_ratchet.php.window_align import grown_windows
 from agent_ratchet.transitions import FactState, evaluate
 
 ADDED, REBOUND = "php_suppression_added", "php_suppression_rebound"
@@ -182,52 +183,24 @@ def _files(base: list[CanonicalFact], target: list[CanonicalFact], out: _Finding
             out.add(ADDED, x)
 
 
-def _grew(t: CanonicalFact, b: CanonicalFact, outside: Counter[str]) -> bool:
-    """Expanded iff the window gained a statement BASE had outside every window of its identity, covers more tokens of
-    an unchanged statement (`_covers_more`), or it lost its `enable`.
-
-    New or edited code under an unchanged window gains only hashes BASE never had outside, so it passes (R6, 19.11).
-    """
-    gained = Counter(t.payload["statements"]) - Counter(b.payload["statements"])
-    return bool(gained & outside) or _covers_more(t, b) or (b.payload["closed"] and not t.payload["closed"])
-
-
-def _covers_more(t: CanonicalFact, b: CanonicalFact) -> bool:
-    """A statement unchanged in both windows has more of its leaf tokens on covered rows in TARGET (I2): the disable or
-    enable moved inside or past it. Occurrences of one hash pair largest to largest; extra copies are left to `_grew`."""
-    counts: tuple[dict[str, list[int]], dict[str, list[int]]] = ({}, {})
-    for side, f in enumerate((t, b)):
-        for digest, n in f.payload.get("coverage", ()):
-            counts[side].setdefault(digest, []).append(n)
-    for digest, mine in counts[0].items():
-        theirs = sorted(counts[1].get(digest, ()), reverse=True)
-        if any(x > y for x, y in zip(sorted(mine, reverse=True), theirs)):
-            return True
-    return False
-
-
 def _windows(
     base: list[CanonicalFact],
     target: list[CanonicalFact],
     out: _Findings,
     key: Callable[[str], str],
-    statements: Sequence[str],
+    grown: set[tuple[int, tuple[str, ...]]],
 ) -> None:
-    """`statements`: BASE multiset of every statement's window hash in the file."""
+    """`grown`: (line, codes) of TARGET windows covering existing code BASE left uncovered for those codes (R6)."""
     groups: dict[str, tuple[list[CanonicalFact], list[CanonicalFact]]] = {}
     for side, facts in ((0, base), (1, target)):
         for f in facts:
             groups.setdefault(key(f.identity["symbol"]), ([], []))[side].append(f)
-    everywhere = Counter(statements)
     for b, t in groups.values():
-        inside: dict[tuple[str, ...], Counter[str]] = {}
-        for w in b:
-            inside.setdefault(_codes(w), Counter()).update(w.payload["statements"])
-        _pair(b, t, lambda x, y: _codes(x) == _codes(y) and x.payload_hash == y.payload_hash)
-        pairs = _pair(b, t, lambda x, y: _codes(x) == _codes(y))
+        pairs = _pair(b, t, lambda x, y: _codes(x) == _codes(y) and x.payload_hash == y.payload_hash)
+        pairs += _pair(b, t, lambda x, y: _codes(x) == _codes(y))
         pairs += _pair(b, t, lambda x, y: _narrower(_codes(x), _codes(y)))
         for x, y in pairs:
-            if _grew(x, y, everywhere - inside[_codes(y)]):
+            if (x.origin.line, _codes(x)) in grown or (y.payload["closed"] and not x.payload["closed"]):
                 out.add(EXPANDED, x)
         for x in t:
             out.add(EXPANDED, x)
@@ -351,7 +324,12 @@ def compare_php_entry(
 
     present = ({key(s) for s in _all_symbols(b)} | {FILE_SYMBOL}, {key(s) for s in _all_symbols(t)} | {FILE_SYMBOL})
     _points(*pick(POINT), out, key, present)
-    _windows(*pick(WINDOW), out, key, b.statement_hashes)
+    grown = (
+        grown_windows(lambda: b.tokens, b.window_spans, b.window_rows, lambda: t.tokens, t.window_spans, t.window_rows)
+        if b.window_spans
+        else set()
+    )
+    _windows(*pick(WINDOW), out, key, grown)
     _files(*pick(FILE), out)
     found = out.violations() + degraded
     return _sorted(found + _tests(*pick(TEST), target_path))
