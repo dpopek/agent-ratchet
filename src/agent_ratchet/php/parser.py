@@ -9,7 +9,7 @@ from typing import Any
 from agent_ratchet.profile import require_profile_capabilities
 
 NORM_DOMAIN = b"agent-ratchet:php-norm:v1\0"
-_PARSER: Any = None
+_PARSER: Any = None  # lazy singleton, not thread-safe (the scanner is single-threaded)
 
 
 @dataclass(frozen=True)
@@ -61,8 +61,11 @@ def _leaf_tokens(node: Any, source: bytes) -> list[bytes]:
         if cur.type == "comment":
             continue
         if cur.child_count == 0:
-            if cur.end_byte > cur.start_byte:
-                tokens.append(source[cur.start_byte : cur.end_byte])
+            tok = source[cur.start_byte : cur.end_byte]
+            if cur.type == "text":  # inline HTML: whitespace is not semantic
+                tok = b" ".join(tok.split())
+            if tok:
+                tokens.append(tok)
         else:
             stack.extend(reversed(cur.children))
     return tokens
