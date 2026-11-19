@@ -39,6 +39,14 @@ class _BatchTimeout(Exception):
     """A per-object read exceeded the timeout; the caller disables the reader and falls back to one-shot."""
 
 
+class _BatchUnsupported(_BatchTimeout):
+    """The platform cannot select() on the pipe (Windows): same recovery as a timeout, one-shot for the rest of the scan."""
+
+
+def _batch_supported() -> bool:
+    return os.name != "nt"  # selectors only watch sockets on Windows, never pipes
+
+
 def _git_env() -> dict[str, str]:
     return {**os.environ, "LC_ALL": "C"}  # stable stderr
 
@@ -74,7 +82,7 @@ class GitBatchReader:
         self._proc: subprocess.Popen[bytes] | None = None
         self._buf = bytearray()
         self._poisoned: str | None = None
-        self._disabled = False
+        self._disabled = not _batch_supported()
         self._blobs: OrderedDict[str, bytes] = OrderedDict()
         self._spec_oids: dict[str, str] = {}
         self._head: bool | None = None
@@ -190,9 +198,12 @@ class GitBatchReader:
         assert proc is not None and proc.stdout is not None
         fd = proc.stdout.fileno()
         remaining = deadline - time.monotonic()
-        with selectors.DefaultSelector() as sel:
-            sel.register(fd, selectors.EVENT_READ)
-            ready = remaining > 0 and sel.select(remaining)
+        try:
+            with selectors.DefaultSelector() as sel:
+                sel.register(fd, selectors.EVENT_READ)
+                ready = remaining > 0 and sel.select(remaining)
+        except OSError as exc:
+            raise _BatchUnsupported(spec) from exc
         if not ready:
             raise _BatchTimeout(spec)
         chunk = os.read(fd, _READ_CHUNK)

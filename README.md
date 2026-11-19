@@ -10,6 +10,8 @@ project). The old names were removed in 4.0: `import guard_core` raises
 `ModuleNotFoundError`, and the `guard-core` command and `python -m guard_core` are
 gone. The old GitHub URL redirects. See the 3.1.0 upgrade notes in `CHANGELOG.md`.
 
+Platforms: Linux and macOS are tested; on Windows git blobs are read without batching (one `git cat-file` per read).
+
 ## Commands
 
     agent-ratchet [--expect-sha SHA] scan ...

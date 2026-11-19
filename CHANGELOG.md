@@ -9,6 +9,10 @@
   the variable is ignored where `guard.lock` is present.
 - Added: PHP quality tool configs (phpstan, phpcs, phpunit, psalm, phpmd, ...) are protected governance paths.
 
+## 4.0.1
+
+- Fixed: on Windows the git blob reader no longer crashes the scan; it reads one-shot instead of batching.
+
 ## 4.0.0
 
 - Removed: guard_core package (tombstone), guard-core command, GUARD_VERSION, SELF_SKIP_NAMES, RELEASE_TAG_PATTERN.
