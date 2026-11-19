@@ -20,13 +20,13 @@ def _sort_key(v: SlopViolation) -> tuple[str, int, str, str]:
     return (v.file, v.line, v.category, v.message)
 
 
-def pair_entries(entries: Sequence[tuple[str, str, str]], php_paths: Sequence[str]) -> list[tuple[str | None, str | None]]:
-    """(BASE path, TARGET path) per in-scope entry; a side that is absent or out of scope is None.
+def pair_entries(entries: Sequence[tuple[str, str, str]], php_paths: Sequence[str]) -> list[tuple[str | None, str | None, bool]]:
+    """(BASE path, TARGET path, renamed) per in-scope entry; a side that is absent or out of scope is None.
 
     R/C compare the old path's BASE against the new path's TARGET. A rename out of scope counts as a deletion of the
-    old file, a move or copy into scope as a new file.
+    old file, a move or copy into scope as a new file. `renamed` is True for an `R`/`C` entry paired on both sides.
     """
-    pairs: list[tuple[str | None, str | None]] = []
+    pairs: list[tuple[str | None, str | None, bool]] = []
     for status, old, new in entries:
         old_in, new_in = is_php_in_scope(old, php_paths), is_php_in_scope(new, php_paths)
         if status.startswith("D"):
@@ -38,7 +38,7 @@ def pair_entries(entries: Sequence[tuple[str, str, str]], php_paths: Sequence[st
         else:
             base, target = (old if old_in else None), (new if new_in else None)
         if base is not None or target is not None:
-            pairs.append((base, target))
+            pairs.append((base, target, status.startswith(("R", "C")) and base is not None and target is not None))
     return pairs
 
 
@@ -75,7 +75,7 @@ def php_transition_violations(
     found: list[SlopViolation] = []
     removed_all: list[Any] = []
     added_all: list[Any] = []
-    for base_path, target_path in pair_entries(entries, cfg.get("php_paths", ())):
+    for base_path, target_path, renamed in pair_entries(entries, cfg.get("php_paths", ())):
         base_bytes = git_cat_bytes(f"{base_ref}:{base_path}", cwd) if base_path else None
         target_bytes = None
         if target_path:
@@ -85,7 +85,7 @@ def php_transition_violations(
                 raise GuardAnalysisError(f"Unable to read target git blob '{spec}'")
         if base_bytes is not None and base_bytes == target_bytes:
             continue
-        per_entry = compare_php_entry(base_bytes, target_bytes, base_path, target_path or base_path or "", exceptions)
+        per_entry = compare_php_entry(base_bytes, target_bytes, base_path, target_path or base_path or "", exceptions, renamed=renamed)
         found.extend(v for v in per_entry if v.category != _REMOVED)  # removals are decided across all entries below
         base_an = analyze(base_bytes, base_path or "") if base_bytes is not None else None
         target_an = analyze(target_bytes, target_path or "") if target_bytes is not None else None

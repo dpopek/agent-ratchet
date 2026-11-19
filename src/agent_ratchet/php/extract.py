@@ -29,11 +29,12 @@ _BUCKETS = ((0, "0"), (16, "<=16"), (256, "<=256"), (4096, "<=4096"))
 
 @dataclass(frozen=True)
 class Analysis:
-    """Facts of one file plus the normalized hash of every symbol that holds a parse gap."""
+    """Facts of one file, the normalized hash of every symbol that holds a parse gap, and every declared symbol path."""
 
     facts: tuple[CanonicalFact, ...]
     gap_hashes: Mapping[str, str]
     decode_error: bool = False
+    symbols: frozenset[str] = frozenset()
 
 
 def _bucket(length: int) -> str:
@@ -88,6 +89,13 @@ def _gaps(parsed: ParsedPhp) -> list[tuple[str, str, tuple[int, int]]]:
         file_hash = file_hash or [_file_hash(root, source)]
         out.append((FILE_SYMBOL, file_hash[0], (start, end)))
     return out
+
+
+def _symbols(parsed: ParsedPhp) -> frozenset[str]:
+    """Symbol path of every class-like, method and function declaration; may raise PhpDecodeError."""
+    root, source = parsed.tree.root_node, parsed.source
+    ns_at = namespace_resolver(root, source)
+    return frozenset(symbol_path(n, source, ns_at(n.start_byte)) for n in _walk(root) if n.type in _SYMBOL_NODES)
 
 
 def _gap_fact(path: str, symbol: str, bucket: str, origin: Origin) -> CanonicalFact:
@@ -158,7 +166,7 @@ def _analyze(parsed: ParsedPhp, path: str, oid: str | None) -> Analysis:
         line = parsed.source.count(b"\n", 0, start) + 1
         facts.append(_gap_fact(path, symbol, _bucket(end - start), at(line, (start, end))))
     facts.sort(key=lambda f: (f.kind, f.origin.line or 0, f.identity_hash, f.payload_hash))
-    return Analysis(tuple(facts), hashes)
+    return Analysis(tuple(facts), hashes, symbols=_symbols(parsed))
 
 
 class PhpPlugin:

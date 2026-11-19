@@ -1,0 +1,5 @@
+{
+  "category": "php_suppression_added",
+  "exit": 1,
+  "require_rename": true
+}

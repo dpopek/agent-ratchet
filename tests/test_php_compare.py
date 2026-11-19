@@ -9,13 +9,14 @@ PATH = "app/code/V/M/Model/X.php"
 TEST_PATH = "app/code/V/M/Test/Unit/XTest.php"
 
 
-def _cats(base, target, *, base_path=PATH, target_path=None, exceptions=()):
+def _cats(base, target, *, base_path=PATH, target_path=None, exceptions=(), renamed=False):
     require_php()
     from agent_ratchet.php.compare import compare_php_entry
 
     enc = lambda s: s.encode() if isinstance(s, str) else s
+    extra = {"renamed": True} if renamed else {}
     found = compare_php_entry(
-        None if base is None else enc(base), None if target is None else enc(target), base_path, target_path or PATH, exceptions
+        None if base is None else enc(base), None if target is None else enc(target), base_path, target_path or PATH, exceptions, **extra
     )
     return [v.category for v in found]
 
@@ -342,3 +343,57 @@ def test_test_weakened_beside_unchanged_gap_is_still_flagged() -> None:  # probe
 def test_test_annotation_dropped_in_class_with_class_level_gap_is_not_hidden() -> None:  # probe E
     cls = "<?php\nnamespace V\\M\\Test;\nuse PHPUnit\\Framework\\TestCase;\nclass XTest extends TestCase {\n    public $p = ;\n%s    public function itWorks() { $this->assertTrue(1); }\n}\n"
     assert _cats(cls % "    /** @test */\n", cls % "", base_path=TEST_PATH, target_path=TEST_PATH) == ["php_parse_degraded"]
+
+
+# --- task 10a: symbol pairing for renames (spec R6 "Symbol pairing", R9 rows 15-16) -------------
+
+_OLD_PATH = "app/code/Acme/Shop/Model/Cart.php"
+_NEW_PATH = "app/code/Acme/Shop/Checkout/Model/Cart.php"
+
+
+def _cart(body: str, ns: str = "Acme\\Shop\\Model", name: str = "run", extra: str = "") -> str:
+    return f"<?php\nnamespace {ns};\nclass Cart {{\n    public function {name}() {{\n{body}\n    }}\n{extra}}}\n"
+
+
+_IGNORED = "// phpcs:ignore Generic.Sample.Rule\na();\nb();"
+
+
+def _moved(base: str, target: str) -> list[str]:
+    return _cats(base, target, base_path=_OLD_PATH, target_path=_NEW_PATH, renamed=True)
+
+
+def test_rename_with_namespace_change_passes() -> None:
+    base = _cart(_IGNORED + "\n// @phpstan-ignore foo.bar\nc();")
+    assert _moved(base, base.replace("Acme\\Shop\\Model", "Acme\\Shop\\Checkout\\Model")) == []
+
+
+def test_rename_namespace_change_plus_new_ignore_is_added() -> None:
+    base = _cart(_IGNORED)
+    target = _cart(_IGNORED + "\n// phpcs:ignore Generic.Sample.Rule\nc();", ns="Acme\\Shop\\Checkout\\Model")
+    assert _moved(base, target) == ["php_suppression_added"]
+
+
+def test_window_symbol_survives_namespace_rename() -> None:
+    body = "// phpcs:disable Generic.Sample.Rule\na();\n// phpcs:enable Generic.Sample.Rule\nz();"
+    assert _moved(_cart(body), _cart(body, ns="Acme\\Shop\\Checkout\\Model")) == []
+
+
+def test_method_rename_keeps_suppression() -> None:
+    assert _cats(_cart(_IGNORED), _cart(_IGNORED, name="execute"), base_path=_OLD_PATH, target_path=_OLD_PATH) == []
+
+
+def test_move_to_identical_statement_in_other_existing_method_is_added() -> None:
+    other = "    public function other() {\n%s    }\n"
+    base = _cart(_IGNORED, extra=other % "a();\n")
+    target = _cart("a();\nb();", extra=other % "// phpcs:ignore Generic.Sample.Rule\na();\n")
+    assert _cats(base, target, base_path=_OLD_PATH, target_path=_OLD_PATH) == ["php_suppression_added"]
+
+
+def test_non_rename_pair_keeps_full_symbol() -> None:
+    # Namespace edited in place and the ignored line edited: without R status the symbols differ, so the directive is a
+    # new identity (added); the same edit under a rename strips the namespace and is a re-pointed identity (rebound).
+    # A namespace-only in-place edit passes through the renamed-declaration clause (origin symbol gone), not the strip.
+    base = _cart(_IGNORED)
+    target = _cart("// phpcs:ignore Generic.Sample.Rule\na(1);\nb();", ns="Acme\\Shop\\Checkout\\Model")
+    assert _cats(base, target, base_path=_OLD_PATH, target_path=_OLD_PATH) == ["php_suppression_added"]
+    assert _moved(base, target) == ["php_suppression_rebound"]

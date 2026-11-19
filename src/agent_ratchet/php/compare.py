@@ -38,6 +38,16 @@ def _symbol(f: CanonicalFact) -> str:
     return f.identity.get("symbol", FILE_SYMBOL)
 
 
+def _strip_namespace(symbol: str) -> str:
+    """`Ns\\Class::method` -> `Class::method` (R6: `R`/`C` entries compare symbols without the namespace prefix)."""
+    head, sep, tail = symbol.partition("::")
+    return head.rsplit("\\", 1)[-1] + sep + tail
+
+
+def _keep(symbol: str) -> str:
+    return symbol
+
+
 def _under(symbol: str, dead: set[str]) -> bool:
     return symbol in dead or any(d != FILE_SYMBOL and symbol.startswith(d + "::") for d in dead)
 
@@ -88,14 +98,23 @@ _MESSAGES = {
 }
 
 
-def _points(base: list[CanonicalFact], target: list[CanonicalFact], out: _Findings) -> None:
+def _same_directive(x: CanonicalFact, y: CanonicalFact) -> bool:
+    return x.identity["tool"] == y.identity["tool"] and _codes(x) == _codes(y) and _anchor(x) == _anchor(y)
+
+
+def _points(
+    base: list[CanonicalFact], target: list[CanonicalFact], out: _Findings, key: Callable[[str], str], present: set[str]
+) -> None:
+    """`present`: keyed symbols that still have a declaration or facts in TARGET (an origin there was not renamed)."""
     groups: dict[tuple[str, str], tuple[list[CanonicalFact], list[CanonicalFact]]] = {}
     for side, facts in ((0, base), (1, target)):
         for f in facts:
-            groups.setdefault((f.identity["symbol"], f.identity["tool"]), ([], []))[side].append(f)
+            groups.setdefault((key(f.identity["symbol"]), f.identity["tool"]), ([], []))[side].append(f)
+    flagged: list[CanonicalFact] = []
+    left_base: list[CanonicalFact] = []
+    left_target: list[CanonicalFact] = []
     for b, t in groups.values():
         _pair(b, t, lambda x, y: _codes(x) == _codes(y) and _anchor(x) == _anchor(y))
-        flagged: list[CanonicalFact] = []
         for x, _ in _pair(b, t, lambda x, y: _codes(x) == _codes(y)):
             out.add(REBOUND, x)
             flagged.append(x)
@@ -103,12 +122,16 @@ def _points(base: list[CanonicalFact], target: list[CanonicalFact], out: _Findin
         for x, _ in _pair(b, t, lambda x, y: _narrower(_codes(x), _codes(y))):
             out.add(REBOUND, x)
             flagged.append(x)
-        for x in t:
-            out.add(ADDED, x)
-            flagged.append(x)
-        for x in flagged:
-            if x.payload["anchor_norm_hash"] is None and x.identity["tool"] != "phpcs-unknown":
-                out.add(UNKNOWN_ANCHOR, x)
+        left_base.extend(b)
+        left_target.extend(t)
+    # Renamed declaration (R6): an unchanged directive pairs across symbols only when its BASE symbol is gone.
+    _pair([f for f in left_base if key(f.identity["symbol"]) not in present], left_target, _same_directive)
+    for x in left_target:
+        out.add(ADDED, x)
+        flagged.append(x)
+    for x in flagged:
+        if x.payload["anchor_norm_hash"] is None and x.identity["tool"] != "phpcs-unknown":
+            out.add(UNKNOWN_ANCHOR, x)
 
 
 def _files(base: list[CanonicalFact], target: list[CanonicalFact], out: _Findings) -> None:
@@ -126,11 +149,11 @@ def _grew(t: CanonicalFact, b: CanonicalFact) -> bool:
     return bool(gained) or (b.payload["closed"] and not t.payload["closed"])
 
 
-def _windows(base: list[CanonicalFact], target: list[CanonicalFact], out: _Findings) -> None:
+def _windows(base: list[CanonicalFact], target: list[CanonicalFact], out: _Findings, key: Callable[[str], str]) -> None:
     groups: dict[str, tuple[list[CanonicalFact], list[CanonicalFact]]] = {}
     for side, facts in ((0, base), (1, target)):
         for f in facts:
-            groups.setdefault(f.identity["symbol"], ([], []))[side].append(f)
+            groups.setdefault(key(f.identity["symbol"]), ([], []))[side].append(f)
     for b, t in groups.values():
         _pair(b, t, lambda x, y: _codes(x) == _codes(y) and x.payload_hash == y.payload_hash)
         pairs = _pair(b, t, lambda x, y: _codes(x) == _codes(y))
@@ -230,8 +253,12 @@ def compare_php_entry(
     base_path: str | None,
     target_path: str,
     exceptions: Sequence[Mapping[str, Any]],
+    renamed: bool = False,
 ) -> list[SlopViolation]:
-    """Findings for one paired entry. `exceptions` must already be restricted to those trusted at BASE."""
+    """Findings for one paired entry. `exceptions` must already be restricted to those trusted at BASE.
+
+    `renamed`: the entry has git status `R`/`C`, so suppression symbols are compared without the namespace prefix.
+    """
     if base is not None and base == target:
         return []
     old_path = base_path or target_path
@@ -249,8 +276,10 @@ def compare_php_entry(
     def pick(kind: str) -> tuple[list[CanonicalFact], list[CanonicalFact]]:
         return _live(b, kind, dead), _live(t, kind, dead)
 
-    _points(*pick(POINT), out)
-    _windows(*pick(WINDOW), out)
+    key = _strip_namespace if renamed else _keep
+    present = {key(s) for s in t.symbols} | {key(_symbol(f)) for f in t.facts} | {FILE_SYMBOL}
+    _points(*pick(POINT), out, key, present)
+    _windows(*pick(WINDOW), out, key)
     _files(*pick(FILE), out)
     found = out.violations() + degraded
     return _sorted(found + _tests(*pick(TEST), target_path))
