@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.0.1
 
 - Fixed: on Windows the git blob reader no longer crashes the scan; it reads one-shot instead of batching.
 
