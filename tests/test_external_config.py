@@ -321,8 +321,8 @@ def test_env_override_ignored_by_baseline_integrity_with_lock(tmp_path: Path) ->
     repo, base, _head = _lock_repo(tmp_path, True, True)
     off = _write_config(tmp_path / "cfg" / "off.json", {"no_such_key": 1})
     proc = _run_baseline_guard(repo, "--base-ref", base, extra_env={"AGENT_RATCHET_CONFIG": str(off)})
-    assert proc.returncode != 2, proc.stderr
-    assert ENV_IGNORED_NOTE in proc.stderr
+    assert proc.returncode == 0 and "no_such_key" not in proc.stdout + proc.stderr, proc.stderr
+    assert ENV_IGNORED_NOTE in proc.stderr and "note: using external config" not in proc.stderr
 
 
 def test_env_override_ignored_when_lock_only_inside_commit_range(tmp_path: Path) -> None:
@@ -331,5 +331,6 @@ def test_env_override_ignored_when_lock_only_inside_commit_range(tmp_path: Path)
     tip = _commit_files(repo, "drop lock", {"a.txt": "1\n"})
     off = _write_config(tmp_path / "cfg" / "off.json", {"no_such_key": 1})
     proc = _run_scanner(repo, "--commit-range", f"{base}..{tip}", extra_env={"AGENT_RATCHET_CONFIG": str(off)})
-    assert proc.returncode != 2 or "no_such_key" not in proc.stderr, proc.stderr
-    assert ENV_IGNORED_NOTE in proc.stderr
+    assert proc.returncode == 1 and "no_such_key" not in proc.stdout + proc.stderr, proc.stderr
+    assert "php_suppression_added" in proc.stderr  # the in-repo PHP config was read, not the external one
+    assert ENV_IGNORED_NOTE in proc.stderr and "note: using external config" not in proc.stderr

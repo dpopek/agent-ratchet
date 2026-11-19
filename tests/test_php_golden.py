@@ -98,16 +98,25 @@ _FORBIDDEN_DIGESTS = frozenset(
 _FORBIDDEN_LENGTHS = (6, 9)
 
 
-def _has_forbidden_word(text: str) -> bool:
+def _has_forbidden_word(text: str, digests: frozenset[str] = _FORBIDDEN_DIGESTS) -> bool:
     for size in _FORBIDDEN_LENGTHS:
         for i in range(len(text) - size + 1):
-            if hashlib.sha256(text[i : i + size].encode("utf-8")).hexdigest() in _FORBIDDEN_DIGESTS:
+            if hashlib.sha256(text[i : i + size].encode("utf-8")).hexdigest() in digests:
                 return True
     return False
 
 
-def test_forbidden_word_check_detects_digested_words() -> None:
-    assert not _has_forbidden_word("neutral fixture text")
+def _sha(word: str) -> str:
+    return hashlib.sha256(word.encode("utf-8")).hexdigest()
+
+
+@pytest.mark.parametrize("word", ["sample", "placehold"])  # one neutral word per checked length
+def test_forbidden_word_check_detects_digested_words(word: str) -> None:
+    assert sorted({len(w) for w in ("sample", "placehold")}) == sorted(_FORBIDDEN_LENGTHS)
+    digests = _FORBIDDEN_DIGESTS | {_sha(word)}
+    assert _has_forbidden_word(f"a fixture mentioning {word}co here", digests)
+    assert not _has_forbidden_word("neutral fixture text", digests)
+    assert not _has_forbidden_word(f"a fixture mentioning {word}co here")
     assert all(len(d) == 64 for d in _FORBIDDEN_DIGESTS)
 
 
