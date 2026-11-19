@@ -24,6 +24,7 @@ _PHPCS_FORMS = {"ignore": "point", "disable": "disable", "enable": "enable", "ig
 _LEGACY_FORMS = {"line": "point", "start": "disable", "end": "enable", "file": "file"}
 _PAREN = re.compile(r"\([^)]*\)")
 _LINE_SCOPED = {"phpstan", "phpcs"}  # tools that ignore one line (spec R4 "Anchor hash")
+_METRIC_WORDS = ("metrics", "complexity", "nesting")
 
 
 class PhpDecodeError(ValueError):
@@ -237,12 +238,25 @@ def _anchor_for(
     return None
 
 
+def _body_derived(tool: str, codes: tuple[str, ...]) -> bool:
+    """Codes that may cover body-derived errors keep the whole-node hash (spec R4)."""
+    if not codes:
+        return True
+    for code in codes:
+        parts = code.split(".")
+        if tool == "phpcs" and len(parts) < 3:  # whole standard or category
+            return True
+        if any(word in part.lower() for part in parts for word in _METRIC_WORDS):
+            return True
+    return False
+
+
 def _anchor_hash(raw: _Raw, anchor: Any, root: Any, source: bytes) -> str:
     """Line-scoped tools fingerprint the ignored line or declaration header (spec R4 "Anchor hash")."""
     if raw.tool not in _LINE_SCOPED:
         return norm_hash(anchor, source)  # psalm: the declaration/statement is its scope
     if anchor.type in _CLASS_LIKE or anchor.type in _CALLABLE:
-        if not raw.codes or any(c.startswith("Generic.Metrics.") for c in raw.codes):
+        if _body_derived(raw.tool, raw.codes):
             return norm_hash(anchor, source)  # body-derived metrics
         return header_hash(anchor, source)
     comment = raw.comment

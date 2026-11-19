@@ -178,7 +178,7 @@ def test_trailing_next_line_anchors_next_statement():
     assert a[0].anchor_hash == own[0].anchor_hash
 
 
-_SIG = "<?php\nnamespace A\\B;\nclass C {\n    // phpcs:ignore X.Y\n    public function m(\n        int $a\n    ): int {\n        return {body};\n    }\n}\n"
+_SIG = "<?php\nnamespace A\\B;\nclass C {\n    // phpcs:ignore X.Y.Z\n    public function m(\n        int $a\n    ): int {\n        return {body};\n    }\n}\n"
 
 
 def _sig(body: str = "1", first: str = "public function m(") -> str:
@@ -254,7 +254,7 @@ def _decl(directive: str, sig: str, body: str = "return 1;") -> object:
 
 
 def test_declaration_anchor_uses_header_hash():
-    for directive in ("@phpstan-ignore Code.X", "@phpstan-ignore-next-line", "phpcs:ignore A.B"):
+    for directive in ("@phpstan-ignore Code.X", "@phpstan-ignore-next-line", "phpcs:ignore A.B.C"):
         base = _decl(directive, "public function m(\n        int $a\n    ): int")
         assert base.anchor_kind == "method_declaration"
         for sig in (
@@ -262,10 +262,10 @@ def test_declaration_anchor_uses_header_hash():
             "public function m(\n        int $a\n    )",
         ):
             assert _decl(directive, sig).anchor_hash != base.anchor_hash, (directive, sig)
-    base = _decl("phpcs:ignore A.B", "public\n    function m()")
-    assert _decl("phpcs:ignore A.B", "public\n    static function m()").anchor_hash != base.anchor_hash
-    coded = _decl("phpcs:ignore A.B", "public function m()")
-    assert _decl("phpcs:ignore A.B", "public function m()", "return 2;").anchor_hash == coded.anchor_hash
+    base = _decl("phpcs:ignore A.B.C", "public\n    function m()")
+    assert _decl("phpcs:ignore A.B.C", "public\n    static function m()").anchor_hash != base.anchor_hash
+    coded = _decl("phpcs:ignore A.B.C", "public function m()")
+    assert _decl("phpcs:ignore A.B.C", "public function m()", "return 2;").anchor_hash == coded.anchor_hash
 
 
 def test_declaration_anchor_keeps_node_hash_for_all_codes_and_metrics():
@@ -312,3 +312,32 @@ def test_comment_before_directive_on_its_row_is_not_trailing():
     b, _, _ = _collect(_wrap("        /* a */ // phpcs:ignore X.Y\n        bar();"))
     assert a[0].anchor_kind == "expression_statement"
     assert a[0].anchor_hash != b[0].anchor_hash
+
+
+@pytest.mark.parametrize(
+    "directive",
+    [
+        "phpcs:ignore Generic",
+        "phpcs:ignore Generic.Metrics",
+        "phpcs:ignore generic.metrics.cyclomaticcomplexity",
+        "phpcs:ignore SlevomatCodingStandard.Complexity.Cognitive",
+        "phpcs:ignore Acme.Functions.Nesting.Deep",
+        "phpcs:ignore Acme.Functions.StaticFunction, Generic",
+        "@phpstan-ignore complexity.tooHigh",
+    ],
+)
+def test_declaration_body_edit_rebinds_for_standard_category_and_metric_codes(directive):
+    base = _decl(directive, "public function m()")
+    edited = _decl(directive, "public function m()", "if ($a) { if ($b) { return 2; } }")
+    assert base.anchor_kind == "method_declaration"
+    assert edited.anchor_hash != base.anchor_hash
+
+
+@pytest.mark.parametrize(
+    "directive",
+    ["phpcs:ignore Magento2.Functions.StaticFunction", "@phpstan-ignore missingType.return", "@phpstan-ignore x"],
+)
+def test_declaration_body_edit_keeps_header_for_specific_codes(directive):
+    base = _decl(directive, "public function m()")
+    edited = _decl(directive, "public function m()", "if ($a) { if ($b) { return 2; } }")
+    assert edited.anchor_hash == base.anchor_hash
