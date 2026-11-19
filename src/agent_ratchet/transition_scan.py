@@ -17,6 +17,7 @@ from agent_ratchet.git_guard_io import (
     parse_python, visit_bounded, verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
 from agent_ratchet.lock_policy import LOCK_PATH, adopted_guard_files, lock_check_is_local, verify_lock_transition
+from agent_ratchet.php.scan import dedupe_php_violations, php_transition_violations
 from agent_ratchet.refactoring_guard import compare_ast_snapshots
 from agent_ratchet.slop_text_scan import scan_diff_for_shortcut_escapes, scan_text_for_slop
 from agent_ratchet.source_metrics import (
@@ -304,6 +305,7 @@ def _evaluate_transition(
     if diff_text:
         violations.extend(scan_diff_for_shortcut_escapes(diff_text, fixture_paths=fixtures))
     violations.extend(_check_transition_test_tampering(entries, base_ref, target_prefix, cwd=cwd))
+    violations.extend(php_transition_violations(entries, base_ref, target_prefix, base_cfg, cfg, cwd=cwd))
     return violations
 
 
@@ -339,4 +341,4 @@ def _evaluate_commit_range(range_spec: str, cwd: str | None = None) -> list[Slop
                 violations.extend(SlopViolation(LOCK_PATH, 1, "unjustified_lint_escape", e, e[:100]) for e in verify_lock_transition(p, commit_sha, cwd=cwd, local=lock_check_is_local(commit_sha)))
     violations.extend(_evaluate_transition(base_sha, head_sha, cwd=cwd, loc_ceilings=None, check_step_loc=False))
     violations.extend(_check_aggregate_range_loc(base_sha, head_sha, loc_ceilings, cwd))
-    return violations
+    return dedupe_php_violations(violations)

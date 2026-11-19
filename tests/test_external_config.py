@@ -20,7 +20,7 @@ from php_support import require_php
 PHP_FILE = "app/code/V/M/X.php"
 PHP_BASE = "<?php\nclass X {\n    public function f(): int\n    {\n        return 1;\n    }\n}\n"
 PHP_HEAD = "<?php\nclass X {\n    public function f(): int\n    {\n        // phpcs:ignore Generic.Foo\n        return 1;\n    }\n}\n"
-PHP_CONFIG = {"languages": ["php"], "frameworks": ["magento"]}
+PHP_CONFIG = {"languages": ["php"]}  # R10 row 14; `frameworks: magento` would also need the defusedxml extra
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +51,6 @@ def _scan(repo: Path, base: str, head: str, *extra: str, env: dict[str, str] | N
     return _run_scanner(repo, "--diff-base", base, "--head-ref", head, *extra, extra_env=env)
 
 
-@pytest.mark.xfail(strict=True, reason="PHP rules are wired in Task 8")
 def test_external_config_enables_php_rules(tmp_path: Path) -> None:
     require_php()
     repo, base, head = _repo(tmp_path, {PHP_FILE: PHP_BASE}, {PHP_FILE: PHP_HEAD})

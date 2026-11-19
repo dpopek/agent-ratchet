@@ -117,7 +117,7 @@ def _scan_worktree_files(targets: list[Path], cwd: str | None = None) -> list[Sl
 
 
 def _report_violations(all_violations: list[SlopViolation]) -> int:
-    analysis_errors = [v for v in all_violations if v.category in ("syntax_error", "guard_analysis_error")]
+    analysis_errors = [v for v in all_violations if v.category in ("syntax_error", "guard_analysis_error", "php_parse_degraded")]
     if analysis_errors:
         print(f"\n❌ Guard Analysis Error ({len(analysis_errors)}):", file=sys.stderr)
         for v in analysis_errors:

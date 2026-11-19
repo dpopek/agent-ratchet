@@ -1,0 +1,15 @@
+{
+  "category": "php_suppression_added",
+  "exit": 1,
+  "target_exceptions": [
+    {
+      "codes": [
+        "Generic.Sample.Rule"
+      ],
+      "path": "app/code/Acme/Shop/Model/Foo.php",
+      "reason": "legacy module",
+      "symbol": "Acme\\Shop\\Model\\Foo::run",
+      "tool": "phpcs"
+    }
+  ]
+}
