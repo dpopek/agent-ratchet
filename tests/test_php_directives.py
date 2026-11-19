@@ -147,6 +147,12 @@ def test_phpcs_enable_closes_only_on_phpcs_code_match(enable, closes):
         ("/**\n * note\n * phpcs:enable\n */", True),
         ("/*\n   phpcs:enable A.B */", True),
         ("// note @codingStandardsIgnoreEnd", True),  # legacy form: PHPCS uses strpos, so mid-text still counts
+        # PHPCS trims only " \t/*#" before a keyword: NBSP or form feed makes it mid-text (G2/G6, probed 4.0.4)
+        ("//  phpcs:enable", False),
+        ("//\u000cphpcs:enable", False),
+        ("/*\n  * phpcs:enable */", False),
+        ("// phpcs:enable A.B ", False),  # PHP trim() keeps NBSP, so the code is `A.B<NBSP>`
+        ("// phpcs:enable A.B \t", True),
     ],
 )
 def test_phpcs_enable_only_at_start_of_comment_line(enable, closes):
@@ -162,6 +168,20 @@ def test_mid_text_phpcs_keywords_other_than_enable_stay_recorded():
     )
     assert sorted(p.tool for p in pts) == ["phpcs", "phpcs-unknown"]
     assert [w.codes for w in wins] == [("C.D",)] and [f.tool for f in files] == ["phpcs"]
+
+
+@pytest.mark.parametrize("space", [" ", "\u000c"])
+def test_unicode_space_before_other_phpcs_keywords_keeps_them_recorded(space):
+    pts, wins, _ = _collect(f"<?php\n//{space}phpcs:ignore A.B\n$a = 1;\n//{space}phpcs:disable C.D\n$b = 1;\n")
+    assert [(p.tool, p.codes) for p in pts] == [("phpcs", ("A.B",))]
+    assert [(w.codes, w.closed) for w in wins] == [(("C.D",), False)]
+
+
+def test_unicode_space_does_not_hide_other_tools():
+    pts, _, _ = _collect(
+        _wrap("        // @phpstan-ignore x.y \n        a();\n        /** @psalm-suppress Foo */\n        b();")
+    )
+    assert sorted((p.tool, p.codes) for p in pts) == [("phpstan", ("x.y",)), ("psalm", ("Foo",))]
 
 
 def test_window_unclosed_runs_to_eof():

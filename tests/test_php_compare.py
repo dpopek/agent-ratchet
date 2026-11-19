@@ -137,6 +137,13 @@ def test_mid_text_enable_does_not_close_window() -> None:
     assert _cats(base, target) == ["php_suppression_range_expanded"]
 
 
+@pytest.mark.parametrize("space", [" ", "\u000c"])
+def test_enable_after_unicode_space_does_not_close_window(space) -> None:
+    base = _m("// phpcs:disable A.B\na();\n// phpcs:enable A.B\nz();")
+    target = _m(f"// phpcs:disable A.B\na();\n//{space}phpcs:enable A.B\nz();")
+    assert _cats(base, target) == ["php_suppression_range_expanded"]
+
+
 def test_row5_third_identical_ignore_is_added() -> None:
     two = "// phpcs:ignore Generic.X.Y\na();\n// phpcs:ignore Generic.X.Y\nb();"
     assert _cats(_m(two), _m(two + "\n// phpcs:ignore Generic.X.Y\nc();")) == ["php_suppression_added"]

@@ -25,6 +25,7 @@ _DIRECTIVE = re.compile(
 _PHPCS_FORMS = (("set", None), ("ignorefile", "file"), ("disable", "disable"), ("enable", "enable"), ("ignore", "point"))
 _LEGACY_FORMS = {"line": "point", "start": "disable", "end": "enable", "file": "file"}
 _PAREN = re.compile(r"\([^)]*\)")
+_PHP_TRIM = " \t\n\r\0\x0b"  # PHP trim() default set
 _PHP_TAGS = re.compile(rb"<\?(?:php)?(?=\s|$)|\?>", re.IGNORECASE)  # T_OPEN_TAG (not `<?=`) and T_CLOSE_TAG
 _LINE_SCOPED = {"phpstan", "phpcs"}  # tools that ignore one line (spec R4 "Anchor hash")
 _METRIC_WORDS = ("metrics", "complexity", "nesting")
@@ -163,17 +164,15 @@ def _split_codes(text: str) -> tuple[str, ...]:
 def _phpcs_codes(text: str) -> tuple[str, ...]:
     """PHPCS code list: reason from the first ` --` on, then split on `,` only and trimmed (G5)."""
     text = text.split(" --", 1)[0]
-    return tuple(sorted({c.strip() for c in text.split(",") if c.strip()}))
+    return tuple(sorted({c.strip(_PHP_TRIM) for c in text.split(",") if c.strip(_PHP_TRIM)}))
 
 
 def _comment_lines(text: str) -> list[tuple[int, str]]:
-    out: list[tuple[int, str]] = []
-    for i, line in enumerate(text.split("\n")):
-        line = line.strip()
-        line = line.removeprefix("/**").removeprefix("/*").removeprefix("//").removeprefix("#")
-        line = line.removesuffix("*/").lstrip("*").strip()
-        out.append((i, line))
-    return out
+    """Comment lines trimmed exactly as PHPCS trims them; NBSP and other Unicode spaces stay (G2/G6).
+
+    Other tools match their directives anywhere in the line and split codes on `\\s`, so they are unaffected.
+    """
+    return [(i, line.lstrip(" \t/*#").rstrip(" */\t\r\n")) for i, line in enumerate(text.split("\n"))]
 
 
 def _mid_text(line: str, start: int) -> bool:
