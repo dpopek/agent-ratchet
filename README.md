@@ -176,11 +176,15 @@ Scope and exceptions in `scripts/audit/audit_guard_config.json`:
 - `php_paths`: repo-relative directory prefixes ending in `/`; same path rules as `fixture_paths`. Default
   `["app/code/", "app/design/", "packages/", "src/"]`. A file is in scope when it ends in `.php` or `.phtml`,
   starts with one of the prefixes and has no `vendor` or `generated` path segment. Removing an entry is
-  reported (`php_paths entry removed: '<p>' (narrows PHP analysis scope)`); adding one is allowed.
+  reported (`php_paths entry removed: '<p>' (narrows PHP analysis scope)`); adding one is allowed. The
+  default does not cover a root `tests/` directory; list it explicitly to analyse those tests.
 - `php_suppression_exceptions`: entries with exactly `path`, `symbol`, `tool`, `codes` (list) and a non-empty
   `reason`. An entry silences the matching added, rebound or range-expanded finding only if the same entry is
   already in the base config; an entry added in the same change has no effect. Malformed or duplicate entries
-  are a config error (exit 2).
+  are a config error (exit 2). Exceptions apply per identity, not per occurrence: one entry covers every
+  directive with that `path`, `symbol`, `tool` and `codes`, including ones added later.
+- Agent-ratchet before 4.1 rejects `php_paths` and `php_suppression_exceptions` as unknown keys, and CI runs
+  the base lock. Merge the `guard.lock` bump to 4.1 first, then add these keys in a separate change.
 - Configs of PHP quality tools (phpstan, phpcs, phpunit, psalm, phpmd, php-cs-fixer, rector, captainhook)
   are protected governance files. A change touching them together with PHP code is rejected; make it in a
   separate change.
