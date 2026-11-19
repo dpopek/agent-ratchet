@@ -192,8 +192,9 @@ def _scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], bool]]:
             suffix = (m.group("suffix") or "").lower()
             codes = () if suffix else _split_codes(rest)
             out.append(("point", "phpstan", codes, suffix == "-next-line"))
-        elif m.group("cs") is not None:
-            word = line[m.start("cs") : end].split(" --", 1)[0]
+        elif m.group("cs") is not None:  # PHPCS reads codes to the end of the line, past any later match (G5)
+            word = line[m.start("cs") :].split(" --", 1)[0]
+            rest = line[m.end() :]
             keyword, form = next(
                 ((k, f) for k, f in _PHPCS_FORMS if word.lower().startswith(k)), ("", None)
             )
