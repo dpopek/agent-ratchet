@@ -463,3 +463,35 @@ def test_bound_tag_rows_and_edited_tag_attributes_pulled_in_are_expanded(case: s
 def test_bound_unit_moved_whole_under_another_window_passes(case: str) -> None:
     # BU2: PHPCS 3 and 4 report nothing on either side; the tag sits on its own bound's row in both
     assert _cats_ext(*_ROUND6_PASS[case]) == []
+
+
+_TI = "Generic.WhiteSpace.DisallowTabIndent"
+_ROUND7 = {
+    'TD1d': (
+        f'<p>a</p>\n\t<?php\n// phpcs:disable {_TI}\n?>\n<p>b</p>\n',
+        f'<p>a</p>\n\t<?php // phpcs:disable {_TI} -- legacy\n?>\n<p>b</p>\n',
+        'phtml',
+    ),
+    'TD1s': (
+        f'<p>a</p>\n\t<?php\n// phpcs:disable {_TI}\n?>\n<p>b</p>\n',
+        f'<p>a</p>\n\t<?php //phpcs:disable {_TI}\n?>\n<p>b</p>\n',
+        'phtml',
+    ),
+    'TD1e': (
+        f'<p>a</p>\n\t<?php\n// phpcs:disable {_TI}\n$x = 1;\n?>\n<p>b</p>\n',
+        f'<p>a</p>\n\t<?php // phpcs:disable {_TI}\n?>\n<p>b</p>\n',
+        'phtml',
+    ),
+    'TD1f': (
+        f'<p>a</p>\n\t<?php\n// phpcs:disable {_TI}\n?>\n<p>b</p>\n',
+        f'<p>a</p>\n\t<?php // phpcs:disable {_TI}\n$x = 1;\n?>\n<p>b</p>\n',
+        'phtml',
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_ROUND7))
+def test_bound_tag_joined_with_reworded_bound_or_one_sided_tag_pair_is_expanded(case: str) -> None:
+    # TD1d/TD1s: the joined bound differs only in its reason or spacing; TD1e/TD1f: the tag pair encloses the bound
+    # alone on one side only. PHPCS 3 and 4: the tab-indented `<?php` row is reported in BASE, silent in TARGET
+    assert _cats_ext(*_ROUND7[case]) == [EXPANDED]
