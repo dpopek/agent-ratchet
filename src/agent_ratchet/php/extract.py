@@ -33,8 +33,8 @@ _BUCKETS = ((0, "0"), (16, "<=16"), (256, "<=256"), (4096, "<=4096"))
 class Analysis:
     """Facts of one file, the normalized hash of every symbol that holds a parse gap, and every declared symbol path.
 
-    `window_spans` / `window_rows`: the covered rows of every phpcs window and their bytes; `tokens`: leaf tokens with
-    rows, built on first use. All three feed window growth by token alignment (R6) and are empty without a window.
+    `window_spans`: the covered rows of every phpcs window; `tokens`: leaf tokens with rows, built on first use. Both
+    feed window growth by token alignment (R6) and are empty without a window.
     """
 
     facts: tuple[CanonicalFact, ...]
@@ -42,7 +42,6 @@ class Analysis:
     decode_error: bool = False
     symbols: frozenset[str] = frozenset()
     window_spans: tuple[tuple[int, tuple[str, ...], int, int], ...] = ()
-    window_rows: tuple[bytes, ...] = ()
     parsed: ParsedPhp | None = field(default=None, repr=False, compare=False)
 
     @cached_property
@@ -185,11 +184,7 @@ def _analyze(parsed: ParsedPhp, path: str, oid: str | None) -> Analysis:
         facts.append(_gap_fact(path, symbol, _bucket(end - start), at(line, (start, end))))
     facts.sort(key=lambda f: (f.kind, f.origin.line or 0, f.identity_hash, f.payload_hash))
     spans = tuple((w.line, w.codes, *w.rows) for w in windows)
-    rows = parsed.source.split(b"\n")
-    covered = tuple(b"\n".join(rows[start:end]) for _, _, start, end in spans)
-    return Analysis(
-        tuple(facts), hashes, symbols=_symbols(parsed), window_spans=spans, window_rows=covered, parsed=parsed if spans else None
-    )
+    return Analysis(tuple(facts), hashes, symbols=_symbols(parsed), window_spans=spans, parsed=parsed if spans else None)
 
 
 class PhpPlugin:

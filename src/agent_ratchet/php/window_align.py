@@ -1,31 +1,37 @@
 """phpcs window growth by token alignment (spec R6, I2).
 
-TARGET leaf tokens (comments included, whitespace ignored) are aligned to BASE tokens by their (type, text)
-sequence. Comments that carry phpcs directives are window bounds, not code, and are left out so a moved bound
-never displaces the alignment of the code it moved over. A token on a covered TARGET row that aligns to a BASE
-token must have been on a row that BASE windows with an equal or broader code set covered; unaligned tokens are
-inserted code and never count. Multi-row tokens (strings, heredocs) are checked row by row, relative to the
-token's first row. Rows of existing code a window releases offset identical rows it takes in (a slide between
-copies of a statement).
+TARGET leaf tokens (comments and inline HTML rows included, whitespace ignored) are aligned to BASE tokens by their
+(type, text) sequence. Window bounds are not code and are left out, so a moved bound never displaces the alignment
+of the code it moved over: comments that carry phpcs directives, and the `<?php` / `?>` tags on their rows. Every
+token row on a covered TARGET row that aligns to a BASE token must have been covered in BASE by windows with an
+equal or broader code set; unaligned tokens are inserted code. Nothing offsets growth: PHPCS suppresses every
+covered row, so rows a window releases elsewhere do not count. Multi-row tokens (strings, heredocs) are checked
+row by row, relative to the token's first row.
 """
 
 from __future__ import annotations
 
 import re
 from bisect import bisect_left, bisect_right
-from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from difflib import SequenceMatcher
 
 Token = tuple[str, bytes, int, int]  # type, text, first row, last row
 Span = tuple[int, tuple[str, ...], int, int]  # disable line, codes, first covered row, end row (exclusive)
 _ALL = None  # a window without codes covers every code
 _BOUND = re.compile(rb"phpcs:|@codingStandardsIgnore", re.IGNORECASE)
+_TAGS = frozenset({"php_tag", "php_end_tag"})
 
 
 def alignable(tokens: Sequence[Token]) -> tuple[Token, ...]:
-    """Tokens that take part in the alignment: everything except comments carrying a phpcs directive."""
-    return tuple(t for t in tokens if not (t[0] == "comment" and _BOUND.search(t[1])))
+    """Tokens that take part in the alignment: everything except window bounds (phpcs directive comments and the
+    PHP open/close tags on their rows)."""
+    bound = {t[2] for t in tokens if t[0] == "comment" and _BOUND.search(t[1])}
+    return tuple(
+        t
+        for t in tokens
+        if not ((t[0] == "comment" and _BOUND.search(t[1])) or (t[0] in _TAGS and t[2] in bound))
+    )
 
 
 def _offsets(tok: Token, start: int, end: int) -> range:
@@ -91,53 +97,21 @@ def _row_groups(tokens: Sequence[Token]) -> list[int]:
     return sizes
 
 
-def _newly(
-    tokens: Sequence[Token], cells: list[tuple[int, int]]
-) -> Counter[tuple[tuple[str, bytes, int], ...]]:
-    """Multiset of rows, each row the (type, text, row offset) of its listed token cells in source order."""
-    rows: dict[int, list[tuple[int, int]]] = {}
-    for idx, off in cells:
-        rows.setdefault(tokens[idx][2] + off, []).append((idx, off))
-    return Counter(tuple((*tokens[i][:2], o) for i, o in sorted(r)) for r in rows.values())
-
-
 def grown_windows(
-    base_tokens: Callable[[], Sequence[Token]],
-    base_spans: Sequence[Span],
-    base_rows: Sequence[bytes],
-    target_tokens: Callable[[], Sequence[Token]],
-    target_spans: Sequence[Span],
-    target_rows: Sequence[bytes],
+    base: Sequence[Token], base_spans: Sequence[Span], target: Sequence[Token], target_spans: Sequence[Span]
 ) -> set[tuple[int, tuple[str, ...]]]:
-    """(line, codes) of every TARGET window covering existing code that BASE did not cover for those codes.
-
-    Rows of existing code that leave every TARGET window offset identical rows that enter one, so a window sliding
-    from one copy of a statement to another is not an expansion. A TARGET window whose covered rows are byte-identical
-    to those of a BASE window with the same codes is skipped before any tokenizing (pre-filter, cost guard).
-    """
-    seen = set(zip((s[1] for s in base_spans), base_rows, strict=True))
-    todo = [s for s, rows in zip(target_spans, target_rows, strict=True) if (s[1], rows) not in seen]
-    if not todo:
+    """(line, codes) of every TARGET window covering an existing token row that no BASE window with an equal or
+    broader code set covered."""
+    if not target_spans:
         return set()
-    base, target = base_tokens(), target_tokens()
-    bcover, tcover, aligned = _cover(base, base_spans), _cover(target, target_spans), _align(base, target)
-    back = {i: j for j, i in aligned.items()}
-    grown: set[tuple[int, tuple[str, ...]]] = set()
-    for line, codes, start, end in todo:
-        entered = [
-            (j, off)
+    bcover, aligned = _cover(base, base_spans), _align(base, target)
+    return {
+        (line, codes)
+        for line, codes, start, end in target_spans
+        if any(
+            not _within(codes, bcover.get((i, off), frozenset()))
             for j in _in_rows(target, start, end)
             if (i := aligned.get(j)) is not None
             for off in _offsets(target[j], start, end)
-            if not _within(codes, bcover.get((i, off), frozenset()))
-        ]
-        if not entered:
-            continue
-        left = [
-            (i, off)
-            for (i, off), had in bcover.items()
-            if _within(codes, had) and (j := back.get(i)) is not None and (j, off) not in tcover
-        ]
-        if _newly(target, entered) - _newly(base, left):
-            grown.add((line, codes))
-    return grown
+        )
+    }

@@ -324,11 +324,7 @@ def compare_php_entry(
 
     present = ({key(s) for s in _all_symbols(b)} | {FILE_SYMBOL}, {key(s) for s in _all_symbols(t)} | {FILE_SYMBOL})
     _points(*pick(POINT), out, key, present)
-    grown = (
-        grown_windows(lambda: b.tokens, b.window_spans, b.window_rows, lambda: t.tokens, t.window_spans, t.window_rows)
-        if b.window_spans
-        else set()
-    )
+    grown = grown_windows(b.tokens, b.window_spans, t.tokens, t.window_spans) if b.window_spans else set()
     _windows(*pick(WINDOW), out, key, grown)
     _files(*pick(FILE), out)
     found = out.violations() + degraded

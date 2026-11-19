@@ -214,10 +214,11 @@ def test_unchanged_statement_with_more_covered_tokens_is_expanded(case: str) -> 
     assert _cats(*_ROUND2[case]) == [EXPANDED]
 
 
-def test_window_sliding_to_another_copy_of_a_statement_passes() -> None:
+def test_window_sliding_to_another_copy_of_a_statement_is_expanded() -> None:
+    # round 4 ruling: no slide compensation. PHPCS [7] -> [3]: the copy on row 7 becomes suppressed (probed on 3 and 4)
     base = _FN.format(body=f"    // phpcs:disable {_SIZEOF}\n    $n = sizeof($a);\n    // phpcs:enable\n    d();\n    $n = sizeof($a);")
     target = _FN.format(body=f"    $n = sizeof($a);\n    d();\n    // phpcs:disable {_SIZEOF}\n    $n = sizeof($a);\n    // phpcs:enable")
-    assert _cats(base, target) == []
+    assert _cats(base, target) == [EXPANDED]
 
 
 # --- I2 residual round 3: covered TARGET tokens aligned to BASE tokens must have been covered ------------
@@ -260,3 +261,92 @@ def test_existing_code_newly_covered_is_expanded_whatever_else_changed(case: str
     # or rows outside every anchor (probed on PHPCS 3 and 4)
     assert _cats(*_ROUND3[case]) == [EXPANDED]
 
+
+
+# --- I2 residual round 4: no compensation; inline HTML rows are tokens (probed on PHPCS 3 and 4) ---------------
+
+_ROUND4 = {
+    'PF1': (
+        '<?php\nfunction run($a, $b) {\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    $n += sizeof($a);\n    // phpcs:enable\n    foo();\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    bar();\n    // phpcs:enable\n    $n += sizeof($a);\n}\n',
+        '<?php\nfunction run($a, $b) {\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    $n += sizeof($a);\n    // phpcs:enable\n    foo();\n    bar();\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    $n += sizeof($a);\n    // phpcs:enable\n}\n',
+        'php',
+    ),
+    'PF2': (
+        '<?php\nclass K\n{\n    public function a($a)\n    {\n        // phpcs:disable Generic.PHP.ForbiddenFunctions\n        $n = sizeof($a);\n        // phpcs:enable\n        return $n;\n    }\n\n    public function b($a)\n    {\n        $n = sizeof($a);\n        // phpcs:disable Generic.PHP.ForbiddenFunctions\n        foo();\n        // phpcs:enable\n        return $n;\n    }\n}\n',
+        '<?php\nclass K\n{\n    public function a($a)\n    {\n        // phpcs:disable Generic.PHP.ForbiddenFunctions\n        $n = sizeof($a);\n        // phpcs:enable\n        return $n;\n    }\n\n    public function b($a)\n    {\n        // phpcs:disable Generic.PHP.ForbiddenFunctions\n        $n = sizeof($a);\n        // phpcs:enable\n        foo();\n        return $n;\n    }\n}\n',
+        'php',
+    ),
+    'DC1': (
+        '<?php\nfunction run($a, $b) {\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    $n += sizeof($a);\n    // phpcs:enable\n    $n += sizeof($a);\n    foo();\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    bar();\n    // phpcs:enable\n    $n += sizeof($a);\n    return $n;\n}\n',
+        '<?php\nfunction run($a, $b) {\n    $n += sizeof($a);\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    $n += sizeof($a);\n    // phpcs:enable\n    foo();\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    bar();\n    $n += sizeof($a);\n    // phpcs:enable\n    return $n;\n}\n',
+        'php',
+    ),
+    'SL1': (
+        "<?php\nfunction run($a, $b) {\n    // phpcs:disable Generic.Files.LineLength\n    $result = $this->collectionFactory->create()->addFieldToFilter('id', $id);\n    // phpcs:enable\n    if ($a) {\n        if ($b) {\n            $result = $this->collectionFactory->create()->addFieldToFilter('id', $id);\n        }\n    }\n}\n",
+        "<?php\nfunction run($a, $b) {\n    $result = $this->collectionFactory->create()->addFieldToFilter('id', $id);\n    if ($a) {\n        if ($b) {\n            // phpcs:disable Generic.Files.LineLength\n            $result = $this->collectionFactory->create()->addFieldToFilter('id', $id);\n            // phpcs:enable\n        }\n    }\n}\n",
+        'php',
+    ),
+    'SL2': (
+        '<?php\nfunction run($a) {\n    if ($a) {\n        a();\n    // phpcs:disable Generic.WhiteSpace.ScopeIndent\n    }\n    // phpcs:enable\n    if ($a) {\n        b();\n      }\n}\n',
+        '<?php\nfunction run($a) {\n    if ($a) {\n        a();\n    }\n    if ($a) {\n        b();\n      // phpcs:disable Generic.WhiteSpace.ScopeIndent\n      }\n      // phpcs:enable\n}\n',
+        'php',
+    ),
+    'PH1': (
+        '<div>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:enable ?>\n</div>\n',
+        '<div>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:enable ?>\n</div>\n',
+        'phtml',
+    ),
+    'PH2': (
+        '<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:enable ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n</div>\n',
+        '<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:enable ?>\n</div>\n',
+        'phtml',
+    ),
+    'S7': (
+        '<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>x</p>\n',
+        '<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<p>x</p>\n',
+        'phtml',
+    ),
+}
+
+_ROUND4_PASS = {
+    'PHC1': (
+        '<div>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:enable ?>\n<p>y</p>\n</div>\n',
+        '<div>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<p>new xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:enable ?>\n<p>y</p>\n</div>\n',
+        'phtml',
+    ),
+    'PHC2': (
+        '<div>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:enable ?>\n<p>y</p>\n</div>\n',
+        '<h1>new</h1>\n<div>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:enable ?>\n<p>y</p>\n</div>\n',
+        'phtml',
+    ),
+    'PHC3': (
+        '<div>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:enable ?>\n<p>y</p>\n</div>\n',
+        '<div>\n<?php // phpcs:disable Generic.Files.LineLength ?>\n<p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</p>\n<?php // phpcs:enable ?>\n<p>z</p>\n</div>\n',
+        'phtml',
+    ),
+    'NC2': (
+        '<?php\nfunction run($a, $b) {\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    foo();\n    // phpcs:enable\n    $n += sizeof($a);\n}\n',
+        '<?php\nfunction run($a, $b) {\n    // phpcs:disable Generic.PHP.ForbiddenFunctions\n    foo();\n    $m = sizeof($b);\n    // phpcs:enable\n    $n += sizeof($a);\n}\n',
+        'php',
+    ),
+}
+
+
+def _cats_ext(base: str, target: str, ext: str) -> list[str]:
+    require_php()
+    from agent_ratchet.php.compare import compare_php_entry
+
+    path = PATH.removesuffix(".php") + "." + ext
+    return [v.category for v in compare_php_entry(base.encode(), target.encode(), path, path, ())]
+
+
+@pytest.mark.parametrize("case", sorted(_ROUND4))
+def test_covered_rows_released_elsewhere_never_offset_new_coverage(case: str) -> None:
+    # PF: a byte-identical twin window; DC: one released row, two grown windows; SL: slide onto a row that differs
+    # only in whitespace; PH/S7: a bound tag moved across inline HTML, either direction
+    assert _cats_ext(*_ROUND4[case]) == [EXPANDED]
+
+
+@pytest.mark.parametrize("case", sorted(_ROUND4_PASS))
+def test_new_code_or_moved_windows_with_their_rows_still_pass(case: str) -> None:
+    assert _cats_ext(*_ROUND4_PASS[case]) == []
