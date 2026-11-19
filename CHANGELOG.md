@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.1.2
+
+- Fixed: PHPCS suppression codes compare by hierarchy: narrowing a code (`Generic` to `Generic.PHP.X`) passes, and a broader `phpcs:enable` closes a narrower window.
+
 ## 4.1.1
 
 - Fixed: a plain file scan reports Python syntax errors again (exit 2).

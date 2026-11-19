@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_ratchet.php import phpmd
+from agent_ratchet.php.codes import within
 from agent_ratchet.php.directive_text import comment_lines, scan_line
 from agent_ratchet.php.parser import (
     ParsedPhp,
@@ -315,7 +316,7 @@ def collect(
         elif raw.form == "enable":
             keep = []
             for win in open_windows:
-                covered = not raw.codes or (win["codes"] and set(win["codes"]) <= set(raw.codes))
+                covered = within(win["codes"], raw.codes, hierarchical=True)  # a narrower enable keeps it open
                 if covered:
                     win["end"] = row  # the enable row itself is not suppressed (probed)
                     done.append(win)
