@@ -21,7 +21,8 @@ _DIRECTIVE = re.compile(
     r"|(?P<psalm>@psalm-suppress\b)",
     re.IGNORECASE,
 )
-_PHPCS_FORMS = {"ignore": "point", "disable": "disable", "enable": "enable", "ignorefile": "file"}
+# PHPCS prefix-matches its keywords in this order (Tokenizer::createPositionMap); `set` is not modelled.
+_PHPCS_FORMS = (("set", None), ("ignorefile", "file"), ("disable", "disable"), ("enable", "enable"), ("ignore", "point"))
 _LEGACY_FORMS = {"line": "point", "start": "disable", "end": "enable", "file": "file"}
 _PAREN = re.compile(r"\([^)]*\)")
 _LINE_SCOPED = {"phpstan", "phpcs"}  # tools that ignore one line (spec R4 "Anchor hash")
@@ -180,11 +181,14 @@ def _scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], bool]]:
             codes = () if suffix else _split_codes(rest)
             out.append(("point", "phpstan", codes, suffix == "-next-line"))
         elif m.group("cs") is not None:
-            form = _PHPCS_FORMS.get(m.group("cs").lower())
+            word = line[m.start("cs") : end]
+            keyword, form = next(
+                ((k, f) for k, f in _PHPCS_FORMS if word.lower().startswith(k)), ("", None)
+            )
             if form is None:
                 out.append(("unknown", "phpcs-unknown", _split_codes(rest), False))
-            else:
-                out.append((form, "phpcs", _split_codes(rest), False))
+            else:  # PHPCS skips exactly one character after the keyword, whatever it is
+                out.append((form, "phpcs", _split_codes(word[len(keyword) + 1 :]), False))
         elif m.group("legacy") is not None:
             form = _LEGACY_FORMS[m.group("legacy").lower()]
             out.append((form, "phpcs", (), False))
@@ -219,20 +223,42 @@ def _is_trailing(comment: Any, source: bytes) -> bool:
     return bool(source[line_start:end].strip())
 
 
-def _anchor_for(
-    comment: Any, line_row: int, source: bytes, anchors: list[Any], next_line: bool = False
-) -> Any | None:
-    if _has_error_ancestor(comment):
+def _code_after(comment: Any, source: bytes) -> bool:
+    """Code (not just other comments) follows the comment on its end row."""
+    line_end = source.find(b"\n", comment.end_byte)
+    line_end = len(source) if line_end < 0 else line_end
+    pos, nxt = comment.end_byte, comment.next_sibling
+    while nxt is not None and nxt.type == "comment" and nxt.start_byte < line_end:
+        if source[pos : nxt.start_byte].strip():
+            return True
+        pos, nxt = nxt.end_byte, nxt.next_sibling
+    return pos < line_end and bool(source[pos:line_end].strip())
+
+
+def _same_row_target(raw: _Raw, source: bytes) -> int | None:
+    """Row a line-scoped directive covers when it is not the literal next row (spec R4 "Anchor hash")."""
+    if raw.next_line:
         return None
-    if _is_trailing(comment, source) and not next_line:
+    if _is_trailing(raw.comment, source):
+        return raw.line
+    if raw.tool in _LINE_SCOPED and _code_after(raw.comment, source):
+        return raw.comment.end_point.row  # PHPCS and PHPStan ignore the leading block comment's end row
+    return None
+
+
+def _anchor_for(raw: _Raw, source: bytes, anchors: list[Any]) -> Any | None:
+    if _has_error_ancestor(raw.comment):
+        return None
+    row = _same_row_target(raw, source)
+    if row is not None:
         best = None
         for node in anchors:
-            if node.start_point.row <= line_row <= node.end_point.row and (
+            if node.start_point.row <= row <= node.end_point.row and (
                 best is None or node.start_byte >= best.start_byte
             ):
                 best = node
         return best
-    sib = comment.next_named_sibling
+    sib = raw.comment.next_named_sibling
     while sib is not None:
         if _is_anchor(sib):
             return sib
@@ -261,11 +287,9 @@ def _anchor_hash(raw: _Raw, anchor: Any, root: Any, source: bytes) -> str:
         if _body_derived(raw.tool, raw.codes):
             return norm_hash(anchor, source)  # body-derived metrics
         return header_hash(anchor, source)
-    comment = raw.comment
-    if _is_trailing(comment, source) and not raw.next_line:
-        row = raw.line  # the same row `_anchor_for` takes the anchor from
-    else:
-        row = comment.end_point.row + 1  # literal next row, even after a same-row block comment
+    row = _same_row_target(raw, source)  # the same row `_anchor_for` takes the anchor from
+    if row is None:
+        row = raw.comment.end_point.row + 1  # literal next row
     return line_hash(root, source, row)
 
 
@@ -298,7 +322,7 @@ def collect(
         row = raw.line
         line_no = row + 1
         if raw.form in ("point", "unknown"):
-            anchor = _anchor_for(raw.comment, row, source, anchors, raw.next_line)
+            anchor = _anchor_for(raw, source, anchors)
             tool = raw.tool
             points.append(
                 PointSuppression(

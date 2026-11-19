@@ -144,8 +144,9 @@ What is detected (directives are read only from comments):
 
 - Suppression directives for phpcs (`phpcs:ignore`, `phpcs:disable`/`enable`, `phpcs:ignoreFile`, legacy
   `@codingStandardsIgnore*`), phpstan (`@phpstan-ignore*`), psalm (`@psalm-suppress`) and PHPMD
-  (`@SuppressWarnings(...)` on a class-like or function declaration). An unrecognized `phpcs:<word>` counts as
-  a suppression too.
+  (`@SuppressWarnings(...)` on a class-like or function declaration). PHPCS keywords
+  follow PHPCS's own prefix rules (`phpcs:disabled` is a `disable`); any other unrecognized `phpcs:<word>`
+  counts as a suppression too.
 - `php_suppression_added`: more directives of the same kind, codes and symbol than before.
 - `php_suppression_rebound`: a directive now applies to different code than in base.
 - `php_suppression_anchor_unknown`: a new or changed directive whose target cannot be determined.

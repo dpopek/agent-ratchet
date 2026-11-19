@@ -79,10 +79,19 @@ def test_legacy_ignore_line_start_end_file():
     assert w.closed is True and len(w.statements) == 2
 
 
-def test_phpcs_disabled_typo_is_unknown_tool():
-    pts, _, _ = _collect(_wrap("        // phpcs:disabled\n        run();"))
-    (p,) = pts
-    assert p.tool == "phpcs-unknown" and p.anchor_kind is None and p.anchor_hash is None
+def test_phpcs_keyword_prefix_semantics():
+    _, wins, _ = _collect("<?php\n// phpcs:disabled\n$a = 1;\n// phpcs:enabled\n$b = 2;\n")
+    (w,) = wins
+    assert (w.codes, w.closed, len(w.statements)) == ((), True, 1)
+    (p,), _, _ = _collect(_wrap("        // phpcs:ignored\n        run();"))
+    assert (p.tool, p.codes, p.anchor_kind) == ("phpcs", (), "expression_statement")
+    _, wins, _ = _collect("<?php\n// phpcs:disablefoo\n$a = 1;\n")
+    assert [(w.codes, w.closed) for w in wins] == [(("oo",), False)]
+    pts, wins, files = _collect("<?php\n// phpcs:ignorefiles\n$a = 1;\n")
+    assert [(f.tool, f.codes) for f in files] == [("phpcs", ())] and pts == wins == []
+    for directive in ("phpcs:set X.Y.Z prop 1", "phpcs:foo"):
+        (p,), _, _ = _collect(_wrap(f"        // {directive}\n        run();"))
+        assert p.tool == "phpcs-unknown" and p.anchor_kind is None and p.anchor_hash is None, directive
 
 
 def test_window_closed_and_statements():
@@ -226,13 +235,37 @@ def test_own_line_ignore_targets_literal_next_row():
     assert plain[0].anchor_hash != blank[0].anchor_hash  # deleting the blank row is a rebound
 
 
-def test_same_row_block_comment_targets_next_row():
-    base, _, _ = _collect(_wrap("        // @phpstan-ignore-next-line\n        foo();\n        ok();"))
-    tgt, _, _ = _collect(_wrap("        /* @phpstan-ignore-next-line */ foo();\n        bad();"))
-    assert base[0].anchor_hash != tgt[0].anchor_hash
-    base, _, _ = _collect(_wrap("        // phpcs:ignore X.Y\n        foo();\n        ok();"))
-    tgt, _, _ = _collect(_wrap("        /* phpcs:ignore X.Y */ foo();\n        bad();"))
-    assert base[0].anchor_hash != tgt[0].anchor_hash
+@pytest.mark.parametrize("directive", ["phpcs:ignore", "@phpstan-ignore function.notFound"])
+@pytest.mark.parametrize("opening", ["/* ", "/* note\n        "])
+def test_block_comment_with_code_on_end_row_targets_that_row(directive, opening):
+    def one(code: str, nxt: str) -> object:
+        (p,), _, _ = _collect(_wrap(f"        {opening}{directive} */ {code}\n        {nxt}"))
+        return p
+
+    base = one("sizeof($a);", "next();")
+    (trailing,), _, _ = _collect(_wrap(f"        sizeof($a); // {directive}\n        next();"))
+    assert base.anchor_kind == "expression_statement"
+    assert base.anchor_hash == trailing.anchor_hash  # fingerprint of the end row, not the next one
+    assert one("sizeof($b);", "next();").anchor_hash != base.anchor_hash  # the ignored code edited: rebound
+    assert one("sizeof($a);", "other(1);").anchor_hash == base.anchor_hash  # the next row is not covered
+
+
+def test_only_comments_after_block_directive_keep_next_row():
+    own, _, _ = _collect(_wrap("        // phpcs:ignore\n        run();"))
+    only, _, _ = _collect(_wrap("        /* phpcs:ignore */ /* note */ // more\n        run();"))
+    code, _, _ = _collect(_wrap("        /* phpcs:ignore */ /* note */ x();\n        run();"))
+    (trailing,), _, _ = _collect(_wrap("        x(); // phpcs:ignore\n        run();"))
+    assert only[0].anchor_hash == own[0].anchor_hash
+    assert code[0].anchor_hash == trailing.anchor_hash
+
+
+def test_next_line_block_comment_with_code_still_targets_next_row():
+    own, _, _ = _collect(_wrap("        x();\n        // @phpstan-ignore-next-line\n        y();"))
+    same, _, _ = _collect(_wrap("        /* @phpstan-ignore-next-line */ x();\n        y();"))
+    edited, _, _ = _collect(_wrap("        /* @phpstan-ignore-next-line */ changed(2);\n        y();"))
+    bad, _, _ = _collect(_wrap("        /* @phpstan-ignore-next-line */ x();\n        bad();"))
+    assert same[0].anchor_hash == own[0].anchor_hash == edited[0].anchor_hash
+    assert bad[0].anchor_hash != same[0].anchor_hash
 
 
 def test_trailing_multiline_block_uses_directive_row():

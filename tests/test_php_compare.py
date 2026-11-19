@@ -133,8 +133,9 @@ def test_row5_third_identical_ignore_is_added() -> None:
 def test_row6_legacy_forms_added() -> None:
     base = _m("a();")
     target = "<?php\n/* @codingStandardsIgnoreFile */\n" + _m("// phpcs:disabled\na();")[len("<?php\n") :]
-    assert _cats(base, target) == ["php_suppression_added", "php_suppression_added"]
-    assert _cats(base, _m("// phpcs:disabled\na();")) == ["php_suppression_added"]
+    # `phpcs:disabled` is a real `disable` to PHPCS (prefix match), so it is a new window like any other
+    assert _cats(base, target) == ["php_suppression_added", "php_suppression_range_expanded"]
+    assert _cats(base, _m("// phpcs:disabled\na();")) == ["php_suppression_range_expanded"]
 
 
 def test_added_suppression_with_unresolved_anchor_also_flags_unknown() -> None:
