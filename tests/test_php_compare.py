@@ -131,6 +131,12 @@ def test_enable_with_space_separated_codes_does_not_close_window() -> None:
     assert _cats(base, target) == ["php_suppression_range_expanded"]
 
 
+def test_mid_text_enable_does_not_close_window() -> None:
+    base = _m("// phpcs:disable A.B\na();\n// phpcs:enable A.B\nz();")
+    target = _m("// phpcs:disable A.B\na();\n// note phpcs:enable A.B\nz();\nadded();")
+    assert _cats(base, target) == ["php_suppression_range_expanded"]
+
+
 def test_row5_third_identical_ignore_is_added() -> None:
     two = "// phpcs:ignore Generic.X.Y\na();\n// phpcs:ignore Generic.X.Y\nb();"
     assert _cats(_m(two), _m(two + "\n// phpcs:ignore Generic.X.Y\nc();")) == ["php_suppression_added"]

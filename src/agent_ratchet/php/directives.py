@@ -176,6 +176,12 @@ def _comment_lines(text: str) -> list[tuple[int, str]]:
     return out
 
 
+def _mid_text(line: str, start: int) -> bool:
+    """The `phpcs:` at `start` does not open the line's text (after ` \\t/*#` and an optional `@`)."""
+    prefix = line[:start].removesuffix("@")
+    return bool(prefix.strip(" \t/*#"))
+
+
 def _scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], bool]]:
     """Return (form, tool, codes, next_line) for every directive on a line, in order."""
     matches = list(_DIRECTIVE.finditer(line))
@@ -192,6 +198,8 @@ def _scan_line(line: str) -> list[tuple[str, str, tuple[str, ...], bool]]:
             keyword, form = next(
                 ((k, f) for k, f in _PHPCS_FORMS if word.lower().startswith(k)), ("", None)
             )
+            if form == "enable" and _mid_text(line, m.start()):
+                continue  # PHPCS ignores a mid-text enable (G6); other mid-text keywords over-report, so they stay
             if form is None:
                 out.append(("unknown", "phpcs-unknown", _split_codes(rest), False))
             else:  # PHPCS skips exactly one character after the keyword, whatever it is

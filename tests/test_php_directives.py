@@ -135,6 +135,35 @@ def test_phpcs_enable_closes_only_on_phpcs_code_match(enable, closes):
     assert (w.codes, w.closed, len(w.statements)) == (("A.B",), closes, 1 if closes else 2)
 
 
+@pytest.mark.parametrize(
+    ("enable", "closes"),
+    [
+        ("// note phpcs:enable", False),  # PHPCS honours a keyword only at the start of the line's text (G6)
+        ("/* note phpcs:enable A.B */", False),
+        ("// phpcs:ignore X.Y -- phpcs:enable", False),
+        ("// phpcs:enable", True),
+        ("# @phpcs:enable A.B", True),
+        ("/* phpcs:enable */", True),
+        ("/**\n * note\n * phpcs:enable\n */", True),
+        ("/*\n   phpcs:enable A.B */", True),
+        ("// note @codingStandardsIgnoreEnd", True),  # legacy form: PHPCS uses strpos, so mid-text still counts
+    ],
+)
+def test_phpcs_enable_only_at_start_of_comment_line(enable, closes):
+    _, wins, _ = _collect(f"<?php\n// phpcs:disable A.B\n$a = 1;\n{enable}\n$b = 2;\n")
+    (w,) = wins
+    assert (w.closed, len(w.statements)) == (closes, 1 if closes else 2)
+
+
+def test_mid_text_phpcs_keywords_other_than_enable_stay_recorded():
+    pts, wins, files = _collect(
+        "<?php\n// note phpcs:ignore A.B\n$a = 1;\n// note phpcs:disable C.D\n$b = 1;\n// note phpcs:ignoreFile\n"
+        "// note phpcs:set X.Y.Z p 1\n"
+    )
+    assert sorted(p.tool for p in pts) == ["phpcs", "phpcs-unknown"]
+    assert [w.codes for w in wins] == [("C.D",)] and [f.tool for f in files] == ["phpcs"]
+
+
 def test_window_unclosed_runs_to_eof():
     src = "<?php\n// phpcs:disable\n$b = 2;\n$c = 3;\n"
     _, wins, _ = _collect(src)
