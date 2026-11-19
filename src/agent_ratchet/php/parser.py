@@ -53,6 +53,13 @@ def node_text(node: Any, source: bytes) -> str:
     return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
+def _token(leaf: Any, source: bytes) -> bytes:
+    tok = source[leaf.start_byte : leaf.end_byte]
+    if leaf.type == "text":  # inline HTML: whitespace is not semantic
+        tok = b" ".join(tok.split())
+    return tok
+
+
 def _leaf_tokens(node: Any, source: bytes) -> list[bytes]:
     tokens: list[bytes] = []
     stack = [node]
@@ -61,9 +68,7 @@ def _leaf_tokens(node: Any, source: bytes) -> list[bytes]:
         if cur.type == "comment":
             continue
         if cur.child_count == 0:
-            tok = source[cur.start_byte : cur.end_byte]
-            if cur.type == "text":  # inline HTML: whitespace is not semantic
-                tok = b" ".join(tok.split())
+            tok = _token(cur, source)
             if tok:
                 tokens.append(tok)
         else:
@@ -71,8 +76,44 @@ def _leaf_tokens(node: Any, source: bytes) -> list[bytes]:
     return tokens
 
 
+def _digest(tokens: list[bytes]) -> str:
+    h = hashlib.sha256(NORM_DOMAIN)
+    h.update(b" ".join(tokens))
+    return h.hexdigest()
+
+
 def norm_hash(node: Any, source: bytes) -> str:
     """Hex SHA-256 over leaf tokens joined by one space; comments and whitespace never matter."""
-    h = hashlib.sha256(NORM_DOMAIN)
-    h.update(b" ".join(_leaf_tokens(node, source)))
-    return h.hexdigest()
+    return _digest(_leaf_tokens(node, source))
+
+
+def first_token_row(root: Any, source: bytes, after_byte: int) -> int | None:
+    """Row of the first non-comment, non-empty leaf token starting at or after `after_byte`."""
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        if cur.type == "comment" or cur.end_byte <= after_byte:
+            continue
+        if cur.child_count == 0:
+            if cur.start_byte >= after_byte and _token(cur, source):
+                return int(cur.start_point.row)
+        else:
+            stack.extend(reversed(cur.children))
+    return None
+
+
+def line_hash(root: Any, source: bytes, row: int) -> str:
+    """`norm_hash` domain over the non-comment leaf tokens whose start row equals `row` (spec R4)."""
+    tokens: list[bytes] = []
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        if cur.type == "comment" or cur.end_point.row < row or cur.start_point.row > row:
+            continue
+        if cur.child_count == 0:
+            tok = _token(cur, source)
+            if tok and cur.start_point.row == row:
+                tokens.append(tok)
+        else:
+            stack.extend(reversed(cur.children))
+    return _digest(tokens)

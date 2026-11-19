@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from agent_ratchet.php.parser import ParsedPhp, norm_hash
+from agent_ratchet.php.parser import ParsedPhp, first_token_row, line_hash, norm_hash
 
 FILE_SYMBOL = "<file>"
 _CLASS_LIKE = {"class_declaration", "interface_declaration", "trait_declaration", "enum_declaration"}
@@ -23,6 +23,7 @@ _DIRECTIVE = re.compile(
 _PHPCS_FORMS = {"ignore": "point", "disable": "disable", "enable": "enable", "ignorefile": "file"}
 _LEGACY_FORMS = {"line": "point", "start": "disable", "end": "enable", "file": "file"}
 _PAREN = re.compile(r"\([^)]*\)")
+_LINE_SCOPED = {"phpstan", "phpcs"}  # tools that ignore one line (spec R4 "Anchor hash")
 
 
 class PhpDecodeError(ValueError):
@@ -232,6 +233,18 @@ def _anchor_for(
     return None
 
 
+def _anchor_hash(raw: _Raw, anchor: Any, root: Any, source: bytes) -> str:
+    """Line-scoped tools fingerprint the ignored line; psalm keeps the whole-node hash."""
+    if raw.tool not in _LINE_SCOPED:
+        return norm_hash(anchor, source)
+    comment = raw.comment
+    if _is_trailing(comment, source) and not raw.next_line:
+        row: int | None = comment.start_point.row
+    else:
+        row = first_token_row(root, source, comment.end_byte)
+    return line_hash(root, source, row) if row is not None else norm_hash(anchor, source)
+
+
 def _scan_comments(comments: list[Any], source: bytes) -> list[_Raw]:
     raws: list[_Raw] = []
     for comment in comments:
@@ -271,7 +284,7 @@ def collect(
                     anchor_kind=None if anchor is None or tool == "phpcs-unknown" else anchor.type,
                     anchor_hash=None
                     if anchor is None or tool == "phpcs-unknown"
-                    else norm_hash(anchor, source),
+                    else _anchor_hash(raw, anchor, root, source),
                     line=line_no,
                 )
             )

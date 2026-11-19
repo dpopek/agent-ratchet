@@ -176,3 +176,74 @@ def test_trailing_next_line_anchors_next_statement():
     own, _, _ = _collect(_wrap("        a();\n        // @phpstan-ignore-next-line\n        b();"))
     assert a[0].anchor_hash != b[0].anchor_hash
     assert a[0].anchor_hash == own[0].anchor_hash
+
+
+_SIG = "<?php\nnamespace A\\B;\nclass C {\n    // phpcs:ignore X.Y\n    public function m(\n        int $a\n    ): int {\n        return {body};\n    }\n}\n"
+
+
+def _sig(body: str = "1", first: str = "public function m(") -> str:
+    return _SIG.replace("{body}", body).replace("public function m(", first)
+
+
+def test_phpcs_ignore_fingerprint_ignores_body_edit():
+    import hashlib
+
+    from agent_ratchet.php.parser import NORM_DOMAIN
+
+    (base,), _, _ = _collect(_sig("1"))
+    (edited,), _, _ = _collect(_sig("$a + 2"))
+    assert base.anchor_kind == edited.anchor_kind == "method_declaration"
+    assert base.anchor_hash == edited.anchor_hash
+    assert base.anchor_hash == hashlib.sha256(NORM_DOMAIN + b"public function m (").hexdigest()
+
+
+def test_phpcs_ignore_fingerprint_changes_when_ignored_line_edited():
+    (base,), _, _ = _collect(_sig())
+    (edited,), _, _ = _collect(_sig(first="protected function m("))
+    assert base.anchor_kind == edited.anchor_kind == "method_declaration"
+    assert base.anchor_hash != edited.anchor_hash
+
+
+def test_trailing_ignore_fingerprints_own_line():
+    def one(head: str, body: str) -> object:
+        (p,), _, _ = _collect(_wrap(f"        {head} {{ // phpcs:ignore\n            {body}\n        }}"))
+        return p
+
+    base = one("if ($x)", "a();")
+    assert base.anchor_kind == "if_statement"
+    assert one("if ($x)", "b(1);").anchor_hash == base.anchor_hash
+    assert one("if ($y)", "a();").anchor_hash != base.anchor_hash
+
+
+def test_own_line_ignore_skips_comment_only_lines():
+    plain, _, _ = _collect(_wrap("        // phpcs:ignore\n        run();"))
+    spaced, _, _ = _collect(_wrap("        // phpcs:ignore\n        // note\n        /* more */\n\n        run();"))
+    assert plain[0].anchor_hash == spaced[0].anchor_hash
+
+
+def test_phpstan_ignore_next_line_uses_fingerprint():
+    def one(body: str) -> object:
+        (p,), _, _ = _collect(_wrap(f"        // @phpstan-ignore-next-line\n        if ($x) {{\n            {body}\n        }}"))
+        return p
+
+    assert one("a();").anchor_kind == "if_statement"
+    assert one("a();").anchor_hash == one("b(2);").anchor_hash
+    for directive in ("@phpstan-ignore x.y", "@codingStandardsIgnoreLine"):
+        a, _, _ = _collect(_wrap(f"        // {directive}\n        try {{\n            a();\n        }} catch (E $e) {{}}"))
+        b, _, _ = _collect(_wrap(f"        // {directive}\n        try {{\n            b();\n        }} catch (E $e) {{}}"))
+        assert a[0].anchor_hash == b[0].anchor_hash, directive
+
+
+def test_psalm_suppress_keeps_node_hash():
+    src = "<?php\nnamespace A\\B;\nclass C {\n    /** @psalm-suppress Foo */\n    public function m() {\n        return {body};\n    }\n}\n"
+    (a,), _, _ = _collect(src.replace("{body}", "1"))
+    (b,), _, _ = _collect(src.replace("{body}", "2"))
+    assert a.anchor_kind == b.anchor_kind == "method_declaration"
+    assert a.anchor_hash != b.anchor_hash
+
+
+def test_fingerprint_crlf_and_reindent_stable():
+    (base,), _, _ = _collect(_sig())
+    (crlf,), _, _ = _collect(_sig().replace("\n", "\r\n"))
+    (reindented,), _, _ = _collect(_sig(first="public   function   m (").replace("    ", "\t"))
+    assert base.anchor_hash == crlf.anchor_hash == reindented.anchor_hash
