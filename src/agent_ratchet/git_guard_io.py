@@ -14,6 +14,7 @@ from typing import Any, Mapping, NamedTuple, Sequence
 from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers re-exported
     GuardAnalysisError as GuardAnalysisError, parse_python as parse_python, visit_bounded as visit_bounded,
 )
+from agent_ratchet import external_config
 from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
 from agent_ratchet.json_safety import loads_bounded
 from agent_ratchet.php.scope import DEFAULT_PHP_PATHS, validate_exceptions, validate_php_paths
@@ -302,7 +303,7 @@ def fixture_set(base_cfg: Mapping[str, Any] | None, target_cfg: Mapping[str, Any
 
 
 def load_guard_config_for_ref(ref_prefix: str, cwd: str | None = None) -> dict[str, Any]:
-    cfg = _read_guard_config_for_ref(ref_prefix, cwd)
+    cfg = external_config.active_override() or _read_guard_config_for_ref(ref_prefix, cwd)
 
     require_profile_capabilities(cfg)
     return cfg
@@ -429,6 +430,8 @@ def _check_import_roots_monotonicity(base_roots: Sequence[str], target_roots: Se
 
 
 def verify_audit_guard_config_monotonicity(base_prefix: str, target_prefix: str, cwd: str | None = None) -> list[str]:
+    if external_config.override_active():
+        return []  # one operator-owned version of the config: nothing to compare
     if not base_prefix or (base_prefix == "HEAD" and not head_commit_exists(cwd)):
         return []
     rel = "scripts/audit/audit_guard_config.json"

@@ -12,6 +12,7 @@ import subprocess
 import sys
 from typing import Any
 
+from agent_ratchet import external_config
 from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES,
     PROTECTED_GOVERNANCE_FILES, PROTECTED_GOVERNANCE_PREFIXES,
@@ -351,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enforce-policy-isolation", action="store_true", help="Reject single commits mixing governance and src/")
     parser.add_argument("--staged-only", action="store_true", help="Evaluate staged Git index instead of worktree")
     parser.add_argument("--commit-range", default=None, help="Commit range <base>..<head> for per-commit + final check")
+    parser.add_argument("--config-file", default=None, help="External guard config outside the repository (env AGENT_RATCHET_CONFIG)")
     args = parser.parse_args(argv)
     with git_batch_session():
         return _run_baseline_check(args)
@@ -363,6 +365,9 @@ def _run_baseline_check(args: argparse.Namespace) -> int:
             print(f"FAIL: Simulated baseline violation detected: {res.reason}", file=sys.stderr)
             return 1
         return 0
+    config_rc = external_config.activate_cli(args.config_file)
+    if config_rc is not None:
+        return config_rc
     lock_rc = None if (args.commit_range or args.base_ref) else check_staged_lock(require_base_ref=args.require_base_ref)
     if lock_rc is not None:
         return lock_rc

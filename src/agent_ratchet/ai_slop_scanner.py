@@ -10,6 +10,7 @@ import subprocess
 import sys
 from typing import Any, Sequence
 
+from agent_ratchet import external_config
 from agent_ratchet.git_guard_io import (
     CODE_SCAN_EXTS, GuardAnalysisError as GuardAnalysisError, SlopViolation as SlopViolation,
     check_staged_file_size_buffer as check_staged_file_size_buffer, count_test_assertions as count_test_assertions,
@@ -143,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head-ref", default="HEAD", help="Target commit ref for --diff-base")
     parser.add_argument("--commit-range", default=None, help="Commit range <base>..<head> for per-commit + aggregate scan")
     parser.add_argument("--test-fixtures", action="store_true", help="Run self-test against fixtures")
+    parser.add_argument("--config-file", default=None, help="External guard config outside the repository (env AGENT_RATCHET_CONFIG)")
     parser.add_argument("files", nargs="*", help="Specific files or folders to scan")
     args = parser.parse_args(argv)
     with git_batch_session():
@@ -164,6 +166,9 @@ def _emit_shadow_report(violations: Sequence[SlopViolation]) -> None:
 def _run_scan(args: argparse.Namespace) -> int:
     if args.test_fixtures:
         return 0 if run_fixtures_self_test() else 1
+    config_rc = external_config.activate_cli(args.config_file)
+    if config_rc is not None:
+        return config_rc
     lock_rc = check_staged_lock() if args.staged_only else None
     if lock_rc is not None:
         return lock_rc

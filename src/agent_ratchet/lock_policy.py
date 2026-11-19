@@ -16,6 +16,7 @@ import sys
 import tempfile
 from typing import Iterable, Literal
 
+from agent_ratchet import external_config
 from agent_ratchet.git_guard_io import GuardAnalysisError, _git_out, _read_ref_file_bytes, head_commit_exists, trusted_base_candidates
 
 GUARD_CORE_URL: str = "https://github.com/dpopek/agent-ratchet"
@@ -251,6 +252,8 @@ def adopted_guard_files(base_prefix: str, target_prefix: str, deleted: Iterable[
 def verify_lock_transition(
     base_prefix: str | None, target_prefix: str, cwd: str | None = None, *, local: bool, repo_url: str = GUARD_CORE_URL
 ) -> list[str]:
+    if external_config.override_active() and entry_mode(base_prefix, LOCK_PATH, cwd) is None and entry_mode(target_prefix, LOCK_PATH, cwd) is None:
+        return []  # local-only operation (R10): no pin to protect
     target_modes = {p: entry_mode(target_prefix, p, cwd) for p in _ALLOWED_MODES}
     for rel_path, mode in target_modes.items():
         if mode is not None and mode not in _ALLOWED_MODES[rel_path]:
@@ -310,6 +313,8 @@ def staged_lock_errors(cwd: str | None = None, *, require_base_ref: bool = False
 
 def check_staged_lock(cwd: str | None = None, *, require_base_ref: bool = False) -> int | None:
     """CLI wrapper: exit code 2 on any pin violation or analysis error, None when the index may proceed."""
+    if external_config.override_active() and not _pin_present(cwd):
+        return None
     try:
         errs = staged_lock_errors(cwd, require_base_ref=require_base_ref)
     except GuardAnalysisError as exc:
