@@ -112,7 +112,7 @@ def _scan_worktree_files(targets: list[Path], cwd: str | None = None) -> list[Sl
         rel_str = str(path)
         all_violations.extend(scan_text_for_slop(content, rel_str, extra_rules=extra_rules))
         if path.suffix == ".py":
-            all_violations.extend(v for v in scan_ast_for_refactoring_slop(content, rel_str, changed_lines=set(), extra_rules=extra_rules) if v.category == "syntax_error")
+            all_violations.extend(v for v in scan_ast_for_refactoring_slop(content, rel_str, changed_lines=None, extra_rules=extra_rules) if v.category == "syntax_error")
     return all_violations
 
 
