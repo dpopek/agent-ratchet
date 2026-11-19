@@ -6,6 +6,7 @@ Keyword and code-list parsing of one comment line lives in `directive_text`.
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -13,13 +14,12 @@ from typing import Any
 from agent_ratchet.php import phpmd
 from agent_ratchet.php.directive_text import comment_lines, scan_line
 from agent_ratchet.php.parser import (
-    EMPTY_LINE,
     ParsedPhp,
     declaration_name_hash,
     header_hash,
+    leaf_spans,
     line_hash,
     norm_hash,
-    row_hashes,
 )
 
 FILE_SYMBOL = "<file>"
@@ -53,7 +53,7 @@ class WindowSuppression:
     closed: bool
     statements: tuple[str, ...]
     line: int
-    rows: tuple[str, ...] = ()  # sorted fingerprints of the covered rows that hold code (I2 residual)
+    coverage: tuple[tuple[str, int], ...] = ()  # (statement hash, leaf tokens on covered rows), sorted (I2)
 
 
 @dataclass(frozen=True)
@@ -332,26 +332,35 @@ def collect(
             points.append(
                 PointSuppression(scope(comment if decl is None else decl), "phpmd", codes, kind, digest, row + 1, header)
             )
-    rows = row_hashes(root, source) if done or open_windows else []
-    windows = [_window(w, anchors, source, rows, closed=True) for w in done]
-    windows += [_window(w, anchors, source, rows, closed=False) for w in open_windows]
+    leaves = leaf_spans(root, source) if done or open_windows else []
+    windows = [_window(w, anchors, source, leaves, closed=True) for w in done]
+    windows += [_window(w, anchors, source, leaves, closed=False) for w in open_windows]
     windows.sort(key=lambda w: (w.line, w.symbol, w.codes))
     return points, windows, files
 
 
-def _window(win: dict[str, Any], anchors: list[Any], source: bytes, rows: list[str], closed: bool) -> WindowSuppression:
-    """Covered: every anchor whose row span meets rows [disable row, enable row), or up to EOF, and those rows (R3, I2)."""
-    end = win["end"] if closed else len(rows)
-    hashes = sorted(
-        _statement_hash(n, source) for n in anchors if n.start_point.row < end and n.end_point.row >= win["start"]
-    )
+def _window(
+    win: dict[str, Any], anchors: list[Any], source: bytes, leaves: list[tuple[int, int, int]], closed: bool
+) -> WindowSuppression:
+    """Covered: every anchor whose row span meets rows [disable row, enable row), or up to EOF (spec R3, I2), and per
+    anchor how many of its leaf tokens sit on those rows (reflow-invariant: whitespace never moves a token)."""
+    start, end = win["start"], win["end"] if closed else source.count(b"\n") + 1
+    prefix = [0]
+    for _, first, last in leaves:
+        prefix.append(prefix[-1] + (first < end and last >= start))
+    starts = [b for b, _, _ in leaves]
+    met = [n for n in anchors if n.start_point.row < end and n.end_point.row >= start]
+    cover = [
+        (_statement_hash(n, source), prefix[bisect_left(starts, n.end_byte)] - prefix[bisect_left(starts, n.start_byte)])
+        for n in met
+    ]
     return WindowSuppression(
         symbol=win["symbol"],
         codes=win["codes"],
         closed=closed,
-        statements=tuple(hashes),
+        statements=tuple(sorted(h for h, _ in cover)),
         line=win["line"],
-        rows=tuple(sorted(h for h in rows[win["start"] : end] if h != EMPTY_LINE)),
+        coverage=tuple(sorted(cover)),
     )
 
 
@@ -364,11 +373,6 @@ def statement_hashes(parsed: ParsedPhp) -> tuple[str, ...]:
     """Sorted multiset of every statement's window hash in the file, so window growth can tell pulled-in code (R6)."""
     _, anchors = _walk(parsed.tree.root_node)
     return tuple(sorted(_statement_hash(n, parsed.source) for n in anchors))
-
-
-def row_fingerprints(parsed: ParsedPhp) -> tuple[str, ...]:
-    """Sorted multiset of every code row's fingerprint in the file, so window growth can tell pulled-in rows (R6)."""
-    return tuple(sorted(h for h in row_hashes(parsed.tree.root_node, parsed.source) if h != EMPTY_LINE))
 
 
 def namespace_resolver(root: Any, source: bytes) -> Callable[[int], str]:

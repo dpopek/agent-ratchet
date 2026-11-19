@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -88,7 +87,6 @@ def norm_hash(node: Any, source: bytes) -> str:
     return _digest(_leaf_tokens(node, source))
 
 
-_WORD = re.compile(rb"\w")
 EMPTY_LINE = "empty-line"  # fingerprint of a blank or comment-only row (never a hex digest)
 
 
@@ -109,22 +107,20 @@ def line_hash(root: Any, source: bytes, row: int) -> str:
     return _digest(tokens) if tokens else EMPTY_LINE
 
 
-def row_hashes(root: Any, source: bytes) -> list[str]:
-    """`line_hash` of every row in one pass; rows whose tokens hold no word character are `EMPTY_LINE` (I2 residual)."""
-    rows: list[list[bytes]] = [[] for _ in range(source.count(b"\n") + 1)]
+def leaf_spans(root: Any, source: bytes) -> list[tuple[int, int, int]]:
+    """`(start_byte, start_row, end_row)` of every non-comment leaf token in source order (window coverage, I2)."""
+    spans: list[tuple[int, int, int]] = []
     stack = [root]
     while stack:
         cur = stack.pop()
         if cur.type == "comment":
             continue
         if cur.child_count == 0:
-            tok = _token(cur, source)
-            if tok:
-                for row in range(cur.start_point.row, min(cur.end_point.row, len(rows) - 1) + 1):
-                    rows[row].append(tok)
+            if _token(cur, source):
+                spans.append((cur.start_byte, cur.start_point.row, cur.end_point.row))
         else:
             stack.extend(reversed(cur.children))
-    return [_digest(t) if any(_WORD.search(x) for x in t) else EMPTY_LINE for t in rows]
+    return spans
 
 
 def header_hash(node: Any, source: bytes) -> str:

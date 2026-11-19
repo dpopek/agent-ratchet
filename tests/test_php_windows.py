@@ -139,7 +139,7 @@ def test_enable_moved_onto_the_end_of_the_next_row_passes() -> None:
     assert _cats(base, target) == []
 
 
-# --- I2 residual: covered rows are fingerprinted, not only covered statements ---------------------------
+# --- I2 residual: a disable moved inside a statement the BASE window already met -------------------------
 
 _FN = "<?php\nfunction run($a) {{\n{body}\n}}\n"
 _SIZEOF = "Generic.PHP.ForbiddenFunctions"
@@ -167,4 +167,54 @@ def test_window_moved_with_its_unchanged_rows_passes() -> None:
 def test_new_rows_under_an_unchanged_window_pass() -> None:
     base = _FN.format(body=f"    // phpcs:disable {_SIZEOF}\n    $n = sizeof($a);\n    // phpcs:enable\n    if ($a) {{\n        b();\n    }}")
     target = base.replace("$n = sizeof($a);", "$n = sizeof($a);\n    if ($n) {\n        c($n);\n    }")
+    assert _cats(base, target) == []
+
+
+# --- I2 residual round 2: leaf tokens of an unchanged statement newly covered (reflow-invariant) ---------
+
+_ROUND2 = {
+    'N': (
+        '<?php\nfunction run($a, $b) {\n    $x = bar(\n        1,\n        sizeof($a)\n    ); // phpcs:disable Generic.PHP.ForbiddenFunctions\n    foo($x);\n}\n',
+        '<?php\nfunction run($a, $b) {\n    $x = bar(\n        // phpcs:disable Generic.PHP.ForbiddenFunctions\n        1, sizeof($a)\n    );\n    foo($x);\n}\n',
+    ),
+    'O': (
+        '<?php\nfunction run($a, $b) {\n    $x = bar(\n        1,\n        sizeof($a)\n    ); // phpcs:disable Generic.PHP.ForbiddenFunctions\n    foo($x);\n}\n',
+        '<?php\nfunction run($a, $b) {\n    $x = bar(\n        1,\n        // phpcs:disable Generic.PHP.ForbiddenFunctions\n        sizeof(\n            $a)\n    );\n    foo($x);\n}\n',
+    ),
+    'P': (
+        '<?php\nfunction run($a, $b) {\n    return [\n        1,\n        sizeof($a),\n        2,\n        // phpcs:disable Generic.PHP.ForbiddenFunctions\n    ];\n}\n',
+        '<?php\nfunction run($a, $b) {\n    return [ // phpcs:disable Generic.PHP.ForbiddenFunctions\n        1, sizeof($a), 2,\n    ];\n}\n',
+    ),
+    'C': (
+        '<?php\nfunction run($a, $b) {\n    $y = $b\n        .\n        @\n        foo(); // phpcs:disable Generic.PHP.NoSilencedErrors\n    d();\n}\n',
+        '<?php\nfunction run($a, $b) {\n    $y = $b\n        .\n        // phpcs:disable Generic.PHP.NoSilencedErrors\n        @\n        foo();\n    d();\n}\n',
+    ),
+    'D': (
+        '<?php\nfunction run($a, $b) {\n    if ($a\n        ==\n        $b) { // phpcs:disable Squiz.Operators.ComparisonOperatorUsage\n        d();\n    }\n}\n',
+        '<?php\nfunction run($a, $b) {\n    if ($a\n        // phpcs:disable Squiz.Operators.ComparisonOperatorUsage\n        ==\n        $b) {\n        d();\n    }\n}\n',
+    ),
+    'E': (
+        '<?php\nfunction run($a, $b) {\n    if ($a\n        =\n        $b) { // phpcs:disable Generic.CodeAnalysis.AssignmentInCondition\n        d();\n    }\n}\n',
+        '<?php\nfunction run($a, $b) {\n    if ($a\n        // phpcs:disable Generic.CodeAnalysis.AssignmentInCondition\n        =\n        $b) {\n        d();\n    }\n}\n',
+    ),
+    'A': (
+        '<?php\nfunction run($a, $b) {\n    if ($a) {\n        b();\n        // phpcs:disable Generic.WhiteSpace.ScopeIndent\n        c();\n        // phpcs:enable\n      }\n    d();\n}\n',
+        '<?php\nfunction run($a, $b) {\n    if ($a) {\n        b();\n        // phpcs:disable Generic.WhiteSpace.ScopeIndent\n        c();\n      }\n        // phpcs:enable\n    d();\n}\n',
+    ),
+    'B': (
+        '<?php\nfunction run($a, $b) {\n    if ($a) {\n        // phpcs:disable Squiz.WhiteSpace.SuperfluousWhitespace\n        c();\n        // phpcs:enable\n    }   \n    d();\n}\n',
+        '<?php\nfunction run($a, $b) {\n    if ($a) {\n        // phpcs:disable Squiz.WhiteSpace.SuperfluousWhitespace\n        c();\n    }   \n    // phpcs:enable\n    d();\n}\n',
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_ROUND2))
+def test_unchanged_statement_with_more_covered_tokens_is_expanded(case: str) -> None:
+    # N/O/P: rows reflowed by whitespace only; C/D/E: operator-only rows; A/B: a closing `}` row (probed on PHPCS 3 and 4)
+    assert _cats(*_ROUND2[case]) == [EXPANDED]
+
+
+def test_window_sliding_to_another_copy_of_a_statement_passes() -> None:
+    base = _FN.format(body=f"    // phpcs:disable {_SIZEOF}\n    $n = sizeof($a);\n    // phpcs:enable\n    d();\n    $n = sizeof($a);")
+    target = _FN.format(body=f"    $n = sizeof($a);\n    d();\n    // phpcs:disable {_SIZEOF}\n    $n = sizeof($a);\n    // phpcs:enable")
     assert _cats(base, target) == []

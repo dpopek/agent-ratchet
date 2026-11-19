@@ -14,7 +14,6 @@ from agent_ratchet.php.directives import (
     PhpDecodeError,
     collect,
     namespace_resolver,
-    row_fingerprints,
     statement_hashes,
     symbol_path,
 )
@@ -34,7 +33,6 @@ class Analysis:
     """Facts of one file, the normalized hash of every symbol that holds a parse gap, and every declared symbol path.
 
     `statement_hashes`: sorted window hash of every statement in the file; empty when the file has no window.
-    `row_hashes`: sorted fingerprint of every code row in the file; empty when the file has no window.
     """
 
     facts: tuple[CanonicalFact, ...]
@@ -42,7 +40,6 @@ class Analysis:
     decode_error: bool = False
     symbols: frozenset[str] = frozenset()
     statement_hashes: tuple[str, ...] = ()
-    row_hashes: tuple[str, ...] = ()
 
 
 def _bucket(length: int) -> str:
@@ -150,7 +147,7 @@ def _analyze(parsed: ParsedPhp, path: str, oid: str | None) -> Analysis:
             CanonicalFact(
                 WINDOW,
                 {"path": path, "symbol": w.symbol, "tool": "phpcs", "codes": list(w.codes)},
-                {"closed": w.closed, "statements": list(w.statements), "rows": list(w.rows)},
+                {"closed": w.closed, "statements": list(w.statements), "coverage": [list(c) for c in w.coverage]},
                 "multiset",
                 complete(w.symbol),
                 at(w.line),
@@ -177,8 +174,8 @@ def _analyze(parsed: ParsedPhp, path: str, oid: str | None) -> Analysis:
         line = parsed.source.count(b"\n", 0, start) + 1
         facts.append(_gap_fact(path, symbol, _bucket(end - start), at(line, (start, end))))
     facts.sort(key=lambda f: (f.kind, f.origin.line or 0, f.identity_hash, f.payload_hash))
-    stmts, rows = (statement_hashes(parsed), row_fingerprints(parsed)) if windows else ((), ())
-    return Analysis(tuple(facts), hashes, symbols=_symbols(parsed), statement_hashes=stmts, row_hashes=rows)
+    stmts = statement_hashes(parsed) if windows else ()
+    return Analysis(tuple(facts), hashes, symbols=_symbols(parsed), statement_hashes=stmts)
 
 
 class PhpPlugin:
