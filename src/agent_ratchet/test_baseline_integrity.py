@@ -140,7 +140,7 @@ def _check_single_commit_policy_isolation(base_ref: str, target_ref: str | None,
 
 
 def _is_merge_src_path(p: str, pkg_gov: set[str]) -> bool:
-    return p not in pkg_gov and (p.startswith(APP_CODE_PREFIXES) or (is_php_code_path(p) and not is_protected_governance_path(p)))
+    return p not in pkg_gov and not is_protected_governance_path(p) and (p.startswith(APP_CODE_PREFIXES) or is_php_code_path(p))
 
 
 def _check_merge_commit_policy_isolation(commit_sha: str, parents: list[str], cwd: str | None = None) -> tuple[bool, str]:
