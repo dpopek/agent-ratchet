@@ -190,6 +190,10 @@ Scope and exceptions in `scripts/audit/audit_guard_config.json`:
 - Configs of PHP quality tools (phpstan, phpcs, phpunit, psalm, phpmd, php-cs-fixer, rector, captainhook)
   are protected governance files. A change touching them together with PHP code is rejected; make it in a
   separate change.
+- JS/TS quality configs are protected the same way: eslint, tsconfig/jsconfig, knip, vitest, vite, jest, playwright,
+  prettier, biome, lint-staged, stylelint and dependency-cruiser files (any depth, never under `node_modules`).
+  In `package.json` only the `scripts`, `eslintConfig`, `prettier`, `jest`, `lint-staged`, `knip` and `stylelint`
+  keys count (an unparseable side is protected). A rename's old path counts as touched; `e2e/` counts as code.
 
 #### External config
 
