@@ -214,3 +214,14 @@ def test_eslint_config_alone_passes() -> None:
 def test_nested_tsconfig_with_src_fails() -> None:
     ok, _ = _isolation({"packages/ui/tsconfig.json": "{}\n", "packages/ui/src/a.ts": "export {};\n"})
     assert ok is False
+
+
+def test_e2e_with_playwright_config_fails() -> None:
+    ok, msg = _isolation({"playwright.config.ts": "export default {};\n", "e2e/login.spec.ts": "export {};\n"})
+    assert ok is False
+    assert "playwright.config.ts" in msg
+
+
+def test_e2e_alone_passes() -> None:
+    ok, _ = _isolation({"e2e/login.spec.ts": "export {};\n"})
+    assert ok is True

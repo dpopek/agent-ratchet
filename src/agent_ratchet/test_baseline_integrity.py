@@ -30,7 +30,7 @@ from agent_ratchet.baseline_diff import (
 )
 
 BaselineAnalysisError = GuardAnalysisError
-ISOLATED_CODE_PREFIXES: tuple[str, ...] = APP_CODE_PREFIXES + ("tests/", "scripts/")
+ISOLATED_CODE_PREFIXES: tuple[str, ...] = APP_CODE_PREFIXES + ("tests/", "scripts/", "e2e/")
 
 __all__ = [
     "APP_CODE_PREFIXES", "BaselineAnalysisError", "BaselineDiffResult", "ISOLATED_CODE_PREFIXES",
