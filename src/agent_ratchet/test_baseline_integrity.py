@@ -161,7 +161,7 @@ def _check_merge_commit_policy_isolation(commit_sha: str, parents: list[str], cw
                 unconflicted_novel_paths.add(path)
             if is_package_json_path(path) and all(package_json_guarded_change(pb, c_blob) for pb in p_blobs):
                 pkg_gov.add(path)
-                if not any(package_json_guarded_change(p_blobs[0], pb) for pb in p_blobs[1:]):
+                if len(set(p_blobs)) == 1 or not any(package_json_guarded_change(p_blobs[0], pb) for pb in p_blobs[1:]):
                     pkg_unconflicted_gov.add(path)
     src_novel = sorted(p for p in novel_paths if _is_merge_src_path(p, pkg_gov))
     gov_novel = sorted({p for p in novel_paths if is_protected_governance_path(p)} | pkg_gov)

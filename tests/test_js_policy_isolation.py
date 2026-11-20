@@ -148,11 +148,11 @@ def test_package_json_deps_only_with_src_passes_for_worktree() -> None:
     assert ok is True
 
 
-def _merge_with_carried_src(merge_pkg: str) -> tuple[bool, str]:
+def _merge_with_carried_src(merge_pkg: str, base_pkg: str | bytes = PKG_BASE) -> tuple[bool, str]:
     """Side branch carries `src/a.ts`; the merge commit itself edits `package.json` (both parents agree on it)."""
     with tempfile.TemporaryDirectory() as tmp:
         repo = _init_guard_repo(tmp)
-        base = _commit_files(repo, "base", {"README.md": "x\n", "package.json": PKG_BASE})
+        base = _commit_files(repo, "base", {"README.md": "x\n", "package.json": base_pkg})
         _git(repo, "checkout", "-q", "-b", "side")
         side = _commit_files(repo, "side", {"src/a.ts": "export {};\n"})
         _git(repo, "checkout", "-q", "-b", "main2", base)
@@ -166,6 +166,14 @@ def _merge_with_carried_src(merge_pkg: str) -> tuple[bool, str]:
 
 def test_merge_package_json_scripts_with_src_fails() -> None:
     ok, msg = _merge_with_carried_src(PKG_BASE.replace('"eslint ."', '"true"'))
+    assert ok is False
+    assert "unconflicted governance edits" in msg
+    assert "package.json" in msg
+
+
+@pytest.mark.parametrize("base_pkg", [b"{\n", b"\xef\xbb\xbf" + PKG_BASE.encode("utf-8")])
+def test_merge_package_json_scripts_with_src_fails_when_parents_share_malformed_blob(base_pkg: bytes) -> None:
+    ok, msg = _merge_with_carried_src(PKG_BASE.replace('"eslint ."', '"true"'), base_pkg)
     assert ok is False
     assert "unconflicted governance edits" in msg
     assert "package.json" in msg
