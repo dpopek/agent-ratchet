@@ -8,11 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_ratchet.git_guard_io import is_protected_governance_path
-from agent_ratchet.test_baseline_integrity import _check_single_commit_policy_isolation
+from agent_ratchet.git_guard_io import (
+    PACKAGE_JSON_GUARDED_KEYS, is_package_json_path, is_protected_governance_path, package_json_guarded_change,
+)
+from agent_ratchet.test_baseline_integrity import _check_merge_commit_policy_isolation, _check_single_commit_policy_isolation
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from guard_repo_harness import _commit_files, _init_guard_repo  # noqa: E402
+from guard_repo_harness import _commit_files, _git, _init_guard_repo, _write_files  # noqa: E402
 
 JS_NAMES = [
     "eslint.config.js", "eslint.config.mts", ".eslintrc", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintignore",
@@ -41,12 +43,153 @@ def test_js_lookalikes_not_protected(path: str) -> None:
     assert is_protected_governance_path(path) is False
 
 
-def _isolation(files: dict[str, str]) -> tuple[bool, str]:
+def _isolation(files: dict[str, str], base_files: dict[str, str] | None = None) -> tuple[bool, str]:
     with tempfile.TemporaryDirectory() as tmp:
         repo = _init_guard_repo(tmp)
-        base = _commit_files(repo, "base", {"README.md": "x\n"})
+        base = _commit_files(repo, "base", {"README.md": "x\n", **(base_files or {})})
         head = _commit_files(repo, "change", files)
         return _check_single_commit_policy_isolation(base, head, cwd=str(repo))
+
+
+PKG_BASE = '{"name": "x", "dependencies": {"a": "1"}, "scripts": {"lint": "eslint .", "test": "vitest"}}\n'
+
+
+@pytest.mark.parametrize("old,new,expected", [
+    (b'{"dependencies":{"a":"1"}}', b'{"dependencies":{"a":"2"}}', False),
+    (b'{"scripts":{"lint":"eslint ."}}', b'{"scripts":{"lint":"true"}}', True),
+    (b'{"name":"x"}', b'{"name":"x","eslintConfig":{}}', True),
+    (b'{"scripts":{"a":"1","b":"2"}}', b'{\n  "scripts": {"b": "2", "a": "1"}\n}\n', False),
+    (b'{', b'{}', True),
+    (b'{}', b'{', True),
+    (b'{}', b'[]', True),
+    (b'\xff', b'{}', True),
+    (None, b'{"scripts":{}}', True),
+    (None, b'{"name":"x"}', False),
+    (b'{"jest":{}}', None, True),
+])
+def test_package_json_guarded_change(old: bytes | None, new: bytes | None, expected: bool) -> None:
+    assert package_json_guarded_change(old, new) is expected
+
+
+def test_package_json_guarded_keys_exact() -> None:
+    assert PACKAGE_JSON_GUARDED_KEYS == ("scripts", "eslintConfig", "prettier", "jest", "lint-staged", "knip", "stylelint")
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("package.json", True), ("apps/web/package.json", True), ("node_modules/a/package.json", False),
+    ("package.json.bak", False), ("src/mypackage.json", False),
+])
+def test_is_package_json_path(path: str, expected: bool) -> None:
+    assert is_package_json_path(path) is expected
+
+
+def test_package_json_deps_only_with_src_passes() -> None:
+    new_pkg = PKG_BASE.replace('"a": "1"', '"a": "2"')
+    ok, _ = _isolation({"package.json": new_pkg, "src/a.ts": "export {};\n"}, {"package.json": PKG_BASE})
+    assert ok is True
+
+
+def test_package_json_scripts_with_src_fails() -> None:
+    new_pkg = PKG_BASE.replace('"eslint ."', '"true"')
+    ok, msg = _isolation({"package.json": new_pkg, "src/a.ts": "export {};\n"}, {"package.json": PKG_BASE})
+    assert ok is False
+    assert msg.startswith("Policy isolation violation")
+    assert "package.json" in msg
+
+
+def test_malformed_package_json_with_src_fails() -> None:
+    ok, msg = _isolation({"package.json": "{\n", "src/a.ts": "export {};\n"}, {"package.json": PKG_BASE})
+    assert ok is False
+    assert "package.json" in msg
+
+
+def test_package_json_reformat_only_passes() -> None:
+    new_pkg = '{\n  "scripts": {\n    "test": "vitest",\n    "lint": "eslint ."\n  },\n  "dependencies": {"a": "1"},\n  "name": "x"\n}\n'
+    ok, _ = _isolation({"package.json": new_pkg, "src/a.ts": "export {};\n"}, {"package.json": PKG_BASE})
+    assert ok is True
+
+
+def test_node_modules_package_json_scripts_with_src_passes() -> None:
+    nm = "node_modules/foo/package.json"
+    ok, _ = _isolation({nm: PKG_BASE.replace('"eslint ."', '"true"'), "src/a.ts": "export {};\n"}, {nm: PKG_BASE})
+    assert ok is True
+
+
+def test_rename_of_protected_config_with_code_fails() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _init_guard_repo(tmp)
+        base = _commit_files(repo, "base", {"README.md": "x\n", "eslint.config.js": "export default [];\n"})
+        _git(repo, "mv", "eslint.config.js", "eslint.config.js.off")
+        head = _commit_files(repo, "change", {"src/a.ts": "export {};\n"})
+        ok, msg = _check_single_commit_policy_isolation(base, head, cwd=str(repo))
+    assert ok is False
+    assert "eslint.config.js" in msg
+
+
+@pytest.mark.parametrize("target", [None, "WORKTREE"])
+def test_package_json_scripts_with_src_fails_for_index_and_worktree(target: str | None) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _init_guard_repo(tmp)
+        base = _commit_files(repo, "base", {"README.md": "x\n", "package.json": PKG_BASE})
+        _write_files(repo, {"package.json": PKG_BASE.replace('"eslint ."', '"true"'), "src/a.ts": "export {};\n"})
+        _git(repo, "add", "package.json", "src/a.ts")
+        ok, msg = _check_single_commit_policy_isolation(base, target, cwd=str(repo))
+    assert ok is False
+    assert "package.json" in msg
+
+
+def test_package_json_deps_only_with_src_passes_for_worktree() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _init_guard_repo(tmp)
+        base = _commit_files(repo, "base", {"README.md": "x\n", "package.json": PKG_BASE})
+        _write_files(repo, {"package.json": PKG_BASE.replace('"a": "1"', '"a": "2"'), "src/a.ts": "export {};\n"})
+        _git(repo, "add", "src/a.ts")
+        ok, _ = _check_single_commit_policy_isolation(base, "WORKTREE", cwd=str(repo))
+    assert ok is True
+
+
+def _merge_with_carried_src(merge_pkg: str) -> tuple[bool, str]:
+    """Side branch carries `src/a.ts`; the merge commit itself edits `package.json` (both parents agree on it)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _init_guard_repo(tmp)
+        base = _commit_files(repo, "base", {"README.md": "x\n", "package.json": PKG_BASE})
+        _git(repo, "checkout", "-q", "-b", "side")
+        side = _commit_files(repo, "side", {"src/a.ts": "export {};\n"})
+        _git(repo, "checkout", "-q", "-b", "main2", base)
+        _commit_files(repo, "main", {"docs/b.md": "b\n"})
+        _git(repo, "merge", "--no-ff", "--no-commit", "-q", side)
+        merge = _commit_files(repo, "merge", {"package.json": merge_pkg})
+        parents = _git(repo, "rev-list", "--parents", "-n", "1", merge).split()[1:]
+        assert len(parents) == 2
+        return _check_merge_commit_policy_isolation(merge, parents, cwd=str(repo))
+
+
+def test_merge_package_json_scripts_with_src_fails() -> None:
+    ok, msg = _merge_with_carried_src(PKG_BASE.replace('"eslint ."', '"true"'))
+    assert ok is False
+    assert "unconflicted governance edits" in msg
+    assert "package.json" in msg
+
+
+def test_merge_package_json_deps_with_src_passes() -> None:
+    ok, _ = _merge_with_carried_src(PKG_BASE.replace('"a": "1"', '"a": "2"'))
+    assert ok is True
+
+
+def test_merge_introducing_package_json_scripts_and_src_fails() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _init_guard_repo(tmp)
+        base = _commit_files(repo, "base", {"README.md": "x\n", "package.json": PKG_BASE})
+        _git(repo, "checkout", "-q", "-b", "side")
+        side = _commit_files(repo, "side", {"docs/a.md": "a\n"})
+        _git(repo, "checkout", "-q", "-b", "main2", base)
+        _commit_files(repo, "main", {"docs/b.md": "b\n"})
+        _git(repo, "merge", "--no-ff", "--no-commit", "-q", side)
+        merge = _commit_files(repo, "merge", {"package.json": PKG_BASE.replace('"eslint ."', '"true"'), "src/a.ts": "export {};\n"})
+        parents = _git(repo, "rev-list", "--parents", "-n", "1", merge).split()[1:]
+        ok, msg = _check_merge_commit_policy_isolation(merge, parents, cwd=str(repo))
+    assert ok is False
+    assert "mixed novel governance" in msg and "package.json" in msg
 
 
 def test_eslint_config_with_src_fails() -> None:

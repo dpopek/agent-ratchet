@@ -140,6 +140,29 @@ def _in_node_modules(rel_path: str) -> bool:
     return "node_modules" in rel_path.split("/")
 
 
+# `package.json` keys that carry lint/test/format/hook policy; dependency churn stays unguarded.
+PACKAGE_JSON_GUARDED_KEYS: tuple[str, ...] = ("scripts", "eslintConfig", "prettier", "jest", "lint-staged", "knip", "stylelint")
+
+
+def is_package_json_path(rel_path: str) -> bool:
+    return rel_path.rsplit("/", 1)[-1] == "package.json" and not _in_node_modules(rel_path)
+
+
+def _package_json_guarded_sections(raw: bytes | None) -> dict[str, Any] | None:
+    """Guarded sections of a `package.json` blob; a missing blob reads as `{}`, an unparseable one as None."""
+    try:
+        parsed = {} if raw is None else loads_bounded(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        return None
+    return {k: parsed.get(k) for k in PACKAGE_JSON_GUARDED_KEYS} if isinstance(parsed, dict) else None
+
+
+def package_json_guarded_change(old_raw: bytes | None, new_raw: bytes | None) -> bool:
+    """True when guarded sections differ semantically or either present side is unparseable (fail closed)."""
+    old, new = _package_json_guarded_sections(old_raw), _package_json_guarded_sections(new_raw)
+    return old is None or new is None or old != new
+
+
 def is_protected_governance_path(rel_path: str) -> bool:
     return (
         rel_path in PROTECTED_GOVERNANCE_FILES

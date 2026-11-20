@@ -17,7 +17,7 @@ from agent_ratchet.git_guard_io import (
     APP_CODE_PREFIXES,
     PROTECTED_GOVERNANCE_FILES, PROTECTED_GOVERNANCE_PREFIXES,
     GuardAnalysisError, diff_name_status, git_cat_bytes, head_commit_exists, load_guard_config_for_ref, trusted_base_candidates,
-    is_php_code_path, is_protected_governance_path as is_protected_governance_path,
+    is_package_json_path, is_php_code_path, is_protected_governance_path as is_protected_governance_path, package_json_guarded_change,
     verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
 from agent_ratchet.git_batch import git_batch_session
@@ -108,11 +108,27 @@ def _is_atomic_baseline_tightening(entries: list[tuple[str, str, str]], gov_path
     return True
 
 
+def _target_blob(path: str, target_ref: str | None, cwd: str | None) -> bytes | None:
+    """Blob of `path` in the isolation target: a ref, the INDEX (None) or the working tree ("WORKTREE")."""
+    if target_ref != "WORKTREE":
+        return git_cat_bytes(f"{target_ref}:{path}" if target_ref else f":{path}", cwd=cwd)
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, text=True)
+    if top.returncode != 0:
+        raise BaselineAnalysisError("git rev-parse --show-toplevel failed")
+    try:
+        return (Path(top.stdout.strip()) / path).read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise BaselineAnalysisError(f"Failed to read '{path}' from the working tree: {exc}") from exc
+
+
 def _check_single_commit_policy_isolation(base_ref: str, target_ref: str | None, cwd: str | None = None) -> tuple[bool, str]:
     entries = _diff_entries(base_ref, target_ref, cwd=cwd)
-    touched = [new_p for _, _, new_p in entries] + [old_p for status, old_p, _ in entries if status.startswith("D")]
-    code_paths = sorted({p for p in touched if (p.startswith(ISOLATED_CODE_PREFIXES) or p.startswith("test/") or is_php_code_path(p)) and not is_protected_governance_path(p)})
-    gov_paths = sorted({p for p in touched if is_protected_governance_path(p)})
+    touched = [new_p for _, _, new_p in entries] + [old_p for status, old_p, _ in entries if status.startswith(("D", "R"))]
+    pkg_gov = {p for p in touched if is_package_json_path(p) and package_json_guarded_change(git_cat_bytes(f"{base_ref}:{p}", cwd=cwd), _target_blob(p, target_ref, cwd))}
+    code_paths = sorted({p for p in touched if (p.startswith(ISOLATED_CODE_PREFIXES) or p.startswith("test/") or is_php_code_path(p)) and not is_protected_governance_path(p)} - pkg_gov)
+    gov_paths = sorted({p for p in touched if is_protected_governance_path(p)} | pkg_gov)
     if not code_paths or not gov_paths:
         return True, "OK"
     if _is_pure_rename_baseline_update(entries, gov_paths, base_ref, target_ref, cwd=cwd):
@@ -123,6 +139,10 @@ def _check_single_commit_policy_isolation(base_ref: str, target_ref: str | None,
     return False, f"Policy isolation violation in {label}: commit mixes PROTECTED_GOVERNANCE_PATHS {gov_paths} with code/test/script changes {code_paths}."
 
 
+def _is_merge_src_path(p: str, pkg_gov: set[str]) -> bool:
+    return p not in pkg_gov and (p.startswith(APP_CODE_PREFIXES) or (is_php_code_path(p) and not is_protected_governance_path(p)))
+
+
 def _check_merge_commit_policy_isolation(commit_sha: str, parents: list[str], cwd: str | None = None) -> tuple[bool, str]:
     all_changed: set[str] = set()
     for p in parents:
@@ -130,6 +150,8 @@ def _check_merge_commit_policy_isolation(commit_sha: str, parents: list[str], cw
             all_changed.update(x for x in (old_p, new_p) if x)
     novel_paths: set[str] = set()
     unconflicted_novel_paths: set[str] = set()
+    pkg_gov: set[str] = set()
+    pkg_unconflicted_gov: set[str] = set()
     for path in all_changed:
         c_blob = git_cat_bytes(f"{commit_sha}:{path}", cwd=cwd)
         p_blobs = [git_cat_bytes(f"{parent}:{path}", cwd=cwd) for parent in parents]
@@ -137,12 +159,16 @@ def _check_merge_commit_policy_isolation(commit_sha: str, parents: list[str], cw
             novel_paths.add(path)
             if len(set(p_blobs)) == 1:
                 unconflicted_novel_paths.add(path)
-    src_novel = sorted(p for p in novel_paths if p.startswith(APP_CODE_PREFIXES) or (is_php_code_path(p) and not is_protected_governance_path(p)))
-    gov_novel = sorted(p for p in novel_paths if is_protected_governance_path(p))
+            if is_package_json_path(path) and all(package_json_guarded_change(pb, c_blob) for pb in p_blobs):
+                pkg_gov.add(path)
+                if not any(package_json_guarded_change(p_blobs[0], pb) for pb in p_blobs[1:]):
+                    pkg_unconflicted_gov.add(path)
+    src_novel = sorted(p for p in novel_paths if _is_merge_src_path(p, pkg_gov))
+    gov_novel = sorted({p for p in novel_paths if is_protected_governance_path(p)} | pkg_gov)
     if src_novel and gov_novel:
         return False, f"Merge commit {commit_sha} introduces mixed novel governance {gov_novel} and src/ {src_novel} changes."
-    unconflicted_gov = sorted(p for p in unconflicted_novel_paths if is_protected_governance_path(p))
-    any_src_changed = sorted(p for p in all_changed if p.startswith(APP_CODE_PREFIXES) or (is_php_code_path(p) and not is_protected_governance_path(p)))
+    unconflicted_gov = sorted({p for p in unconflicted_novel_paths if is_protected_governance_path(p)} | pkg_unconflicted_gov)
+    any_src_changed = sorted(p for p in all_changed if _is_merge_src_path(p, pkg_gov))
     if unconflicted_gov and any_src_changed:
         return False, f"Merge commit {commit_sha} introduces unconflicted governance edits {unconflicted_gov} alongside src/ merge {any_src_changed}."
     return True, "OK"
