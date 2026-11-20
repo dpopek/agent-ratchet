@@ -44,6 +44,7 @@ class PointSuppression:
     anchor_hash: str | None
     line: int
     header_hash: str | None = None  # phpmd only: full declaration header, gates cross-symbol pairing
+    row_scoped: bool = False  # anchor_hash fingerprints the ignored row, so the node kind is not compared (4.3.1 F1)
 
 
 @dataclass(frozen=True)
@@ -277,15 +278,20 @@ def _body_derived(tool: str, codes: tuple[str, ...]) -> bool:
     return False
 
 
-def _anchor_hash(raw: _Raw, anchor: Any, root: Any, source: bytes) -> str:
-    """Line-scoped tools fingerprint the ignored line or declaration header (spec R4 "Anchor hash")."""
+def _anchor_hash(raw: _Raw, anchor: Any, root: Any, source: bytes) -> tuple[str, bool]:
+    """(hash, row-scoped): line-scoped tools fingerprint the ignored line or declaration header (spec R4 "Anchor hash").
+
+    The declaration hash applies only when the ignored row is the declaration's start row; an ignore above a blank or
+    docblock row suppresses nothing on the declaration (4.3.1 F2).
+    """
     if raw.tool not in _LINE_SCOPED:
-        return norm_hash(anchor, source)  # psalm: the declaration/statement is its scope
-    if anchor.type in _CLASS_LIKE or anchor.type in _CALLABLE:
+        return norm_hash(anchor, source), False  # psalm: the declaration/statement is its scope
+    row = _ignored_row(raw, source)[0]  # the row `_anchor_for` reads
+    if (anchor.type in _CLASS_LIKE or anchor.type in _CALLABLE) and row == anchor.start_point.row:
         if _body_derived(raw.tool, raw.codes):
-            return norm_hash(anchor, source)  # body-derived metrics
-        return header_hash(anchor, source)
-    return line_hash(root, source, _ignored_row(raw, source)[0])  # the row `_anchor_for` reads
+            return norm_hash(anchor, source), False  # body-derived metrics
+        return header_hash(anchor, source), False
+    return line_hash(root, source, row), True
 
 
 def _scan_comments(comments: list[Any], source: bytes) -> list[_Raw]:
@@ -319,16 +325,17 @@ def collect(
         if raw.form in ("point", "unknown"):
             anchor = _anchor_for(raw, source, anchors)
             tool = raw.tool
+            known = anchor is not None and tool != "phpcs-unknown"
+            digest, row_scoped = _anchor_hash(raw, anchor, root, source) if known else (None, False)
             points.append(
                 PointSuppression(
                     symbol=scope(anchor if anchor is not None else raw.comment),
                     tool=tool,
                     codes=raw.codes,
-                    anchor_kind=None if anchor is None or tool == "phpcs-unknown" else anchor.type,
-                    anchor_hash=None
-                    if anchor is None or tool == "phpcs-unknown"
-                    else _anchor_hash(raw, anchor, root, source),
+                    anchor_kind=anchor.type if known else None,
+                    anchor_hash=digest,
                     line=line_no,
+                    row_scoped=row_scoped,
                 )
             )
         elif raw.form == "file":

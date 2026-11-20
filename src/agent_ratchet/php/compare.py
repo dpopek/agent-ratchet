@@ -134,14 +134,43 @@ def _same_directive(x: CanonicalFact, y: CanonicalFact) -> bool:
     )
 
 
+class PointMoves:
+    """Cross-file candidates of one transition (4.3.1 F3): R6 "Renamed declaration" pairing across entries.
+
+    `gone`: BASE point facts left unpaired whose origin symbol is absent from their entry's TARGET; `new`: (TARGET
+    path, fact) left unpaired whose symbol is absent from their entry's BASE. Null anchors are never collected.
+    """
+
+    def __init__(self) -> None:
+        self.gone: list[CanonicalFact] = []
+        self.new: list[tuple[str, CanonicalFact]] = []
+
+    def violations(self, exceptions: Sequence[Mapping[str, Any]]) -> list[SlopViolation]:
+        """`php_suppression_added` for every new fact no gone fact pairs with (greedy, collection order)."""
+        gone = list(self.gone)
+        per_path: dict[str, _Findings] = {}
+        for path, f in self.new:
+            idx = next((i for i, g in enumerate(gone) if _same_directive(f, g)), None)
+            if idx is not None:
+                gone.pop(idx)
+                continue
+            per_path.setdefault(path, _Findings(path, exceptions)).add(ADDED, f)
+        return [v for out in per_path.values() for v in out.violations()]
+
+
+def _movable(f: CanonicalFact) -> bool:
+    return f.payload["anchor_norm_hash"] is not None and f.identity["tool"] != "phpcs-unknown"
+
+
 def _points(
     base: list[CanonicalFact],
     target: list[CanonicalFact],
     out: _Findings,
     key: Callable[[str], str],
     present: tuple[set[str], set[str]],
+    moves: PointMoves | None = None,
 ) -> None:
-    """`present`: keyed symbols with a declaration or facts in (BASE, TARGET)."""
+    """`present`: keyed symbols with a declaration or facts in (BASE, TARGET); `moves` defers cross-file candidates."""
     groups: dict[tuple[str, str], tuple[list[CanonicalFact], list[CanonicalFact]]] = {}
     for side, facts in ((0, base), (1, target)):
         for f in facts:
@@ -166,7 +195,13 @@ def _points(
     new = [f for f in left_target if key(f.identity["symbol"]) not in in_base]
     for x, _ in _pair(gone, new, _same_directive):
         left_target.remove(x)
+    deferred = [x for x in new if _movable(x)] if moves is not None else []
+    if moves is not None:
+        moves.gone.extend(x for x in gone if _movable(x))
+        moves.new.extend((out.path, x) for x in deferred)
     for x in left_target:
+        if any(x is d for d in deferred):
+            continue
         out.add(ADDED, x)
         flagged.append(x)
     for x in flagged:
@@ -325,10 +360,16 @@ def compare_php_analyses(
     target_path: str,
     exceptions: Sequence[Mapping[str, Any]],
     renamed: bool = False,
+    moves: PointMoves | None = None,
 ) -> list[SlopViolation]:
-    """`compare_php_entry` on analyses already made by `analyze_pair` (the scan reuses them for the test delta)."""
+    """`compare_php_entry` on analyses already made by `analyze_pair` (the scan reuses them for the test delta).
+
+    `moves`: collect cross-file move candidates instead of reporting them; the caller reports `moves.violations`.
+    """
     b = base or _EMPTY
     if target is None:
+        if moves is not None:  # a deleted file: every anchored point is a gone origin
+            moves.gone.extend(f for f in b.facts if f.kind == POINT and _movable(f))
         return _sorted([_removed_violation(f) for f in b.facts if f.kind == TEST])
     t = target
     if t.decode_error:
@@ -341,7 +382,7 @@ def compare_php_analyses(
         return _live(b, kind, dead, key), _live(t, kind, dead, key)
 
     present = ({key(s) for s in _all_symbols(b)} | {FILE_SYMBOL}, {key(s) for s in _all_symbols(t)} | {FILE_SYMBOL})
-    _points(*pick(POINT), out, key, present)
+    _points(*pick(POINT), out, key, present, moves)
     grown = grown_windows(b.tokens, b.window_spans, t.tokens, t.window_spans) if b.window_spans else set()
     _windows(*pick(WINDOW), out, key, grown)
     _files(*pick(FILE), out)

@@ -22,6 +22,7 @@ from agent_ratchet.php.phpunit import collect_tests
 
 POINT, WINDOW, FILE = "php.suppression.point", "php.suppression.window", "php.suppression.file"
 TEST, GAP = "php.test", "php.parse_gap"
+ROW_ANCHOR = "row"  # `anchor_ast_kind` of a row-fingerprinted point: the tool ignores one row, its statement kind is moot
 _SYMBOL_NODES = frozenset(
     {"class_declaration", "interface_declaration", "trait_declaration", "enum_declaration", "method_declaration", "function_definition"}
 )
@@ -147,7 +148,7 @@ def _analyze(parsed: ParsedPhp, path: str, oid: str | None) -> Analysis:
             CanonicalFact(
                 POINT,
                 {"path": path, "symbol": p.symbol, "tool": p.tool, "codes": list(p.codes)},
-                {"anchor_ast_kind": p.anchor_kind, "anchor_norm_hash": p.anchor_hash}
+                {"anchor_ast_kind": ROW_ANCHOR if p.row_scoped else p.anchor_kind, "anchor_norm_hash": p.anchor_hash}
                 | ({"header_hash": p.header_hash} if p.tool == "phpmd" else {}),
                 "multiset",
                 complete(p.symbol),

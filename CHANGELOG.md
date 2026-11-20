@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.3.1
+
+- Fixed: PHP suppressions moved with their code to another file, or kept on an unchanged ignored line, are no longer reported.
+
 ## 4.3.0
 
 - Changed: JS/TS quality configs, `package.json` scripts and tool-config keys, and rename sources count in policy isolation; `e2e/` counts as code.
