@@ -124,7 +124,7 @@ def is_php_code_path(rel: str) -> bool:
 # outside `node_modules`.
 JS_QUALITY_CONFIG_RE: re.Pattern[str] = re.compile(
     r"eslint\.config\.[cm]?[jt]s|\.eslintrc[^/]*|\.eslintignore"
-    r"|tsconfig[^/]*\.json|jsconfig\.json"
+    r"|tsconfig[^/]*\.json|jsconfig[^/]*\.json"
     r"|\.?knip\.(?:json|jsonc|[cm]?[jt]s)"
     r"|vite\.config\.[cm]?[jt]s|vitest\.config\.[cm]?[jt]s|vitest\.workspace\.[cm]?[jt]s|jest\.config\.[cm]?[jt]s"
     r"|playwright[^/]*\.config\.[cm]?[jt]s"

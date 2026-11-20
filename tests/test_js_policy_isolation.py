@@ -16,7 +16,7 @@ from guard_repo_harness import _commit_files, _init_guard_repo  # noqa: E402
 
 JS_NAMES = [
     "eslint.config.js", "eslint.config.mts", ".eslintrc", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintignore",
-    "tsconfig.json", "tsconfig.app.json", "packages/ui/tsconfig.build.json", "jsconfig.json",
+    "tsconfig.json", "tsconfig.app.json", "packages/ui/tsconfig.build.json", "jsconfig.json", "jsconfig.app.json",
     "knip.json", "knip.ts", ".knip.jsonc",
     "vitest.config.ts", "vitest.workspace.ts", "vite.config.ts", "jest.config.cjs",
     "playwright.config.ts", "playwright.frontend-only.config.ts",
