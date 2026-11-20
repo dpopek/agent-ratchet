@@ -32,7 +32,19 @@ RELEASE_TAG_RE = re.compile(r"\Av(3|4)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 _LOCK_RE = re.compile(rb"\A([0-9a-f]{40})(?:\nEXTRAS=(none|php|magento))?\n?\Z")
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _GIT_TIMEOUT_S = 120
-_ISOLATED_GIT_ENV = {"LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+# maintenance.auto/gc.auto off: a lazy blob fetch in the partial clone would otherwise spawn a detached
+# `git maintenance run --auto` that can still write into the clone while its temporary directory is removed.
+_ISOLATED_GIT_ENV = {
+    "LC_ALL": "C",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_COUNT": "2",
+    "GIT_CONFIG_KEY_0": "maintenance.auto",
+    "GIT_CONFIG_VALUE_0": "false",
+    "GIT_CONFIG_KEY_1": "gc.auto",
+    "GIT_CONFIG_VALUE_1": "0",
+}
 _ALLOWED_MODES: dict[str, tuple[str, ...]] = {LOCK_PATH: ("100644",), SHIM_PATH: ("100644", "100755")}
 
 ENV_REQUIRED_MSG = f"{LOCK_PATH}/{SHIM_PATH} change requires {LOCK_UPDATE_ENV}=1"

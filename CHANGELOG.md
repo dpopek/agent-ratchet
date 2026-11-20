@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.2.1
+
+- Fixed: guard.lock verification no longer fails intermittently with "Directory not empty" on newer Git.
+
 ## 4.2.0
 
 - Added: with frameworks ["magento"], disabling, deleting or narrowing a Magento DI plugin blocks; trusted exceptions in magento_di_exceptions.

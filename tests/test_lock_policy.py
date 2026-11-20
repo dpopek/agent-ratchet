@@ -91,6 +91,18 @@ def test_agent_ratchet_url_is_hard_coded(tmp_path: Path) -> None:
     assert out == "https://github.com/dpopek/agent-ratchet"
 
 
+def test_clone_env_disables_detached_auto_maintenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A lazy blob fetch in the partial clone spawns `git maintenance run --auto --detach`;
+    # it must not race the temporary clone's cleanup (ENOTEMPTY on partial.git).
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "maintenance.auto")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+    env = lock_policy._isolated_env()
+    for key, expected in (("maintenance.auto", "false"), ("gc.auto", "0")):
+        res = subprocess.run(["git", "config", "--get", key], env=env, capture_output=True, text=True)
+        assert res.stdout.strip() == expected, key
+
+
 def test_lock_check_is_local_only_for_uncommitted_targets() -> None:
     assert lock_check_is_local("") and lock_check_is_local(None) and lock_check_is_local("WORKTREE")
     assert not lock_check_is_local("HEAD") and not lock_check_is_local("0" * 40)
