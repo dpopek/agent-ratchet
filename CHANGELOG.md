@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.3.0
+
+- Changed: JS/TS quality configs, `package.json` scripts and tool-config keys, and rename sources count in policy isolation; `e2e/` counts as code.
+
 ## 4.2.1
 
 - Fixed: guard.lock verification no longer fails intermittently with "Directory not empty" on newer Git.
