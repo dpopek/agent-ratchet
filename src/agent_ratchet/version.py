@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.metadata
 import json
 
-VERSION: str = "4.2.0"
+VERSION: str = "4.2.1"
 _DISTRIBUTION_NAME = "agent-ratchet"
 
 

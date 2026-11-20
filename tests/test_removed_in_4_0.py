@@ -82,8 +82,8 @@ def test_only_agent_ratchet_script() -> None:
     assert not hasattr(cli, "legacy_main")
 
 
-def test_package_version_is_4_2_0() -> None:
-    assert version.VERSION == "4.2.0" == PYPROJECT["project"]["version"]
+def test_package_version_is_4_2_1() -> None:
+    assert version.VERSION == "4.2.1" == PYPROJECT["project"]["version"]
 
 
 def test_migrate_reports_guard_test_names_as_manual() -> None:
