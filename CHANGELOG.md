@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.2.0
+
+- Added: with frameworks ["magento"], disabling, deleting or narrowing a Magento DI plugin blocks; trusted exceptions in magento_di_exceptions.
+- Added: Magento XML is parsed with DTDs and entities forbidden and size/depth limits.
+
 ## 4.1.4
 
 - Fixed: an external config no longer carries over between runs in one process.

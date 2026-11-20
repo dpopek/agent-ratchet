@@ -83,7 +83,7 @@ def test_only_agent_ratchet_script() -> None:
 
 
 def test_package_version_is_4_1_0() -> None:
-    assert version.VERSION == "4.1.4" == PYPROJECT["project"]["version"]
+    assert version.VERSION == "4.2.0" == PYPROJECT["project"]["version"]
 
 
 def test_migrate_reports_guard_test_names_as_manual() -> None:
