@@ -107,6 +107,23 @@ def test_commit_range_dedupes(tmp_path: Path) -> None:
     assert len([ln for ln in proc.stderr.splitlines() if "[magento_di_plugin_disabled]" in ln]) == 1, proc.stderr
 
 
+def test_oversized_di_file_is_degraded(tmp_path: Path) -> None:  # M7 row 8, file over 1 MiB
+    require_magento()
+    case = GOLDEN / "01_disabled_added"
+    repo = _new_repo(tmp_path)
+    (repo / CONFIG_REL).write_bytes(_json_bytes(BASE_CONFIG))
+    base_files = _tree(case / "base")
+    base = _commit_files(repo, "base", base_files, include_guards=True)
+    valid = base_files[DI_A]
+    padded = valid.replace("</config>", "<!-- " + "x" * 1_048_576 + " -->\n</config>")
+    assert len(padded.encode("utf-8")) > 1_048_576
+    head = _commit_files(repo, "oversized", {DI_A: padded})
+    proc = _diff_scan(repo, base, head)
+    assert proc.returncode == 2, proc.stderr
+    lines = _magento_lines(proc.stderr)
+    assert len(lines) == 1 and "[magento_xml_degraded]" in lines[0] and "too_large" in lines[0], proc.stderr
+
+
 def test_shadow_counts(tmp_path: Path) -> None:
     require_magento()
     repo, base, head, _ = _build(tmp_path, "07_preferences")
