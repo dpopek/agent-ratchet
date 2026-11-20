@@ -17,7 +17,7 @@ PLUGIN = "magento.di.plugin"
 PREFERENCE = "magento.di.preference"
 
 _DI_PATH = re.compile(r"^(?P<root>.+)/etc/(?:(?P<area>[^/]+)/)?di\.xml$")
-_INT = re.compile(r"^[0-9]+$")
+_INT = re.compile(r"-?[0-9]+")
 _BOOLS = {"true": True, "1": True, "false": False, "0": False}
 
 
@@ -85,7 +85,7 @@ def _sort_order(attrs: Mapping[str, str]) -> int | None:
     raw = attrs.get("sortOrder")
     if raw is None:
         return None
-    if not _INT.match(raw):
+    if not _INT.fullmatch(raw):
         raise _Malformed
     return int(raw)
 

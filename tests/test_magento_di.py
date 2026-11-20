@@ -63,6 +63,24 @@ def test_malformed_shapes(xml):
     assert run(xml).unreadable == "malformed"
 
 
+def test_negative_sort_order():
+    a = run('<config><type name="T"><plugin name="p" type="X" sortOrder="-10"/></type></config>')
+    assert a.facts[0].payload["sort_order"] == -10
+
+
+def test_sort_order_trailing_newline_malformed():
+    a = run('<config><type name="T"><plugin name="p" type="X" sortOrder="10&#10;"/></type></config>')
+    assert a == DiAnalysis((), "malformed")
+
+
+def test_missing_type_is_none():
+    a = run('<config><type name="T"><plugin name="p"/></type><preference for="I"/></config>')
+    assert a.unreadable is None
+    by_kind = {f.kind: f for f in a.facts}
+    assert by_kind[PLUGIN].payload["type"] is None
+    assert by_kind[PREFERENCE].payload["type"] is None
+
+
 def test_merge_later_wins():
     a = run(
         '<config><type name="T"><plugin name="p" type="X"/></type>'
