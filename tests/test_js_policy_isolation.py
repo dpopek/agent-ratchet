@@ -21,6 +21,7 @@ JS_NAMES = [
     "tsconfig.json", "tsconfig.app.json", "packages/ui/tsconfig.build.json", "jsconfig.json", "jsconfig.app.json",
     "knip.json", "knip.ts", ".knip.jsonc",
     "vitest.config.ts", "vitest.workspace.ts", "vite.config.ts", "jest.config.cjs",
+    "vite.frontend-only.config.ts", "jest.config.json", "vitest.workspace.json",
     "playwright.config.ts", "playwright.frontend-only.config.ts",
     ".prettierrc", ".prettierrc.json", "prettier.config.mjs", ".prettierignore",
     "biome.json", "biome.jsonc", ".lintstagedrc", "lint-staged.config.js",
@@ -36,7 +37,7 @@ def test_js_quality_configs_protected(name: str, prefix: str) -> None:
 
 @pytest.mark.parametrize("path", [
     "src/eslint.config.test.ts", "src/tsconfig-helpers.ts", "src/tsconfig.ts", "docs/eslint.md",
-    "src/vite-env.d.ts", "eslint.config.js.bak", "node_modules/foo/tsconfig.json",
+    "src/vite-env.d.ts", "vite-env.d.ts", "eslint.config.js.bak", "node_modules/foo/tsconfig.json",
     "packages/a/node_modules/eslint.config.js",
 ])
 def test_js_lookalikes_not_protected(path: str) -> None:
@@ -225,3 +226,42 @@ def test_e2e_with_playwright_config_fails() -> None:
 def test_e2e_alone_passes() -> None:
     ok, _ = _isolation({"e2e/login.spec.ts": "export {};\n"})
     assert ok is True
+
+
+def _merge(side_files: dict[str, str], merge_files: dict[str, str], base_files: dict[str, str] | None = None) -> tuple[bool, str]:
+    """Side branch commits `side_files`; the merge commit itself adds `merge_files`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _init_guard_repo(tmp)
+        base = _commit_files(repo, "base", {"README.md": "x\n", **(base_files or {})})
+        _git(repo, "checkout", "-q", "-b", "side")
+        side = _commit_files(repo, "side", side_files)
+        _git(repo, "checkout", "-q", "-b", "main2", base)
+        _commit_files(repo, "main", {"docs/b.md": "b\n"})
+        _git(repo, "merge", "--no-ff", "--no-commit", "-q", side)
+        merge = _commit_files(repo, "merge", merge_files)
+        parents = _git(repo, "rev-list", "--parents", "-n", "1", merge).split()[1:]
+        return _check_merge_commit_policy_isolation(merge, parents, cwd=str(repo))
+
+
+def test_merge_novel_nested_tsconfig_only_passes() -> None:
+    ok, msg = _merge({"docs/a.md": "a\n"}, {"packages/ui/tsconfig.json": "{}\n"})
+    assert ok is True, msg
+
+
+def test_merge_unconflicted_governance_with_side_nested_tsconfig_passes() -> None:
+    ok, msg = _merge({"packages/ui/tsconfig.json": "{}\n"}, {"eslint.config.js": "export default [];\n"})
+    assert ok is True, msg
+
+
+UI_PKG_BASE = '{"name": "ui", "scripts": {"lint": "eslint ."}}\n'
+UI_PKG_NEW = UI_PKG_BASE.replace('"eslint ."', '"true"')
+
+
+def test_nested_package_json_scripts_only_passes_single_commit() -> None:
+    ok, msg = _isolation({"packages/ui/package.json": UI_PKG_NEW}, {"packages/ui/package.json": UI_PKG_BASE})
+    assert ok is True, msg
+
+
+def test_nested_package_json_scripts_only_passes_merge() -> None:
+    ok, msg = _merge({"docs/a.md": "a\n"}, {"packages/ui/package.json": UI_PKG_NEW}, {"packages/ui/package.json": UI_PKG_BASE})
+    assert ok is True, msg
