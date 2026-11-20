@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<!DOCTYPE config [<!ENTITY cls "Acme\ModA\Plugin\CartGuard">]>
+<config>
+    <type name="Acme\ModA\Model\Cart">
+        <plugin name="acme_moda_cart_guard" type="&cls;"/>
+    </type>
+</config>

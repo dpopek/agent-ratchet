@@ -1,0 +1,32 @@
+{
+  "base_exceptions": [
+    {
+      "area": "global",
+      "plugin": "acme_moda_cart_guard",
+      "reason": "legacy override kept on purpose",
+      "target": "Acme\\ModA\\Model\\Cart"
+    },
+    {
+      "area": "global",
+      "plugin": "acme_moda_order_audit",
+      "reason": "audit moved to an observer",
+      "target": "Acme\\ModA\\Model\\Order"
+    }
+  ],
+  "category": null,
+  "exit": 0,
+  "target_exceptions": [
+    {
+      "area": "global",
+      "plugin": "acme_moda_cart_guard",
+      "reason": "legacy override kept on purpose",
+      "target": "Acme\\ModA\\Model\\Cart"
+    },
+    {
+      "area": "global",
+      "plugin": "acme_moda_order_audit",
+      "reason": "audit moved to an observer",
+      "target": "Acme\\ModA\\Model\\Order"
+    }
+  ]
+}

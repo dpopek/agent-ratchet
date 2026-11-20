@@ -13,6 +13,7 @@ from agent_ratchet.git_guard_io import SlopViolation, git_cat_bytes
 from agent_ratchet.php.scope import is_php_in_scope, php_profile_active
 
 PHP_CATEGORY_PREFIX = "php_"
+DEDUPED_PREFIXES: tuple[str, ...] = (PHP_CATEGORY_PREFIX, "magento_")
 
 
 def _sort_key(v: SlopViolation) -> tuple[str, int, str, str]:
@@ -105,11 +106,11 @@ def php_transition_violations(
 
 
 def dedupe_php_violations(violations: Sequence[SlopViolation]) -> list[SlopViolation]:
-    """Drop repeated PHP findings (per-commit and aggregate runs see the same change); other findings are untouched."""
+    """Drop repeated PHP/Magento findings (per-commit and aggregate runs see the same change); others are untouched."""
     seen: set[tuple[str, str, str, str]] = set()
     out: list[SlopViolation] = []
     for v in violations:
-        if v.category.startswith(PHP_CATEGORY_PREFIX):
+        if v.category.startswith(DEDUPED_PREFIXES):
             key = (v.file, v.category, v.message, v.snippet)
             if key in seen:
                 continue

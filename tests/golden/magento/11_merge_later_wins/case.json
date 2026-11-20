@@ -1,0 +1,6 @@
+{
+  "category": "magento_di_plugin_disabled",
+  "count": 1,
+  "exit": 1,
+  "snippet": "global Acme\\ModA\\Model\\Cart acme_moda_cart_guard"
+}
