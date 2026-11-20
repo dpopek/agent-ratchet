@@ -120,10 +120,31 @@ def is_php_code_path(rel: str) -> bool:
     return rel.endswith((".php", ".phtml")) and not _PHP_NON_CODE_SEGMENTS.intersection(segments[:-1])
 
 
+# JS/TS lint, type-check, test, format and hook configuration, matched against the basename at any depth
+# outside `node_modules`.
+JS_QUALITY_CONFIG_RE: re.Pattern[str] = re.compile(
+    r"eslint\.config\.[cm]?[jt]s|\.eslintrc[^/]*|\.eslintignore"
+    r"|tsconfig[^/]*\.json|jsconfig\.json"
+    r"|\.?knip\.(?:json|jsonc|[cm]?[jt]s)"
+    r"|vite\.config\.[cm]?[jt]s|vitest\.config\.[cm]?[jt]s|vitest\.workspace\.[cm]?[jt]s|jest\.config\.[cm]?[jt]s"
+    r"|playwright[^/]*\.config\.[cm]?[jt]s"
+    r"|\.prettierrc[^/]*|prettier\.config\.[^/]*|\.prettierignore"
+    r"|biome\.jsonc?"
+    r"|\.lintstagedrc[^/]*|lint-staged\.config\.[^/]*"
+    r"|\.stylelintrc[^/]*|stylelint\.config\.[^/]*"
+    r"|\.dependency-cruiser\.[^/]*"
+)
+
+
+def _in_node_modules(rel_path: str) -> bool:
+    return "node_modules" in rel_path.split("/")
+
+
 def is_protected_governance_path(rel_path: str) -> bool:
     return (
         rel_path in PROTECTED_GOVERNANCE_FILES
         or PHP_QUALITY_CONFIG_RE.fullmatch(rel_path.rsplit("/", 1)[-1]) is not None
+        or (not _in_node_modules(rel_path) and JS_QUALITY_CONFIG_RE.fullmatch(rel_path.rsplit("/", 1)[-1]) is not None)
         or rel_path.startswith(PROTECTED_GOVERNANCE_PREFIXES)
         or rel_path.casefold() in _CASE_FOLDED_PIN_FILES
     )
