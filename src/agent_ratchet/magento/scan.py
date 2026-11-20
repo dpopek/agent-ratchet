@@ -109,4 +109,4 @@ def magento_transition_violations(
             if shadow:
                 _shadow_counts(target_path, analysis)
     removed = removed_module_roots(entries, php_paths)
-    return compare_di(base_sides, target_sides, removed, base_cfg["magento_di_exceptions"])
+    return compare_di(base_sides, target_sides, removed, base_cfg.get("magento_di_exceptions", []))

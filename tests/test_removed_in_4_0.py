@@ -82,7 +82,7 @@ def test_only_agent_ratchet_script() -> None:
     assert not hasattr(cli, "legacy_main")
 
 
-def test_package_version_is_4_1_0() -> None:
+def test_package_version_is_4_2_0() -> None:
     assert version.VERSION == "4.2.0" == PYPROJECT["project"]["version"]
 
 

@@ -107,6 +107,29 @@ def test_commit_range_dedupes(tmp_path: Path) -> None:
     assert len([ln for ln in proc.stderr.splitlines() if "[magento_di_plugin_disabled]" in ln]) == 1, proc.stderr
 
 
+def test_plugin_moved_under_nested_etc_is_removed(tmp_path: Path) -> None:
+    require_magento()
+    di = (
+        '<?xml version="1.0"?>\n<config>\n    <type name="Acme\\ModA\\Model\\Cart">\n'
+        '        <plugin name="acme_moda_cart_guard" type="Acme\\ModA\\Plugin\\CartGuard" sortOrder="10"/>\n'
+        "    </type>\n</config>\n"
+    )
+    module = "app/code/Acme/ModA"
+    reg = {f"{module}/registration.php": "<?php\n", f"{module}/etc/module.xml": "<config/>\n"}
+    old, new = f"{module}/etc/frontend/di.xml", f"{module}/etc/frontend/etc/di.xml"
+    repo = _new_repo(tmp_path)
+    (repo / CONFIG_REL).write_bytes(_json_bytes(BASE_CONFIG))
+    base_files = {**reg, old: di}
+    base = _commit_files(repo, "base", base_files, include_guards=True)
+    target_files = {**reg, new: di}
+    _apply(repo, target_files, base_files)
+    head = _commit_files(repo, "move", target_files)
+    proc = _diff_scan(repo, base, head)
+    assert proc.returncode == 1, proc.stderr
+    lines = _magento_lines(proc.stderr)
+    assert len(lines) == 1 and "[magento_di_plugin_removed]" in lines[0], proc.stderr
+
+
 def test_oversized_di_file_is_degraded(tmp_path: Path) -> None:  # M7 row 8, file over 1 MiB
     require_magento()
     case = GOLDEN / "01_disabled_added"

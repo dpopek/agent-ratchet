@@ -216,8 +216,8 @@ for `etc/di.xml`. A plugin is identified by module, area, target type and plugin
 | Category | Reported when | Exit |
 | --- | --- | --- |
 | `magento_di_plugin_disabled` | a plugin is newly `disabled="true"` | 1 |
-| `magento_di_plugin_removed` | a plugin is deleted, narrowed to a narrower area, or its module is removed | 1 |
-| `magento_xml_degraded` | a target `di.xml` cannot be read: `too_large` (> 1 MiB), `too_deep` (> 64), `too_many_nodes` (> 50000), `forbidden_construct` (DTD or entities) or `malformed` | 2 |
+| `magento_di_plugin_removed` | a plugin is deleted, narrowed to a narrower area | 1 |
+| `magento_xml_degraded` | a target `di.xml` cannot be read: `too_large` (> 1 MiB), `too_deep` (> 64), `too_many_nodes` (> 50000), `forbidden_construct` (DTD, entities or external references) or `malformed` | 2 |
 
 - Removing a plugin passes when the same target and plugin name is still active in the same area or in `global`.
   A plugin already disabled in base (in its area or `global`) is not reported again. Re-enabling, adding
@@ -249,7 +249,10 @@ Known limits:
   declared in another module's file does not cover a removal.
 - Preferences are extracted (`AGENT_RATCHET_SHADOW=1` prints plugin and preference counts) but not judged;
   neither are plugin `type` or `sortOrder` changes or other arguments.
-- The module root is derived only when a `php_paths` entry sits above the module directory.
+- The module root is derived only when a `php_paths` entry sits above the module directory; `di.xml` nested
+  deeper under `etc/` is ignored.
+- Module discovery is not modelled: a plugin moved into a directory Magento does not load as a module (for example
+  one without `registration.php`) still counts as present.
 - If the base `di.xml` cannot be read, the base side is dropped silently, so a removal cannot be claimed from it
   (same as the PHP profile).
 

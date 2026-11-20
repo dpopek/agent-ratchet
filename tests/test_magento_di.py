@@ -22,7 +22,8 @@ def test_di_location():
     assert di_location("app/code/V/M/etc/a/b/di.xml", ["app/code/"]) is None
     assert di_location("vendor/x/etc/di.xml", ["vendor/"]) is None
     assert di_location("etc/di.xml", ["app/code/", ""]) is None
-    assert di_location("app/code/V/M/etc/x/etc/di.xml", ["app/code/"]) == ("app/code/V/M/etc/x", "global")
+    assert di_location("app/code/V/M/etc/x/etc/di.xml", ["app/code/"]) is None
+    assert di_location("app/code/V/M/etc/frontend/etc/di.xml", ["app/code/"]) is None
 
 
 def test_plugin_fact():

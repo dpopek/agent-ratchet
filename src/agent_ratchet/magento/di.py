@@ -36,7 +36,7 @@ def di_location(path: str, php_paths: Sequence[str]) -> tuple[str, str] | None:
     if not is_in_scope(path, php_paths, (".xml",)):
         return None
     match = _DI_PATH.match(path)
-    if match is None:
+    if match is None or "etc" in match["root"].split("/"):
         return None
     return match["root"], match["area"] or "global"
 
