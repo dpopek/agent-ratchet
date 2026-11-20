@@ -17,6 +17,7 @@ from agent_ratchet.ast_safety import (  # noqa: F401 -- fail-closed AST helpers 
 from agent_ratchet import external_config
 from agent_ratchet.cognitive_complexity import COGNITIVE_MODULE_CEILING, evaluate_cognitive_budget
 from agent_ratchet.json_safety import loads_bounded
+from agent_ratchet.magento.config import validate_magento_exceptions
 from agent_ratchet.php.scope import DEFAULT_PHP_PATHS, validate_exceptions, validate_php_paths
 from agent_ratchet.profile import require_profile_capabilities
 from agent_ratchet.rel_path import clean_rel_segments
@@ -224,7 +225,7 @@ def list_snapshot_files(ref_prefix: str, cwd: str | None = None) -> list[str]:
     return [t for t in res.stdout.decode("utf-8", errors="replace").split("\0") if t]
 
 
-ALLOWED_CONFIG_KEYS = frozenset({"extra_slop_rules", "legacy_loc_waivers", "import_roots", "self_skip", "languages", "frameworks", "php_paths", "php_suppression_exceptions"})
+ALLOWED_CONFIG_KEYS = frozenset({"extra_slop_rules", "legacy_loc_waivers", "import_roots", "self_skip", "languages", "frameworks", "php_paths", "php_suppression_exceptions", "magento_di_exceptions"})
 PROFILE_VALUES = {"languages": frozenset({"php"}), "frameworks": frozenset({"magento"})}
 
 
@@ -261,7 +262,8 @@ def parse_guard_config_bytes(raw: bytes, source: str) -> dict[str, Any]:
         raise GuardAnalysisError(f"frameworks 'magento' requires languages 'php' in audit_guard_config.json at {source}")
     return {"extra_slop_rules": extra, "legacy_loc_waivers": waivers, "import_roots": roots, "fixture_paths": fixtures, "languages": languages, "frameworks": frameworks,
             "php_paths": validate_php_paths(data.get("php_paths", list(DEFAULT_PHP_PATHS)), source),
-            "php_suppression_exceptions": validate_exceptions(data.get("php_suppression_exceptions", []), source)}
+            "php_suppression_exceptions": validate_exceptions(data.get("php_suppression_exceptions", []), source),
+            "magento_di_exceptions": validate_magento_exceptions(data.get("magento_di_exceptions", []), source)}
 
 
 def _parse_profile(data: Mapping[str, Any], key: str, source: str) -> list[str]:
@@ -293,7 +295,7 @@ def _parse_self_skip(block: object, source: str) -> list[str]:
 
 def default_guard_config() -> dict[str, Any]:
     return {"extra_slop_rules": [], "legacy_loc_waivers": [], "import_roots": list(DEFAULT_IMPORT_ROOTS), "fixture_paths": [], "languages": [], "frameworks": [],
-            "php_paths": list(DEFAULT_PHP_PATHS), "php_suppression_exceptions": []}
+            "php_paths": list(DEFAULT_PHP_PATHS), "php_suppression_exceptions": [], "magento_di_exceptions": []}
 
 
 def fixture_set(base_cfg: Mapping[str, Any] | None, target_cfg: Mapping[str, Any]) -> frozenset[str]:
