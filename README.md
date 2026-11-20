@@ -216,7 +216,7 @@ for `etc/di.xml`. A plugin is identified by module, area, target type and plugin
 | Category | Reported when | Exit |
 | --- | --- | --- |
 | `magento_di_plugin_disabled` | a plugin is newly `disabled="true"` | 1 |
-| `magento_di_plugin_removed` | a plugin is deleted, narrowed to a narrower area | 1 |
+| `magento_di_plugin_removed` | a plugin is deleted or narrowed to a narrower area | 1 |
 | `magento_xml_degraded` | a target `di.xml` cannot be read: `too_large` (> 1 MiB), `too_deep` (> 64), `too_many_nodes` (> 50000), `forbidden_construct` (DTD, entities or external references) or `malformed` | 2 |
 
 - Removing a plugin passes when the same target and plugin name is still active in the same area or in `global`.
