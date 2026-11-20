@@ -1,0 +1,13 @@
+{
+  "category": "magento_di_plugin_disabled",
+  "count": 1,
+  "exit": 1,
+  "target_exceptions": [
+    {
+      "area": "global",
+      "plugin": "acme_moda_cart_guard",
+      "reason": "legacy override kept on purpose",
+      "target": "Acme\\ModA\\Model\\Cart"
+    }
+  ]
+}

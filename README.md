@@ -127,14 +127,14 @@ merge, then bump to 4.0. Under a 4.0 base the list can only shrink.
   `languages`/`frameworks` in the config. One PR with both always exits 2 in CI, because CI runs the
   base lock (`--lock-from origin/main`) and the base has no `EXTRAS` yet. Without the extra, `scan` and `baseline-integrity` fail closed with exit 2:
   `profile 'php' requires agent-ratchet[php] (set EXTRAS=php in guard.lock)`.
-- Since 4.1 the `php` profile runs PHP rules (below); `magento` adds no rules of its own yet.
+- Since 4.1 the `php` profile runs PHP rules (below); since 4.2 `magento` adds the `di.xml` plugin rules (below).
   Removing an entry later is a finding, so add it only when you plan to keep it.
 - Supported for extras: CPython 3.11–3.14 on Linux x86-64 and macOS arm64. On 3.15 `tree-sitter`
   builds from sdist (best-effort).
 - Removing an entry from either list is reported (`languages entry removed: 'php' (narrows the
   analysis profile)`); adding one is allowed.
 - Unknown top-level keys are a config error. Allowed: `extra_slop_rules`, `legacy_loc_waivers`,
-  `import_roots`, `self_skip`, `languages`, `frameworks`, `php_paths`, `php_suppression_exceptions`.
+  `import_roots`, `self_skip`, `languages`, `frameworks`, `php_paths`, `php_suppression_exceptions`, `magento_di_exceptions`.
 
 ### PHP rules
 
@@ -206,6 +206,55 @@ In a repository that uses `guard.lock` (in the worktree, the index, `HEAD`, the 
 the scanned range), `AGENT_RATCHET_CONFIG` is ignored: the run keeps the protected in-repo config and prints
 `note: ignoring AGENT_RATCHET_CONFIG because guard.lock is present; using the in-repo config`. Only an
 explicit `--config-file` replaces the config there, so hooks that need an external config must pass the option.
+
+### Magento DI plugin rules
+
+With `frameworks: ["magento"]` (extra `agent-ratchet[magento]`, which brings `defusedxml`), `scan` also compares
+base and target for each changed `etc/di.xml` and `etc/<area>/di.xml` in `php_paths` scope. The area is `global`
+for `etc/di.xml`. A plugin is identified by module, area, target type and plugin name.
+
+| Category | Reported when | Exit |
+| --- | --- | --- |
+| `magento_di_plugin_disabled` | a plugin is newly `disabled="true"` | 1 |
+| `magento_di_plugin_removed` | a plugin is deleted or narrowed to a narrower area | 1 |
+| `magento_xml_degraded` | a target `di.xml` cannot be read: `too_large` (> 1 MiB), `too_deep` (> 64), `too_many_nodes` (> 50000), `forbidden_construct` (DTD, entities or external references) or `malformed` | 2 |
+
+- Removing a plugin passes when the same target and plugin name is still active in the same area or in `global`.
+  A plugin already disabled in base (in its area or `global`) is not reported again. Re-enabling, adding
+  plugins and moving a plugin to a wider area always pass.
+- A module counts as removed when its `registration.php` or `etc/module.xml` is deleted or renamed out of the
+  module directory, so its plugins are not reported one by one.
+- Magento XML is parsed with DTDs, entities and external references forbidden, within the size, depth and node limits above.
+- `magento_di_exceptions`: entries with exactly `area`, `target`, `plugin` and a non-empty `reason`:
+
+```json
+{
+  "languages": ["php"],
+  "frameworks": ["magento"],
+  "magento_di_exceptions": [
+    {"area": "global", "target": "Vendor\\Module\\Model\\Foo", "plugin": "vendor_module_foo",
+     "reason": "plugin replaced by a preference, reviewed"}
+  ]
+}
+```
+
+  An entry silences the disabled and removed findings for that plugin only if it is already in the base config;
+  an entry added in the same change has no effect. A leading `\` in `target` is ignored. Malformed or duplicate
+  entries are a config error (exit 2). `magento_di_exceptions` needs 4.2; older versions reject it as an unknown key,
+  so bump `guard.lock` first and add the key in a separate change.
+
+Known limits:
+
+- Only changed `di.xml` files count as coverage; the effective merge across modules is not modelled, so a plugin
+  declared in another module's file does not cover a removal.
+- Preferences are extracted (`AGENT_RATCHET_SHADOW=1` prints plugin and preference counts) but not judged;
+  neither are plugin `type` or `sortOrder` changes or other arguments.
+- The module root is derived only when a `php_paths` entry sits above the module directory; `di.xml` nested
+  deeper under `etc/` is ignored.
+- Module discovery is not modelled: a plugin moved into a directory Magento does not load as a module (for example
+  one without `registration.php`) still counts as present.
+- If the base `di.xml` cannot be read, the base side is dropped silently, so a removal cannot be claimed from it
+  (same as the PHP profile).
 
 ## Migrating off guard_core
 

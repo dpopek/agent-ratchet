@@ -58,10 +58,14 @@ def validate_exceptions(value: object, source: str = "config") -> list[dict[str,
     return out
 
 
-def is_php_in_scope(path: str, php_paths: Sequence[str]) -> bool:
-    if not path.endswith(PHP_EXTENSIONS) or not any(path.startswith(p) for p in php_paths):
+def is_in_scope(path: str, php_paths: Sequence[str], suffixes: tuple[str, ...]) -> bool:
+    if not path.endswith(suffixes) or not any(path.startswith(p) for p in php_paths):
         return False
     return not EXCLUDED_SEGMENTS.intersection(path.split("/")[:-1])
+
+
+def is_php_in_scope(path: str, php_paths: Sequence[str]) -> bool:
+    return is_in_scope(path, php_paths, PHP_EXTENSIONS)
 
 
 def php_profile_active(cfg: Mapping[str, Any]) -> bool:

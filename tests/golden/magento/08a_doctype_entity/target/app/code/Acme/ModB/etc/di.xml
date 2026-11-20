@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<!DOCTYPE config [<!ENTITY ext SYSTEM "file:///etc/hostname">]>
+<config>
+    <type name="Acme\ModA\Model\Cart">
+        <plugin name="acme_moda_cart_guard" type="&ext;"/>
+    </type>
+</config>
