@@ -199,8 +199,12 @@ def _points(
     key: Callable[[str], str],
     present: tuple[set[str], set[str]],
     moves: PointMoves | None = None,
+    donate: bool = True,
 ) -> None:
-    """`present`: keyed symbols with a declaration or facts in (BASE, TARGET); `moves` defers cross-file candidates."""
+    """`present`: keyed symbols with a declaration or facts in (BASE, TARGET); `moves` defers cross-file candidates.
+
+    `donate`: BASE facts may fund cross-file moves (see `_donates`).
+    """
     groups: dict[tuple[str, str], tuple[list[CanonicalFact], list[CanonicalFact]]] = {}
     for side, facts in ((0, base), (1, target)):
         for f in facts:
@@ -226,7 +230,7 @@ def _points(
     for x, _ in _pair(gone, new, _same_directive):
         left_target.remove(x)
     deferred = [x for x in new if _movable(x)] if moves is not None else []
-    if moves is not None:
+    if moves is not None and donate:
         moves.gone.extend(x for x in gone if _movable(x))
         moves.new.extend((out.path, x) for x in deferred)
     for x in left_target:
@@ -350,6 +354,15 @@ def _decode_violation(path: str, side: str) -> SlopViolation:
     return SlopViolation(path, 1, DEGRADED, msg, side)
 
 
+def _donates(b: Analysis) -> bool:
+    """BASE facts are proof of a move only when no parse gap sits at file scope.
+
+    A gap inside a declaration already makes that declaration's facts incomplete (not `_movable`); a top-level gap
+    leaves them complete, but error recovery may have misplaced any declaration of the file (fail-closed).
+    """
+    return FILE_SYMBOL not in b.gap_hashes
+
+
 def _live(an: Analysis, kind: str, dead: set[str], key: Callable[[str], str]) -> list[CanonicalFact]:
     return [f for f in an.facts if f.kind == kind and not _under(key(_symbol(f)), dead)]
 
@@ -398,7 +411,7 @@ def compare_php_analyses(
     """
     b = base or _EMPTY
     if target is None:
-        if moves is not None:  # a deleted file: every anchored point is a gone origin
+        if moves is not None and _donates(b):  # a deleted file: every anchored point is a gone origin
             moves.gone.extend(f for f in b.facts if f.kind == POINT and _movable(f))
         return _sorted([_removed_violation(f) for f in b.facts if f.kind == TEST])
     t = target
@@ -412,7 +425,7 @@ def compare_php_analyses(
         return _live(b, kind, dead, key), _live(t, kind, dead, key)
 
     present = ({key(s) for s in _all_symbols(b)} | {FILE_SYMBOL}, {key(s) for s in _all_symbols(t)} | {FILE_SYMBOL})
-    _points(*pick(POINT), out, key, present, moves)
+    _points(*pick(POINT), out, key, present, moves, _donates(b))
     grown = grown_windows(b.tokens, b.window_spans, t.tokens, t.window_spans) if b.window_spans else set()
     _windows(*pick(WINDOW), out, key, grown)
     _files(*pick(FILE), out)

@@ -236,3 +236,44 @@ def test_copy_source_does_not_fund_new_file(monkeypatch):  # M2: a copied-from f
     entries = [("C100", "app/Legacy.php", "app/Copy.php"), ("A", "", "app/Fresh.php")]
     found = scan.php_transition_violations(entries, "BASE", "", cfg, cfg)
     assert "app/Fresh.php" in {v.file for v in found if v.category == "php_suppression_added"}
+
+
+_GAP_PROP = "    public $broken = ;\n"  # a class-level parse gap: its innermost symbol is the class
+
+
+def test_deleted_file_with_gap_around_method_does_not_fund_move():  # a gap in the class makes its facts incomplete
+    moved = _meth("token", IGN + "        return md5(serialize($data));")
+    found = _run([
+        ("app/Legacy.php", _cls("Legacy", _GAP_PROP + moved), None),
+        ("app/Fresh.php", None, _cls("Fresh", moved)),
+    ])
+    assert _added(found) == ["app/Fresh.php"]
+
+
+def test_deleted_file_with_file_level_gap_does_not_fund_move():  # M3: a top-level gap taints every symbol
+    moved = _meth("token", IGN + "        return md5(serialize($data));")
+    found = _run([
+        ("app/Legacy.php", _cls("Legacy", moved) + "foo(;\n", None),
+        ("app/Fresh.php", None, _cls("Fresh", moved)),
+    ])
+    assert _added(found) == ["app/Fresh.php"]
+
+
+def test_changed_file_with_file_level_gap_does_not_fund_move():  # M3 on the in-entry gone path
+    keep = _meth("keep", "        return 'k';")
+    moved = _meth("token", IGN + "        return md5(serialize($data));")
+    found = _run([
+        ("app/Legacy.php", _cls("Legacy", keep + "\n\n" + moved) + "foo(;\n", _cls("Legacy", keep) + "foo(;\n"),
+        ("app/Fresh.php", None, _cls("Fresh", moved)),
+    ])
+    assert _added(found) == ["app/Fresh.php"]
+
+
+def test_gap_elsewhere_in_changed_file_still_funds_move():  # the filter is per symbol, not per file
+    other = _meth("other", "        return foo(;")
+    moved = _meth("token", IGN + "        return md5(serialize($data));")
+    found = _run([
+        ("app/Legacy.php", _cls("Legacy", other + "\n\n" + moved), _cls("Legacy", other)),
+        ("app/Fresh.php", None, _cls("Fresh", moved)),
+    ])
+    assert _added(found) == []
