@@ -269,11 +269,47 @@ def test_changed_file_with_file_level_gap_does_not_fund_move():  # M3 on the in-
     assert _added(found) == ["app/Fresh.php"]
 
 
+def test_changed_file_whose_gap_is_fixed_in_target_does_not_fund_move():  # BASE decides donation, not TARGET
+    keep = _meth("keep", "        return 'k';")
+    moved = _meth("token", IGN + "        return md5(serialize($data));")
+    found = _run([
+        ("app/Legacy.php", _cls("Legacy", keep + "\n\n" + moved) + "foo(;\n", _cls("Legacy", keep)),
+        ("app/Fresh.php", None, _cls("Fresh", moved)),
+    ])
+    assert _added(found) == ["app/Fresh.php"]
+
+
 def test_gap_elsewhere_in_changed_file_still_funds_move():  # the filter is per symbol, not per file
     other = _meth("other", "        return foo(;")
     moved = _meth("token", IGN + "        return md5(serialize($data));")
     found = _run([
         ("app/Legacy.php", _cls("Legacy", other + "\n\n" + moved), _cls("Legacy", other)),
         ("app/Fresh.php", None, _cls("Fresh", moved)),
+    ])
+    assert _added(found) == []
+
+
+def test_new_suppression_in_file_with_base_file_level_gap_is_flagged():  # a file that cannot donate still reports
+    keep = _meth("keep", "        return 'k';")
+    fresh = _meth("fresh", IGN + "        return md5(serialize($data));")
+    found = _run([("app/Legacy.php", _cls("Legacy", keep) + "foo(;\n", _cls("Legacy", keep + "\n\n" + fresh))])
+    assert _added(found) == ["app/Legacy.php"]
+
+
+def test_new_suppression_with_file_level_gap_on_both_sides_is_flagged():
+    keep = _meth("keep", "        return 'k';")
+    fresh = _meth("fresh", IGN + "        return md5(serialize($data));")
+    found = _run([
+        ("app/Legacy.php", _cls("Legacy", keep) + "foo(;\n", _cls("Legacy", keep + "\n\n" + fresh) + "foo(;\n"),
+    ])
+    assert _added(found) == ["app/Legacy.php"]
+
+
+def test_file_with_base_file_level_gap_still_receives_a_move():  # the gap stops donating, not receiving
+    keep = _meth("keep", "        return 'k';")
+    moved = _meth("token", IGN + "        return md5(serialize($data));")
+    found = _run([
+        ("app/Fresh.php", _cls("Fresh", moved), None),
+        ("app/Legacy.php", _cls("Legacy", keep) + "foo(;\n", _cls("Legacy", keep + "\n\n" + moved)),
     ])
     assert _added(found) == []

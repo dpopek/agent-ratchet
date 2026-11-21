@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.3.4
+
+- Fixed: a 4.3.3 regression that could leave an added PHP suppression unreported.
+
 ## 4.3.3
 
 - Fixed: suppressions in a PHP file with a top-level parse error no longer cover moved code in other files.
