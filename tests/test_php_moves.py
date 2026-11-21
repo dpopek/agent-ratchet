@@ -141,3 +141,80 @@ def test_ignore_above_docblock_still_sees_signature_change():  # P5 (I1)
         _cls("Run", doc + _meth("run", "        return 'y';", sig="int $a, int $b")),
     )])
     assert [c for _, c, _ in found] == ["php_suppression_rebound"]
+
+
+def test_common_name_execute_does_not_fund_unrelated_method():  # R1 (C1')
+    keep = _meth("keep", "        return 'k';")
+    b = _meth("b", "        return 'b';")
+    found = _run([
+        ("app/A.php", _cls("A", keep + "\n\n" + _meth("execute", "        $result = 'a';\n" + IGN + "        return $result;")), _cls("A", keep)),
+        ("app/B.php", _cls("B", b), _cls("B", b + "\n\n" + _meth(
+            "execute", "        $result = evil($_GET['x']);\n" + IGN + "        return $result;", sig="int $x, string $y"))),
+    ])
+    assert _added(found) == ["app/B.php"]
+
+
+def test_common_name_construct_from_deleted_file_is_flagged():  # R2 (C1')
+    legacy = "    public function __construct(private int $v)\n    {\n" + STAN + "        $this->init();\n    }"
+    fresh = "    public function __construct(array $danger)\n    {\n        eval($danger[0]);\n" + STAN + "        $this->init();\n    }"
+    found = _run([
+        ("app/Legacy.php", _cls("Legacy", legacy), None),
+        ("app/Fresh.php", None, _cls("Fresh", fresh).replace("Acme\\Shop\\Model", "Other\\Pkg")),
+    ])
+    assert _added(found) == ["app/Fresh.php"]
+
+
+def test_common_name_get_data_other_namespace_is_flagged():  # R3 (C1')
+    found = _run([
+        ("app/Old.php", _cls("Old", _meth("getData", IGN + "        return $result;")), None),
+        ("app/Neu.php", None, _cls("Neu", _meth(
+            "getData", "        $result = unserialize($data);\n" + IGN + "        return $result;", sig="string $data"))),
+    ])
+    assert _added(found) == ["app/Neu.php"]
+
+
+def test_rename_out_of_scope_is_a_deleted_donor():
+    require_php()
+    from agent_ratchet.php.scan import pair_entries
+
+    pairs = pair_entries([("R100", "app/Legacy.php", "vendor/acme/Legacy.php"), ("A", "", "app/Fresh.php")], ["app"])
+    assert pairs == [("app/Legacy.php", None, False), (None, "app/Fresh.php", False)]
+    found = _run([
+        ("app/Legacy.php", _cls("Legacy", _meth("run", IGN + "        return $result;")), None),
+        ("app/Fresh.php", None, _cls("Fresh", _meth("run", "        $result = evil();\n" + IGN + "        return $result;"))),
+    ])
+    assert _added(found) == ["app/Fresh.php"]
+
+
+def test_none_anchor_is_not_collected():
+    require_php()
+    from agent_ratchet.php import compare as C
+
+    src = "<?php\nnamespace Acme;\n\nclass K\n{\n    // phpcs:ignore Generic.Sample.Rule\n}\n"  # nothing to anchor to
+    moves = C.PointMoves()
+    ban, tan = C.analyze_pair(src.encode(), None, "app/K.php", "app/K.php")
+    assert any(f.payload.get("anchor_norm_hash") is None for f in ban.facts if f.kind == C.POINT)
+    C.compare_php_analyses(ban, tan, "app/K.php", [], moves=moves)
+    assert moves.gone == []
+
+
+def test_moves_require_violations_call():  # M1 contract: deferred facts surface only through `violations`
+    require_php()
+    from agent_ratchet.php import compare as C
+
+    moves = C.PointMoves()
+    fresh = _cls("Fresh", _meth("brandNew", IGN + "        return $result;")).encode()
+    ban, tan = C.analyze_pair(None, fresh, None, "app/Fresh.php")
+    per_entry = C.compare_php_analyses(ban, tan, "app/Fresh.php", [], moves=moves)
+    assert [v.category for v in per_entry] == [] and len(moves.new) == 1
+    assert [v.category for v in moves.violations([])] == ["php_suppression_added"]
+
+
+def test_ignore_above_docblock_with_inner_slash_star():  # `/** a/*b */` is still the attached docblock
+    doc = "    // phpcs:ignore Squiz.Commenting.FunctionComment.MissingParamTag\n    /** Run a/*b it. */\n"
+    found = _run([(
+        "app/Run.php",
+        _cls("Run", doc + _meth("run", "        return 'y';", sig="int $a")),
+        _cls("Run", doc + _meth("run", "        return 'y';", sig="int $a, int $b")),
+    )])
+    assert [c for _, c, _ in found] == ["php_suppression_rebound"]

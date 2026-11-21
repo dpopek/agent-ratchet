@@ -140,7 +140,8 @@ class PointMoves:
 
     `gone`: BASE point facts left unpaired whose origin symbol is absent from their entry's TARGET; `new`: (TARGET
     path, fact) left unpaired whose symbol is absent from their entry's BASE. Only `_movable` facts are collected.
-    A pair must also show that the code moved, not just the directive: the same declaration name (`_moved_with`).
+    A pair must also show that the code moved, not just the directive: the same declaration name and the same
+    normalized declaration (`_moved_with`), so a move together with an edit or a rename is reported (fail-closed).
     Callers that pass a `PointMoves` to `compare_php_analyses` must report `violations`, or the deferred facts are lost.
     """
 
@@ -172,6 +173,7 @@ def _movable(f: CanonicalFact) -> bool:
         and digest != EMPTY_LINE
         and f.identity["tool"] != "phpcs-unknown"
         and f.identity["symbol"] != FILE_SYMBOL
+        and f.payload.get("decl_norm_hash") is not None
         and f.completeness == "complete"
     )
 
@@ -183,7 +185,11 @@ def _short_name(symbol: str) -> str:
 
 def _moved_with(new: CanonicalFact, gone: CanonicalFact) -> bool:
     """The directive is unchanged and so is the declaration it sits in (only the class or file around it moved)."""
-    return _same_directive(new, gone) and _short_name(new.identity["symbol"]) == _short_name(gone.identity["symbol"])
+    return (
+        _same_directive(new, gone)
+        and _short_name(new.identity["symbol"]) == _short_name(gone.identity["symbol"])
+        and new.payload["decl_norm_hash"] == gone.payload["decl_norm_hash"]
+    )
 
 
 def _points(

@@ -148,7 +148,11 @@ def _analyze(parsed: ParsedPhp, path: str, oid: str | None) -> Analysis:
             CanonicalFact(
                 POINT,
                 {"path": path, "symbol": p.symbol, "tool": p.tool, "codes": list(p.codes)},
-                {"anchor_ast_kind": ROW_ANCHOR if p.row_scoped else p.anchor_kind, "anchor_norm_hash": p.anchor_hash}
+                {
+                    "anchor_ast_kind": ROW_ANCHOR if p.row_scoped else p.anchor_kind,
+                    "anchor_norm_hash": p.anchor_hash,
+                    "decl_norm_hash": p.decl_hash,
+                }
                 | ({"header_hash": p.header_hash} if p.tool == "phpmd" else {}),
                 "multiset",
                 complete(p.symbol),

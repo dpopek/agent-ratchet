@@ -415,7 +415,7 @@ def test_plugin_registered_once_with_spec_fact_shapes() -> None:
     assert kinds == ["php.parse_gap", "php.suppression.point", "php.suppression.window"]
     point = next(f for f in facts if f.kind == "php.suppression.point")
     assert dict(point.identity) == {"path": PATH, "symbol": "V\\M\\X::run", "tool": "phpcs", "codes": ("A.B",)}
-    assert set(point.payload) == {"anchor_ast_kind", "anchor_norm_hash"} and point.origin.blob_oid == "abc"
+    assert set(point.payload) == {"anchor_ast_kind", "anchor_norm_hash", "decl_norm_hash"} and point.origin.blob_oid == "abc"
     assert all(f.completeness == "incomplete" for f in facts if f.kind != "php.parse_gap")  # symbol has a gap
     assert get_plugin("php").extract(src.encode(), PATH, {}) == get_plugin("php").extract(src.encode(), PATH, {})
 
