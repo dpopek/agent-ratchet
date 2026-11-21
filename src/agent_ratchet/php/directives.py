@@ -219,6 +219,19 @@ def _code_after(comment: Any, source: bytes, tags_are_code: bool = True) -> bool
     return pos < line_end and _has_code(source[pos:line_end], tags_are_code)
 
 
+def _on_declaration(source: bytes, row: int, anchor: Any) -> bool:
+    """`row` is in the declaration or in the `/** */` docblock directly above it (only whitespace in between)."""
+    if row >= anchor.start_point.row:
+        return True
+    head = source[: anchor.start_byte].rstrip()
+    if not head.endswith(b"*/"):
+        return False
+    start = head.rfind(b"/*")
+    if start < 0 or not head.startswith(b"/**", start):
+        return False
+    return row >= source.count(b"\n", 0, start)
+
+
 def _ignored_row(raw: _Raw, source: bytes) -> tuple[int, bool]:
     """(row a directive ignores, whether code shares that row with its comment); spec R4 "Anchor hash", probes D9.
 
@@ -281,13 +294,14 @@ def _body_derived(tool: str, codes: tuple[str, ...]) -> bool:
 def _anchor_hash(raw: _Raw, anchor: Any, root: Any, source: bytes) -> tuple[str, bool]:
     """(hash, row-scoped): line-scoped tools fingerprint the ignored line or declaration header (spec R4 "Anchor hash").
 
-    The declaration hash applies only when the ignored row is the declaration's start row; an ignore above a blank or
-    docblock row suppresses nothing on the declaration (4.3.1 F2).
+    A row of the declaration or of its docblock keeps the declaration hash: docblock sniffs report there, and a
+    signature change under it must stay visible. Any other row above (blank, another comment) suppresses nothing on
+    the declaration, so that row is fingerprinted (4.3.1 F2).
     """
     if raw.tool not in _LINE_SCOPED:
         return norm_hash(anchor, source), False  # psalm: the declaration/statement is its scope
     row = _ignored_row(raw, source)[0]  # the row `_anchor_for` reads
-    if (anchor.type in _CLASS_LIKE or anchor.type in _CALLABLE) and row == anchor.start_point.row:
+    if (anchor.type in _CLASS_LIKE or anchor.type in _CALLABLE) and _on_declaration(source, row, anchor):
         if _body_derived(raw.tool, raw.codes):
             return norm_hash(anchor, source), False  # body-derived metrics
         return header_hash(anchor, source), False

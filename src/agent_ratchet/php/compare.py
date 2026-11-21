@@ -11,6 +11,7 @@ from agent_ratchet.git_guard_io import SlopViolation
 from agent_ratchet.php.codes import within
 from agent_ratchet.php.directives import FILE_SYMBOL
 from agent_ratchet.php.extract import FILE, GAP, POINT, TEST, WINDOW, Analysis, analyze
+from agent_ratchet.php.parser import EMPTY_LINE
 from agent_ratchet.php.window_align import grown_windows
 from agent_ratchet.transitions import FactState, evaluate
 
@@ -138,7 +139,9 @@ class PointMoves:
     """Cross-file candidates of one transition (4.3.1 F3): R6 "Renamed declaration" pairing across entries.
 
     `gone`: BASE point facts left unpaired whose origin symbol is absent from their entry's TARGET; `new`: (TARGET
-    path, fact) left unpaired whose symbol is absent from their entry's BASE. Null anchors are never collected.
+    path, fact) left unpaired whose symbol is absent from their entry's BASE. Only `_movable` facts are collected.
+    A pair must also show that the code moved, not just the directive: the same declaration name (`_moved_with`).
+    Callers that pass a `PointMoves` to `compare_php_analyses` must report `violations`, or the deferred facts are lost.
     """
 
     def __init__(self) -> None:
@@ -150,7 +153,7 @@ class PointMoves:
         gone = list(self.gone)
         per_path: dict[str, _Findings] = {}
         for path, f in self.new:
-            idx = next((i for i, g in enumerate(gone) if _same_directive(f, g)), None)
+            idx = next((i for i, g in enumerate(gone) if _moved_with(f, g)), None)
             if idx is not None:
                 gone.pop(idx)
                 continue
@@ -159,7 +162,28 @@ class PointMoves:
 
 
 def _movable(f: CanonicalFact) -> bool:
-    return f.payload["anchor_norm_hash"] is not None and f.identity["tool"] != "phpcs-unknown"
+    """A cross-file candidate: a known tool, inside a declaration, on a row that carries code.
+
+    A blank or comment-only row (`EMPTY_LINE`) and file scope match any other file, so they never move.
+    """
+    digest = f.payload["anchor_norm_hash"]
+    return (
+        digest is not None
+        and digest != EMPTY_LINE
+        and f.identity["tool"] != "phpcs-unknown"
+        and f.identity["symbol"] != FILE_SYMBOL
+        and f.completeness == "complete"
+    )
+
+
+def _short_name(symbol: str) -> str:
+    """`Ns\\Cls::method` -> `method`; `Ns\\Cls` -> `Cls`."""
+    return symbol.rsplit("::", 1)[-1] if "::" in symbol else symbol.rsplit("\\", 1)[-1]
+
+
+def _moved_with(new: CanonicalFact, gone: CanonicalFact) -> bool:
+    """The directive is unchanged and so is the declaration it sits in (only the class or file around it moved)."""
+    return _same_directive(new, gone) and _short_name(new.identity["symbol"]) == _short_name(gone.identity["symbol"])
 
 
 def _points(
