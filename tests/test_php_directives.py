@@ -317,6 +317,28 @@ def test_own_line_ignore_targets_literal_next_row():
     assert plain[0].anchor_hash != blank[0].anchor_hash  # deleting the blank row is a rebound
 
 
+def test_row_fingerprint_marks_point_row_scoped():
+    """4.3.1 F1: a row fingerprint does not depend on the enclosing node, so the point says so."""
+    (trailing,), _, _ = _collect(_wrap("        return f(strtotime('x')); // phpcs:ignore"))
+    (decl,), _, _ = _collect(_sig())
+    assert trailing.anchor_kind == "return_statement" and trailing.row_scoped
+    assert decl.anchor_kind == "method_declaration" and not decl.row_scoped
+
+
+def test_ignore_above_blank_row_before_class_fingerprints_the_row():
+    """4.3.1 F2: the header hash applies only when the ignored row is the declaration's first row."""
+    from agent_ratchet.php.parser import EMPTY_LINE
+
+    def one(src: str):
+        (p,), _, _ = _collect(src)
+        return p
+
+    blank = one("<?php\n//phpcs:ignore\n\n/** doc */\nclass C { public function m() { return 1; } }\n")
+    edited = one("<?php\n//phpcs:ignore\n\n/** doc */\nclass C { public function m() { return 2; } }\n")
+    assert blank.anchor_kind == "class_declaration" and blank.row_scoped
+    assert blank.anchor_hash == edited.anchor_hash == EMPTY_LINE
+
+
 @pytest.mark.parametrize("directive", ["phpcs:ignore", "@phpstan-ignore function.notFound"])
 @pytest.mark.parametrize("opening", ["/* ", "/* note\n        "])
 def test_block_comment_with_code_on_end_row_targets_that_row(directive, opening):
