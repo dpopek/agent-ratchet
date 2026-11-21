@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.3.3
+
+- Fixed: suppressions in a PHP file with a top-level parse error no longer cover moved code in other files.
+
 ## 4.3.2
 
 - Changed: `package.json` git-hook keys (`husky`, `simple-git-hooks`, `pre-commit`) and `knip.config.*` count in policy isolation.
