@@ -218,3 +218,21 @@ def test_ignore_above_docblock_with_inner_slash_star():  # `/** a/*b */` is stil
         _cls("Run", doc + _meth("run", "        return 'y';", sig="int $a, int $b")),
     )])
     assert [c for _, c, _ in found] == ["php_suppression_rebound"]
+
+
+def test_copy_source_does_not_fund_new_file(monkeypatch):  # M2: a copied-from file keeps its suppressions
+    require_php()
+    from agent_ratchet.php import scan
+
+    body = IGN + "        return $result;"
+    legacy = _cls("Legacy", _meth("run", body))
+    blobs = {
+        "BASE:app/Legacy.php": legacy.encode(),
+        ":app/Copy.php": _cls("Legacy", _meth("go", "        return $result;")).encode(),
+        ":app/Fresh.php": _cls("Fresh", _meth("run", body)).encode(),
+    }
+    monkeypatch.setattr(scan, "git_cat_bytes", lambda spec, cwd=None: blobs.get(spec))
+    cfg = {"languages": ["php"], "frameworks": [], "php_paths": ["app/"]}
+    entries = [("C100", "app/Legacy.php", "app/Copy.php"), ("A", "", "app/Fresh.php")]
+    found = scan.php_transition_violations(entries, "BASE", "", cfg, cfg)
+    assert "app/Fresh.php" in {v.file for v in found if v.category == "php_suppression_added"}
