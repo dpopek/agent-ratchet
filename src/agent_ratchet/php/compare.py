@@ -203,7 +203,7 @@ def _points(
 ) -> None:
     """`present`: keyed symbols with a declaration or facts in (BASE, TARGET); `moves` defers cross-file candidates.
 
-    `donate`: BASE facts may fund cross-file moves (see `_donates`).
+    `donate`: BASE facts may fund cross-file moves (see `_donates`); new TARGET facts are deferred either way.
     """
     groups: dict[tuple[str, str], tuple[list[CanonicalFact], list[CanonicalFact]]] = {}
     for side, facts in ((0, base), (1, target)):
@@ -230,8 +230,9 @@ def _points(
     for x, _ in _pair(gone, new, _same_directive):
         left_target.remove(x)
     deferred = [x for x in new if _movable(x)] if moves is not None else []
-    if moves is not None and donate:
-        moves.gone.extend(x for x in gone if _movable(x))
+    if moves is not None:
+        if donate:
+            moves.gone.extend(x for x in gone if _movable(x))
         moves.new.extend((out.path, x) for x in deferred)
     for x in left_target:
         if any(x is d for d in deferred):
