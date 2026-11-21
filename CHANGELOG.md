@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.3.2
+
+- Changed: `package.json` git-hook keys (`husky`, `simple-git-hooks`, `pre-commit`) and `knip.config.*` count in policy isolation.
+- Fixed: a `package.json` with a UTF-8 BOM is compared per key instead of as a whole file.
+- Fixed: a copied PHP file no longer lends its suppressions to other files.
+
 ## 4.3.1
 
 - Fixed: PHP suppressions moved with their code to another file, or kept on an unchanged ignored line, are no longer reported.

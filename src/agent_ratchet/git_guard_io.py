@@ -125,7 +125,7 @@ def is_php_code_path(rel: str) -> bool:
 JS_QUALITY_CONFIG_RE: re.Pattern[str] = re.compile(
     r"eslint\.config\.[cm]?[jt]s|\.eslintrc[^/]*|\.eslintignore"
     r"|tsconfig[^/]*\.json|jsconfig[^/]*\.json"
-    r"|\.?knip\.(?:json|jsonc|[cm]?[jt]s)"
+    r"|\.?knip(?:\.config)?\.(?:json|jsonc|[cm]?[jt]s)"
     r"|vite[^/]*\.config\.[cm]?[jt]s|vitest[^/]*\.config\.[cm]?[jt]s"
     r"|vitest\.workspace\.(?:json|[cm]?[jt]s)|jest\.config\.(?:json|[cm]?[jt]s)"
     r"|playwright[^/]*\.config\.[cm]?[jt]s"
@@ -142,7 +142,10 @@ def _in_node_modules(rel_path: str) -> bool:
 
 
 # `package.json` keys that carry lint/test/format/hook policy; dependency churn stays unguarded.
-PACKAGE_JSON_GUARDED_KEYS: tuple[str, ...] = ("scripts", "eslintConfig", "prettier", "jest", "lint-staged", "knip", "stylelint")
+PACKAGE_JSON_GUARDED_KEYS: tuple[str, ...] = (
+    "scripts", "eslintConfig", "prettier", "jest", "lint-staged", "knip", "stylelint",
+    "husky", "simple-git-hooks", "pre-commit",
+)
 
 
 def is_package_json_path(rel_path: str) -> bool:
@@ -150,9 +153,12 @@ def is_package_json_path(rel_path: str) -> bool:
 
 
 def _package_json_guarded_sections(raw: bytes | None) -> dict[str, Any] | None:
-    """Guarded sections of a `package.json` blob; a missing blob reads as `{}`, an unparseable one as None."""
+    """Guarded sections of a `package.json` blob; a missing blob reads as `{}`, an unparseable one as None.
+
+    A leading UTF-8 BOM is accepted, so a BOM file keeps per-key protection instead of locking the whole file.
+    """
     try:
-        parsed = {} if raw is None else loads_bounded(raw.decode("utf-8"))
+        parsed = {} if raw is None else loads_bounded(raw.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return None
     return {k: parsed.get(k) for k in PACKAGE_JSON_GUARDED_KEYS} if isinstance(parsed, dict) else None

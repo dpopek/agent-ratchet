@@ -19,7 +19,7 @@ from guard_repo_harness import _commit_files, _git, _init_guard_repo, _write_fil
 JS_NAMES = [
     "eslint.config.js", "eslint.config.mts", ".eslintrc", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintignore",
     "tsconfig.json", "tsconfig.app.json", "packages/ui/tsconfig.build.json", "jsconfig.json", "jsconfig.app.json",
-    "knip.json", "knip.ts", ".knip.jsonc",
+    "knip.json", "knip.ts", ".knip.jsonc", "knip.config.ts", "knip.config.js",
     "vitest.config.ts", "vitest.workspace.ts", "vite.config.ts", "jest.config.cjs",
     "vite.frontend-only.config.ts", "jest.config.json", "vitest.workspace.json",
     "playwright.config.ts", "playwright.frontend-only.config.ts",
@@ -67,13 +67,22 @@ PKG_BASE = '{"name": "x", "dependencies": {"a": "1"}, "scripts": {"lint": "eslin
     (None, b'{"scripts":{}}', True),
     (None, b'{"name":"x"}', False),
     (b'{"jest":{}}', None, True),
+    (b'{"simple-git-hooks":{"pre-commit":"npx lint-staged"}}', b'{"simple-git-hooks":{}}', True),
+    (b'{"husky":{"hooks":{"pre-commit":"lint-staged"}}}', b'{}', True),
+    (b'{"pre-commit":["lint"]}', b'{"pre-commit":[]}', True),
+    (b'\xef\xbb\xbf{"scripts":{"a":"1"},"dependencies":{"x":"1"}}', b'\xef\xbb\xbf{"scripts":{"a":"1"},"dependencies":{"x":"2"}}', False),
+    (b'\xef\xbb\xbf{"scripts":{"a":"1"}}', b'{"scripts":{"a":"1"}}', False),
+    (b'\xef\xbb\xbf{"scripts":{"a":"1"}}', b'\xef\xbb\xbf{"scripts":{"a":"2"}}', True),
 ])
 def test_package_json_guarded_change(old: bytes | None, new: bytes | None, expected: bool) -> None:
     assert package_json_guarded_change(old, new) is expected
 
 
 def test_package_json_guarded_keys_exact() -> None:
-    assert PACKAGE_JSON_GUARDED_KEYS == ("scripts", "eslintConfig", "prettier", "jest", "lint-staged", "knip", "stylelint")
+    assert PACKAGE_JSON_GUARDED_KEYS == (
+        "scripts", "eslintConfig", "prettier", "jest", "lint-staged", "knip", "stylelint",
+        "husky", "simple-git-hooks", "pre-commit",
+    )
 
 
 @pytest.mark.parametrize("path,expected", [

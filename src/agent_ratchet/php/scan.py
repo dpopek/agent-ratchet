@@ -79,6 +79,7 @@ def php_transition_violations(
     removed_all: list[Any] = []
     added_all: list[Any] = []
     moves = PointMoves()  # suppressions moved with their code to another file (4.3.1 F3)
+    copies = {new for status, _old, new in entries if status.startswith("C")}  # a copy source keeps its facts
     for base_path, target_path, renamed in pair_entries(entries, cfg.get("php_paths", ())):
         base_bytes = git_cat_bytes(f"{base_ref}:{base_path}", cwd) if base_path else None
         target_bytes = None
@@ -91,7 +92,7 @@ def php_transition_violations(
             continue
         path = target_path or base_path or ""
         base_an, target_an = analyze_pair(base_bytes, target_bytes, base_path, path)
-        per_entry = compare_php_analyses(base_an, target_an, path, exceptions, renamed=renamed, moves=moves)
+        per_entry = compare_php_analyses(base_an, target_an, path, exceptions, renamed=renamed, moves=None if target_path in copies else moves)
         found.extend(v for v in per_entry if v.category != REMOVED)  # removals are decided across all entries below
         if shadow and target_an is not None and target_path:
             _shadow_counts(target_path, target_an)
