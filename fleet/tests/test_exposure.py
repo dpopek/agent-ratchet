@@ -136,3 +136,42 @@ def test_resolve_guard_exec_forms(consumer_repo, command, level):
     assert got is level
     opaque = "agent_ratchet.magento" not in command and level is Level.MAGENTO
     assert opaque == evidence.startswith("opaque guard exec: Makefile:7")
+
+
+def test_every_guard_exec_on_a_line_counts(consumer_repo):
+    line = 'scripts/guard exec -- python3 -m pytest -q && scripts/guard exec -- sh -c "$CMD"'
+    repo, d = consumer_repo({"Makefile": f"x:\n\t{line}\n"})
+    scan = tree_scan(real_git(), repo, d)
+    assert scan.levels == {Level.MAGENTO} and any(e.startswith("opaque guard exec: Makefile:2") for e in scan.evidence)
+    level, note = resolve_guard_exec(real_git(), repo, d, f"Makefile:2:\t{line}")
+    assert level is Level.MAGENTO and note.startswith("opaque guard exec: Makefile:2")
+    # the opaque use first, a resolved one after it
+    level, _ = resolve_guard_exec(real_git(), repo, d, "Makefile:3:scripts/guard exec -- $C; scripts/guard exec -- agent-ratchet scan")
+    assert level is Level.MAGENTO
+
+
+def test_guard_exec_symlinked_script_is_opaque(tmp_path):
+    repo = make_clone(make_bare(tmp_path / "bare", "alpha"), tmp_path / "work")
+    commit_files(repo, "tree", {"tools/dyn.py": "import importlib\n", "Makefile": "x:\n\tscripts/guard exec -- python3 scripts/a.py\n"})
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "a.py").symlink_to("../tools/dyn.py")
+    commit_files(repo, "link", {})
+    d = sha_of(repo, "HEAD")
+    assert _git_mode(repo, d, "scripts/a.py") == "120000"
+    scan = tree_scan(real_git(), repo, d)
+    assert Level.MAGENTO in scan.levels and any("opaque guard exec: Makefile:2" in e for e in scan.evidence)
+
+
+def _git_mode(repo, d, path):
+    from repos import _git
+    return _git(repo, "ls-tree", d, "--", path).split()[0]
+
+
+def test_gitattributes_cannot_hide_a_php_import(consumer_repo):
+    repo, d = consumer_repo({".gitattributes": "tools/*.py -diff\n", "tools/x.py": "import agent_ratchet.php.compare\n"})
+    assert tree_scan(real_git(), repo, d).levels == {Level.PHP}
+
+
+def test_gitattributes_binary_cannot_hide_a_guard_exec(consumer_repo):
+    repo, d = consumer_repo({".gitattributes": "Makefile binary\n", "Makefile": "x:\n\tscripts/guard exec -- $CMD\n"})
+    assert tree_scan(real_git(), repo, d).levels == {Level.MAGENTO}

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .classify.gating import Level
 from .config import Consumer
-from .git import Git, GitError, show_bytes
+from .git import Git, GitError
 from .lockfile import LockSpec
 from .profile import Profile, magento_active, php_active
 
@@ -39,8 +39,8 @@ class Exposure:
 
 
 def _grep(git: Git, repo: Path, *args: str) -> list[tuple[str, int, str]]:
-    """`git grep -z -n -I` hits as (path, line number, text); rc 1 is no hit, any other failure raises."""
-    r = git(repo, "grep", "-z", "-n", "-I", *args, check=False)
+    """`git grep -z -n -a` hits (-a: a consumer's .gitattributes cannot hide a line by marking it binary) as (path, line number, text); rc 1 is no hit, any other failure raises."""
+    r = git(repo, "grep", "-z", "-n", "-a", *args, check=False)
     if r.rc == 1:
         return []
     if r.rc != 0:
@@ -92,7 +92,13 @@ def resolve_guard_exec(git: Git, repo: Path, d: str, line: str) -> tuple[Level, 
     match = _HIT_RE.match(line)
     where = f"{match.group(1)}:{match.group(2)}" if match else line
     text = match.group(3) if match else line
-    rest = text[text.find(_EXEC_MARKER) + len(_EXEC_MARKER):] if _EXEC_MARKER in text else ""
+    found = [_resolve_one(git, repo, d, where, rest) for rest in text.split(_EXEC_MARKER)[1:]] or [_opaque(where)]
+    level = max(level for level, _ in found)
+    notes = [note for lvl, note in found if lvl is not Level.CORE] or [found[0][1]]
+    return level, "; ".join(notes)   # every occurrence on the line counts; each non-core one is evidenced
+
+
+def _resolve_one(git: Git, repo: Path, d: str, where: str, rest: str) -> tuple[Level, str]:
     try:
         tokens = shlex.split(rest)
     except ValueError:
@@ -122,12 +128,22 @@ def resolve_guard_exec(git: Git, repo: Path, d: str, line: str) -> tuple[Level, 
         return level, f"guard exec -m {module}: {where} [{level.name.lower()}]"
     script = args[0]
     if script.endswith(".py") and _plain_relative(script):
-        body = show_bytes(git, repo, d, script)
+        body = _regular_blob(git, repo, d, script)
         if body is not None:
             source = body.decode("utf-8", errors="replace")
             if not any(marker in source for marker in _DYNAMIC_MARKERS):
                 return Level.CORE, f"guard exec {script}: {where}"  # its static imports are covered by the tree grep
     return _opaque(where)
+
+
+def _regular_blob(git: Git, repo: Path, d: str, path: str) -> bytes | None:
+    """The content of a tracked regular file (mode 100644 or 100755) at d; None for a symlink, gitlink or absent path."""
+    listing = git(repo, "ls-tree", "-z", d, "--", path).stdout
+    meta, _, _ = listing.partition(b"\t")
+    fields = meta.decode("ascii", errors="replace").split(" ")
+    if len(fields) != 3 or fields[0] not in ("100644", "100755") or fields[1] != "blob":
+        return None
+    return git(repo, "show", f"{d}:{path}").stdout
 
 
 def _plain_relative(path: str) -> bool:
