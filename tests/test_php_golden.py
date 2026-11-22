@@ -98,8 +98,12 @@ _FORBIDDEN_DIGESTS = frozenset(
 _FORBIDDEN_LENGTHS = (6, 9)
 
 
-def _has_forbidden_word(text: str, digests: frozenset[str] = _FORBIDDEN_DIGESTS) -> bool:
-    for size in _FORBIDDEN_LENGTHS:
+def _has_forbidden_word(
+    text: str,
+    digests: frozenset[str] = _FORBIDDEN_DIGESTS,
+    lengths: tuple[int, ...] = _FORBIDDEN_LENGTHS,
+) -> bool:
+    for size in lengths:
         for i in range(len(text) - size + 1):
             if hashlib.sha256(text[i : i + size].encode("utf-8")).hexdigest() in digests:
                 return True
