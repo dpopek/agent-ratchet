@@ -59,8 +59,11 @@ class _Transient(Exception):
         self.message = message
 
 
-def _parse_response(out: bytes) -> GhResponse | None:
-    """Parse `gh api -i` output: status line, headers, blank line, body."""
+def _parse_response(out: bytes) -> tuple[GhResponse, bool] | None:
+    """Parse `gh api -i` output: status line, headers, blank line, body.
+
+    The flag says whether the header/body separator was found (False: the stream was cut short).
+    """
     m = _STATUS_RE.match(out)
     if m is None:
         return None
@@ -71,7 +74,7 @@ def _parse_response(out: bytes) -> GhResponse | None:
         name, colon, value = line.partition(b":")
         if colon:
             headers[name.decode("latin-1").strip().lower()] = value.decode("latin-1").strip()
-    return GhResponse(int(m.group(1)), headers, body)
+    return GhResponse(int(m.group(1)), headers, body), sep is not None
 
 
 def _tail(r: Result) -> str:
@@ -90,8 +93,9 @@ class Gh:
 
     # -- transport ---------------------------------------------------------
 
-    def _retrying(self, attempt: Callable[[], Any]) -> Any:
-        for delay in (*self.backoff, None):
+    def _retrying(self, attempt: Callable[[], Any], *, single: bool = False) -> Any:
+        # single: a mutating call runs once; a transient failure raises so the caller can reconcile
+        for delay in (None,) if single else (*self.backoff, None):
             try:
                 return attempt()
             except _Transient as exc:
@@ -117,13 +121,14 @@ class Gh:
                 raise GhError(None, _tail(r))
             if r.timed_out:
                 raise _Transient(None, "timed out")
-            resp = _parse_response(r.stdout)
-            if resp is None:
+            parsed = _parse_response(r.stdout)
+            if parsed is None:
                 if r.rc == 4:
                     raise GhAuthError(None, _tail(r))
                 if r.rc != 0:
                     raise _Transient(None, _tail(r))
                 raise GhError(None, "unparseable gh api output")
+            resp, complete = parsed
             if resp.status == 401:
                 raise GhAuthError(401, _tail(r) or resp.body.decode("utf-8", errors="replace"))
             if resp.status == 404:
@@ -133,11 +138,15 @@ class Gh:
                 raise _Transient(resp.status, resp.body.decode("utf-8", errors="replace"))
             if resp.status >= 400:
                 raise GhError(resp.status, resp.body.decode("utf-8", errors="replace"))
+            if r.rc != 0:
+                raise _Transient(resp.status, f"gh exited {r.rc} after a {resp.status} status: {_tail(r)}")
+            if not complete:
+                raise GhError(resp.status, "gh api output has no header/body separator")
             return resp
 
-        return self._retrying(attempt)
+        return self._retrying(attempt, single=method != "GET")
 
-    def _gh(self, *args: str) -> Result:
+    def _gh(self, *args: str, mutating: bool = False) -> Result:
         """Run a non-api gh command; classify failures by exit code and stderr."""
         argv = ("gh", *args)
 
@@ -160,7 +169,7 @@ class Gh:
                 raise _Transient(status, _tail(r))
             raise GhError(status, _tail(r))
 
-        return self._retrying(attempt)
+        return self._retrying(attempt, single=mutating)
 
     def _json(self, *args: str) -> Any:
         return json.loads(self._gh(*args).stdout.decode("utf-8"))
@@ -207,11 +216,11 @@ class Gh:
 
     def pr_create(self, slug: str, *, head: str, base: str, title: str, body_file: Path) -> str:
         r = self._gh("pr", "create", "--repo", slug, "--head", head, "--base", base,
-                     "--title", title, "--body-file", str(body_file))
+                     "--title", title, "--body-file", str(body_file), mutating=True)
         return r.text.strip().splitlines()[-1]
 
     def pr_close(self, slug: str, number: int, comment: str) -> None:
-        self._gh("pr", "close", str(number), "--repo", slug, "--comment", comment)
+        self._gh("pr", "close", str(number), "--repo", slug, "--comment", comment, mutating=True)
 
     def pr_merge(self, slug: str, number: int, head_sha: str) -> Result:
         if not _SHA_RE.fullmatch(head_sha):

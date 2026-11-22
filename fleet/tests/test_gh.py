@@ -280,3 +280,56 @@ def test_fake_gh_close_runs_and_jobs(fake_gh_env):
     g.fake.workflows[(SLUG, "ci.yml")] = "disabled_manually"
     assert g.workflow_state(SLUG, "ci.yml") == "disabled_manually"
     assert g.fake.argvs[0][:3] == ("gh", "pr", "create")
+
+
+@pytest.mark.parametrize("raw", [
+    b"HTTP/1.1 200 OK\r\nContent-Type: x\r\n\r\nbody",
+    b"HTTP/2.0 200 OK\ncontent-type: x\n\nbody",
+    b"HTTP/2 200\r\n\r\nbody",
+])
+def test_api_parses_http_versions_and_line_endings(gh_with, raw):
+    r = gh_with(stdout=raw, rc=0).api(f"repos/{SLUG}")
+    assert r.status == 200 and r.body == b"body"
+
+
+def test_api_body_with_blank_lines_is_kept_whole(gh_with):
+    body = b"line1\n\nline2\r\n\r\nline3"
+    r = gh_with(body=body).api(f"repos/{SLUG}")
+    assert r.body == body
+
+
+def test_api_malformed_output_with_rc_0_raises(gh_with):
+    with pytest.raises(GhError) as ei:
+        gh_with(stdout=b"<html>not gh</html>", rc=0).api(f"repos/{SLUG}")
+    assert ei.value.status is None and not isinstance(ei.value, GhNetworkError)
+
+
+def test_api_success_status_with_failing_process_raises_not_truncated_success(gh_with):
+    g, sleeps = gh_with(status=200, body=b"part", rc=1, record_sleeps=True)
+    with pytest.raises(GhNetworkError):
+        g.contents_raw(SLUG, "guard.lock", "a" * 40)
+    assert len(sleeps) == 5
+
+
+def test_api_success_status_without_separator_raises(gh_with):
+    with pytest.raises(GhError):
+        gh_with(stdout=b"HTTP/2.0 200 OK\r\ncontent-type: x", rc=0).contents_raw(SLUG, "guard.lock", "a" * 40)
+
+
+def test_pr_create_is_single_attempt_on_timeout_class_failure(tmp_path):
+    runner = FakeRunner([Route(("gh",), rc=1, stderr=b"read tcp: i/o timeout")])
+    sleeps: list[float] = []
+    g = Gh(runner, {}, sleeps.append, tmp_path)
+    with pytest.raises(GhNetworkError):
+        g.pr_create(SLUG, head="b", base="main", title="t", body_file=tmp_path / "b.md")
+    assert len(runner.calls) == 1 and sleeps == []
+
+
+def test_pr_close_and_non_get_api_are_single_attempt(tmp_path):
+    runner = FakeRunner([Route(("gh",), rc=1, stderr=b"HTTP 503: unavailable", stdout=_resp(503))])
+    g = Gh(runner, {}, lambda s: None, tmp_path)
+    with pytest.raises(GhNetworkError):
+        g.pr_close(SLUG, 1, "x")
+    with pytest.raises(GhNetworkError):
+        g.api(f"repos/{SLUG}/x", method="POST")
+    assert len(runner.calls) == 2
