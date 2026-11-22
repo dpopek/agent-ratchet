@@ -11,6 +11,7 @@ import pytest
 
 from classify_fixtures import REFINED_LAYOUT, REFINED_TRANSITION_GATES, tree_from
 from fakes import real_git
+from repos import commit_files, make_bare, make_clone, tag_annotated
 from guard_fleet.classify import Level, classify_release, decide
 from guard_fleet.classify.decision import evidence_lines
 from guard_fleet.classify.fingerprints import FINGERPRINT_TARGETS, REVIEWED, fingerprint
@@ -132,8 +133,25 @@ def test_refinement_layout_makes_scan_modules_surface():
     assert {(mod, line) for mod, line, _, _ in in_transition} == REFINED_TRANSITION_GATES
 
 
-def test_v4_4_0_diff_paths_are_metadata_or_version_only(repo_git, peel, head_sha):
-    # this branch's HEAD vs v4.3.4: every changed path is metadata (guards the Global Constraints path discipline)
-    rel = classify_release(*repo_git, peel("v4.3.4"), head_sha())
+def v4_4_0_or_head(root: Path) -> str:
+    """The v4.4.0 release once it is tagged (later src/ changes are legitimate), else this branch's HEAD."""
+    tagged = _git_out(root, "rev-parse", "--verify", "--quiet", "v4.4.0^{commit}")
+    return tagged.stdout.strip() if tagged.returncode == 0 else _rev(root, "HEAD")
+
+
+def test_v4_4_0_or_head_prefers_the_tag(tmp_path):
+    work = make_clone(make_bare(tmp_path, "alpha"), tmp_path / "alpha")
+    first = commit_files(work, "c1", {"a": "1"})
+    assert v4_4_0_or_head(work) == first
+    tag_annotated(work, "v4.4.0")
+    second = commit_files(work, "c2", {"a": "2"})
+    assert v4_4_0_or_head(work) == first != second
+
+
+def test_v4_4_0_diff_paths_are_metadata_or_version_only(repo_git, peel):
+    # v4.3.4 vs v4.4.0 (or this branch's HEAD before the tag): every changed path is metadata (guards the Global
+    # Constraints path discipline)
+    git, root = repo_git
+    rel = classify_release(git, root, peel("v4.3.4"), v4_4_0_or_head(root))
     assert rel.min_level is None, evidence_lines(rel)
     assert rel.fingerprint_mismatch == (), rel.fingerprint_mismatch

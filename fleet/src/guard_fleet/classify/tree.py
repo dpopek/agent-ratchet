@@ -23,6 +23,10 @@ class TreeError(ValueError):
     """The commit's tree cannot be read as a source tree."""
 
 
+class PyprojectError(TreeError):
+    """The root pyproject.toml does not parse, or its [project.scripts] is malformed."""
+
+
 def module_name(path: str) -> str | None:
     """`src/a/b.py` → `a.b`; `src/a/__init__.py` → `a`; None for anything that is not an importable module path."""
     if not (path.startswith("src/") and path.endswith(".py")):
@@ -78,9 +82,9 @@ def _scripts(raw: bytes | None, commit: str) -> dict[str, str]:
     try:
         data = tomllib.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise TreeError(f"pyproject.toml at {commit} does not parse: {exc}") from exc
+        raise PyprojectError(f"pyproject.toml at {commit} does not parse: {exc}") from exc
     project = data.get("project", {})
     scripts = project.get("scripts", {}) if isinstance(project, dict) else None
     if not isinstance(scripts, dict) or not all(isinstance(v, str) for v in scripts.values()):
-        raise TreeError(f"pyproject.toml at {commit}: [project.scripts] is not a table of strings")
+        raise PyprojectError(f"pyproject.toml at {commit}: [project.scripts] is not a table of strings")
     return dict(scripts)

@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from ..git import Git, diff_name_status
-from .changes import ChangedPath, classify_path
+from .changes import ChangedPath, classify_path, is_metadata
 from .fingerprints import mismatches
 from .gating import Level
 from .surfaces import compute_surfaces
-from .tree import load_tree
+from .tree import PyprojectError, SourceTree, load_tree
 
 
 class HasLevel(Protocol):
@@ -42,11 +42,21 @@ def classify_release(git: Git, mirror: Path, p: str, t: str) -> ReleaseClass:
     cached = _CACHE.get(key)
     if cached is not None:
         return cached
-    p_tree, t_tree = load_tree(git, mirror, p_sha), load_tree(git, mirror, t_sha)
-    p_map, t_map = compute_surfaces(p_tree), compute_surfaces(t_tree)
-    changes = tuple(classify_path(path, status, p_tree=p_tree, t_tree=t_tree, p_map=p_map, t_map=t_map)
-                    for status, path in diff_name_status(git, mirror, p_sha, t_sha))
-    reasons = [f"at {side}: {m.all_core_reason}" for side, m in (("P", p_map), ("T", t_map)) if m.all_core_reason]
+    trees: dict[str, SourceTree] = {}
+    reasons: list[str] = []
+    for side, sha in (("P", p_sha), ("T", t_sha)):
+        try:
+            trees[side] = load_tree(git, mirror, sha)
+        except PyprojectError as exc:   # the release is all core; cat-file and git failures still raise
+            reasons.append(f"pyproject unparseable at {side}: {exc}")
+    diff = diff_name_status(git, mirror, p_sha, t_sha)
+    if reasons:
+        changes = tuple(_unclassified(path, status) for status, path in diff)
+    else:
+        p_map, t_map = compute_surfaces(trees["P"]), compute_surfaces(trees["T"])
+        changes = tuple(classify_path(path, status, p_tree=trees["P"], t_tree=trees["T"], p_map=p_map, t_map=t_map)
+                        for status, path in diff)
+        reasons = [f"at {side}: {m.all_core_reason}" for side, m in (("P", p_map), ("T", t_map)) if m.all_core_reason]
     levels = [c.level for c in changes if c.level is not None]
     rel = ReleaseClass(
         p=p_sha,
@@ -54,10 +64,17 @@ def classify_release(git: Git, mirror: Path, p: str, t: str) -> ReleaseClass:
         changes=changes,
         min_level=Level.CORE if reasons else min(levels, default=None),
         all_core_reason=reasons[0] if reasons else None,
-        fingerprint_mismatch=tuple(sorted(set(mismatches(p_tree)) | set(mismatches(t_tree)))),
+        fingerprint_mismatch=tuple(sorted({target for tree in trees.values() for target in mismatches(tree)})),
     )
     _CACHE[key] = rel
     return rel
+
+
+def _unclassified(path: str, status: str) -> ChangedPath:
+    """A changed path when a tree cannot be read: metadata stays metadata, everything else is core."""
+    if is_metadata(path):
+        return ChangedPath(path, status, None, "metadata")
+    return ChangedPath(path, status, Level.CORE, "not classified: a pyproject.toml does not parse")
 
 
 def _commit(git: Git, mirror: Path, rev: str) -> str:

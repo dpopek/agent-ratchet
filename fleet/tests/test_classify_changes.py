@@ -262,6 +262,25 @@ def test_all_core_reason_forces_core(tmp_path):
     assert f"all core: {rel.all_core_reason}" in evidence_lines(rel)
 
 
+@pytest.mark.parametrize("side", ["P", "T"])
+@pytest.mark.parametrize("broken", [b"[project\n", b"\xff\xfe", b'[project.scripts]\nx = 1\n'])
+def test_unreadable_pyproject_makes_the_release_all_core(tmp_path, side, broken):
+    base = base_release_files()
+    if side == "P":
+        work, p, t = release_repo(tmp_path, {**base, "pyproject.toml": broken},
+                                  {"pyproject.toml": PYPROJECT, COMPARE: "X = 4\n", "docs/a.md": "a\n"})
+    else:
+        work, p, t = release_repo(tmp_path, base, {"pyproject.toml": broken, COMPARE: "X = 4\n", "docs/a.md": "a\n"})
+    rel = classify_release(real_git(), work, p, t)
+    assert rel.all_core_reason is not None
+    assert rel.all_core_reason.startswith(f"pyproject unparseable at {side}: pyproject.toml at ")
+    assert rel.min_level is Level.CORE
+    assert {c.path: c.level for c in rel.changes} == {"pyproject.toml": Level.CORE, COMPARE: Level.CORE,
+                                                      "docs/a.md": None}
+    assert decide(rel, FakeExposure(Level.CORE), include_unexposed=False) == "BUMP"
+    assert f"all core: {rel.all_core_reason}" in evidence_lines(rel)
+
+
 def test_classify_release_is_cached_per_pair(tmp_path):
     work, p, t = release_repo(tmp_path, base_release_files(), {COMPARE: "X = 3\n"})
     calls: list[tuple[str, ...]] = []
