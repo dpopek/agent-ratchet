@@ -7,7 +7,7 @@ from guard_fleet.lockfile import LockParseError, LockSpec, parse_lock, render_lo
 SHA = "0123456789abcdef0123456789abcdef01234567"
 _B = SHA.encode("ascii")
 
-# Mirrors the core's shared grammar table (bytes in, LockSpec or None for malformed).
+# Row-for-row copy of the core's shared grammar table; tests/test_fleet_lock_grammar_copy.py guards drift.
 CASES: list[tuple[bytes, LockSpec | None]] = [
     (_B, LockSpec(SHA)),
     (_B + b"\n", LockSpec(SHA)),
@@ -26,9 +26,24 @@ CASES: list[tuple[bytes, LockSpec | None]] = [
     (_B + b"\nFOO=1", None),
     (_B + b"\n\n", None),
     (b"\xef\xbb\xbf" + _B, None),
-    (b"A" * 40 + b"\n", None),
-    (b"a" * 39 + b"\n", None),
+    (_B + b"\nEXTRAS=php\n\n", None),
+    (_B + b"\nEXTRAS =php", None),
+    (_B + b"\nEXTRAS=php\r\n", None),
+    (SHA.upper().encode("ascii") + b"\n", None),
+    (_B[:39] + b"\n", None),
+    (b" " + _B + b"\n", None),
+    (_B + b"\n" + _B + b"\n", None),
     (b"", None),
+    (_B + b"\x00", None),
+    (_B + b"\nEXTRAS=php\x00", None),
+    (_B + b"\n\n\n", None),
+    (_B + b"\nEXTRAS=php\n\n\n", None),
+    (_B + b"\nEXTRAS=php ", None),
+    (_B + b"\nEXTRAS=php\t", None),
+    (_B + b"\n\nEXTRAS=php", None),
+    (_B + b"\nextras=php", None),
+    (_B + b"\nEXTRAS=ph", None),
+    (_B + b"\nEXTRAS=phpx", None),
 ]
 
 
