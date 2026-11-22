@@ -81,3 +81,22 @@ def test_g6_env_isolates_home_and_git_config(tmp_path):
     assert out["GIT_CONFIG_GLOBAL"] == "/dev/null" and out["GIT_CONFIG_NOSYSTEM"] == "1"
     assert out["PYTHONDONTWRITEBYTECODE"] == "1" and out["UV_CACHE_DIR"] == "/c"
     assert out["PATH"] == "/usr/bin"
+
+
+@pytest.mark.parametrize("lock_update", [False, True])
+def test_commit_env_accepts_real_base_child_env(tmp_path, lock_update):
+    base = base_child_env({"PATH": "/usr/bin", "HOME": "/h"}, tool_bin=tmp_path)
+    out = commit_env(base, {"X_PY": "/p"}, lock_update=lock_update)
+    assert out["GIT_TERMINAL_PROMPT"] == "0"
+    assert ("ALLOW_GUARD_LOCK_UPDATE" in out) is lock_update
+
+
+@pytest.mark.parametrize("key", ["HUSKY", "GIT_DIR", "SKIP"])
+def test_commit_env_rejects_forbidden_key_smuggled_via_base(key):
+    with pytest.raises(UsageError):
+        commit_env({"PATH": "/usr/bin", key: "0"}, {}, lock_update=False)
+
+
+def test_commit_env_rejects_lock_flag_in_base_when_not_asked():
+    with pytest.raises(UsageError):
+        commit_env({"ALLOW_GUARD_LOCK_UPDATE": "1"}, {}, lock_update=False)

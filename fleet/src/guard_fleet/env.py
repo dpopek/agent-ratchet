@@ -49,8 +49,9 @@ def commit_env(base: Mapping[str, str], extra: Mapping[str, str], *, lock_update
     out = {**base, **extra}
     if lock_update:
         out[LOCK_UPDATE_ENV] = "1"
+    allowed = {"GIT_TERMINAL_PROMPT"} | ({LOCK_UPDATE_ENV} if lock_update else set())
     for key in out:
-        if forbidden_env_key(key) and not (lock_update and key == LOCK_UPDATE_ENV):
+        if forbidden_env_key(key) and key not in allowed:
             raise UsageError(f"environment variable {key} must not reach a commit")
     return out
 

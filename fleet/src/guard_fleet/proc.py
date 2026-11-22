@@ -26,6 +26,8 @@ class Result:
         return self.stdout.decode("utf-8", errors="replace")
 
 
+POST_KILL_DRAIN = 3.0  # seconds to wait for pipes after killpg
+
 Runner = Callable[..., Result]
 
 
@@ -58,7 +60,18 @@ def run(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout: floa
                 os.killpg(p.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            out, err = p.communicate()
+            try:
+                out, err = p.communicate(timeout=POST_KILL_DRAIN)
+            except subprocess.TimeoutExpired as exc:
+                # a grandchild escaped the group and still holds the pipes
+                out, err = exc.output, exc.stderr
+                for pipe in (p.stdout, p.stderr, p.stdin):
+                    if pipe is not None:
+                        try:
+                            pipe.close()
+                        except OSError:
+                            pass
+                p.wait()
             result = Result(args, 124, out or b"", err or b"", True)
     if log is not None:
         _append_log(log, result)

@@ -1,5 +1,7 @@
 import os
+import signal
 import sys
+import time
 
 import pytest
 
@@ -13,6 +15,51 @@ def test_run_stdin_is_devnull_and_timeout_kills_group(tmp_path):
     assert r.rc == 0 and r.stdout.strip() == b"True"
     r = proc.run([sys.executable, "-c", "import time; time.sleep(30)"], cwd=tmp_path, env=os.environ, timeout=0.5)
     assert r.timed_out and r.rc == 124
+
+
+def _gone(pid: int, wait: float = 5.0) -> bool:
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_timeout_kills_grandchild_in_same_group(tmp_path):
+    r = proc.run(["sh", "-c", "sleep 60 & echo $!; wait"], cwd=tmp_path, env=os.environ, timeout=0.5)
+    pid = int(r.stdout.split()[0])
+    try:
+        assert r.timed_out and r.rc == 124
+        assert _gone(pid), "grandchild survived the group kill"
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_timeout_does_not_hang_on_escaped_grandchild(tmp_path):
+    code = ("import os, time\n"
+            "pid = os.fork()\n"
+            "if pid == 0:\n"
+            "    os.setsid(); time.sleep(60); os._exit(0)\n"
+            "print(pid, flush=True); time.sleep(60)\n")
+    start = time.monotonic()
+    r = proc.run([sys.executable, "-c", code], cwd=tmp_path, env=os.environ, timeout=0.5)
+    elapsed = time.monotonic() - start
+    pids = r.stdout.split()
+    try:
+        assert r.timed_out and r.rc == 124
+        assert elapsed < 0.5 + proc.POST_KILL_DRAIN + 3
+    finally:
+        if pids:
+            try:
+                os.kill(int(pids[0]), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def test_run_passes_input_and_captures_stderr(tmp_path):
