@@ -88,8 +88,11 @@ def object_type(git: Git, repo: Path, obj: str) -> str | None:
 
 
 def show_bytes(git: Git, repo: Path, rev: str, path: str) -> bytes | None:
-    r = git(repo, "cat-file", "blob", f"{rev}:{path}", check=False)
-    return r.stdout if r.rc == 0 else None
+    """File content at rev; None only when the path is absent. Any other failure raises."""
+    git(repo, "rev-parse", "--verify", "--quiet", f"{rev}^{{tree}}")  # bad rev / broken repo raises
+    if not git(repo, "ls-tree", "-z", rev, "--", path).stdout:
+        return None
+    return git(repo, "show", f"{rev}:{path}").stdout
 
 
 def ls_remote(git: Git, cwd: Path, url: str, ref: str) -> dict[str, str]:

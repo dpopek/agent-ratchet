@@ -159,3 +159,32 @@ def test_diff_name_status_and_status_porcelain(tmp_path):
     plain = status_porcelain(g, clone)
     assert "?? u.txt" in plain and not any(e.endswith("ign") for e in plain)
     assert any(e.endswith("ign") for e in status_porcelain(g, clone, ignored=True))
+
+
+def test_show_bytes_bad_rev_raises(tmp_path):
+    clone = make_clone(make_bare(tmp_path, "alpha"), tmp_path / "alpha")
+    commit_files(clone, "c1", {"f": "1"})
+    with pytest.raises(GitError):
+        show_bytes(real_git(), clone, "no-such-rev", "f")
+
+
+def test_show_bytes_non_repo_raises(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(GitError):
+        show_bytes(real_git(), plain, "HEAD", "f")
+
+
+def test_show_bytes_missing_path_none_and_existing_exact(tmp_path):
+    clone = make_clone(make_bare(tmp_path, "alpha"), tmp_path / "alpha")
+    commit_files(clone, "c1", {"dir/f.txt": b"a\r\n\x00b"})
+    g = real_git()
+    assert show_bytes(g, clone, "HEAD", "dir/f.txt") == b"a\r\n\x00b"
+    assert show_bytes(g, clone, "HEAD", "dir/missing") is None
+
+
+def test_show_bytes_lock_error_is_not_none(tmp_path):
+    runner = FakeRunner([Route(("git",), rc=128, stderr=b"Unable to create 'x/index.lock': File exists")],
+                         real=frozenset())
+    with pytest.raises(GitLockError):
+        show_bytes(Git(runner, {}, lambda s: None), tmp_path, "HEAD", "f")
