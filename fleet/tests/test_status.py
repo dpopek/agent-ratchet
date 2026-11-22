@@ -209,6 +209,25 @@ def test_status_runs_lock_free_and_says_which_mirror(status_env):
     assert "mirror as of " in status_env[0].out.getvalue()
 
 
+def test_status_marks_an_unscanned_behind_verdict_provisional(status_env, tmp_path):
+    collect_status(*status_env)                        # seeds the mirror
+    assert not by_short(collect_status(*status_env))["alpha"].provisional
+    work = make_clone(status_env.gh_bares["owner/alpha"], tmp_path / "adv-alpha")
+    commit_files(work, "advance", {"extra.txt": "1\n"})
+    push_all(work)                                     # D is now absent from alpha's clone
+    held = RunLock(status_env[0].dirs.run_lock)
+    assert held.acquire(exclusive=True)
+    try:
+        rows = by_short(collect_status(*status_env))
+        assert run_status(*status_env) == 0
+    finally:
+        held.release()
+    assert rows["alpha"].relation == "BEHIND" and rows["alpha"].provisional
+    assert not rows["beta"].provisional                # a BUMP verdict is never provisional
+    out = status_env[0].out.getvalue()
+    assert "BEHIND (provisional)" in out and "EXPOSED-BEHIND (provisional)" not in out
+
+
 def test_status_unknown_mirror_in_lock_free_mode_is_a_usage_error(status_env):
     held = RunLock(status_env[0].dirs.run_lock)
     assert held.acquire(exclusive=True)

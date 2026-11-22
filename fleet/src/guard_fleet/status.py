@@ -36,6 +36,7 @@ class StatusRow:
     stale_locks: tuple[str, ...]
     venv_lines: tuple[str, ...]
     note: str = ""   # why a row is BLOCKED, or which lookup failed
+    provisional: bool = False   # an unexposed (BEHIND) verdict whose exposure scan did not run or was incomplete
 
 
 @dataclass(frozen=True)
@@ -154,7 +155,7 @@ def _consumer_row(deps: Deps, cfg: FleetConfig, planner: Planner, consumer: Cons
     return StatusRow(
         consumer.short, plan.pin_tag, plan.extras or "-",
         plan.exposure.level.name.lower() if plan.exposure is not None else "-", target.tag, _relation(plan),
-        prs, leftovers, stale, venvs, "; ".join(notes))
+        prs, leftovers, stale, venvs, "; ".join(notes), plan.provisional)
 
 
 def _self_pin(deps: Deps, git: Git, mirror: Path) -> str | None:
@@ -196,7 +197,7 @@ def render_status(report: StatusReport) -> str:
     for r in report.rows:
         lines.append("")
         lines.append(f"{r.short}  pin {r.pin_tag or '-'} ({r.extras})  exposure {r.exposure_level}  "
-                     f"latest {r.latest_tag}  {r.relation}")
+                     f"latest {r.latest_tag}  {r.relation}{' (provisional)' if r.provisional else ''}")
         if r.note:
             lines.append(f"  note: {r.note}")
         for label, items in (("open fleet PR", r.open_fleet_prs), ("leftover", r.leftovers),
