@@ -171,7 +171,7 @@ def _check_attempt(records: Sequence[Record], attempt: str, head: str) -> str:
         verdicts = [r.detail.get("verdict") for r in mine if r.step == gate]
         if not verdicts:
             return f"attempt {attempt} has no {gate} record"
-        if verdicts[-1] not in _PASSING:
+        if not (isinstance(verdicts[-1], str) and verdicts[-1] in _PASSING):
             return f"attempt {attempt} {gate} is {verdicts[-1]!r}"
     return ""
 

@@ -286,3 +286,10 @@ def test_prune_leaves_files_and_lookalikes_alone(tmp_path):
 
 def test_prune_missing_state_dir_is_a_noop(tmp_path):
     assert prune_tag_dirs(tmp_path / "absent") == []
+
+
+@pytest.mark.parametrize("verdict", [["PASS"], {"v": "PASS"}, 1, None])
+def test_non_string_gate_verdict_is_not_gated_without_raising(ledger, verdict):
+    full_attempt(ledger, "alpha", verdicts={"G6": verdict})
+    got, reason = lookup(ledger)
+    assert got is None and "G6" in reason
