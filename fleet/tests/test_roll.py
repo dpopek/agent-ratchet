@@ -13,7 +13,8 @@ from fakes import FakeGh, Route, make_deps
 from guard_fleet.config import load_config
 from guard_fleet.env import base_child_env
 from guard_fleet.gh import Gh
-from guard_fleet.git import Git
+from guard_fleet.git import Git, GitNetworkError
+from guard_fleet.proc import Result
 from guard_fleet.ledger import Ledger
 from guard_fleet.lockfile import render_lock
 from guard_fleet.names import branch_for, worktree_for
@@ -134,9 +135,9 @@ def roll_env(tmp_path, fleet_home):
     return make
 
 
-def refuse_lock_commits(env):
+def refuse_lock_commits(env, path="guard.lock"):
     hook = env.clone / ".git" / "hooks" / "pre-commit"
-    hook.write_text('#!/bin/sh\nif git diff --cached --name-only | grep -qx guard.lock; then\n'
+    hook.write_text(f'#!/bin/sh\nif git diff --cached --name-only | grep -qx {path}; then\n'
                     '  echo "hook says no" >&2\n  exit 1\nfi\n')
     hook.chmod(0o755)
     return hook
@@ -466,3 +467,71 @@ def test_hooks_line_worktree_and_main_checkout(roll_env):
     main_hook.write_text("#!/bin/sh\nexit 0\n")
     main_hook.chmod(0o755)
     assert hooks_line(git, r.worktree) == "hooks: main checkout"
+
+
+# -- C1 resume (fix round 1) -----------------------------------------------
+
+
+def start_worktree(env):
+    _git(env.clone, "worktree", "add", "-q", "--no-track", "-b", env.branch, str(env.wt), env[2].d)
+
+
+def test_resume_retries_interrupted_req_c1(roll_env):
+    env = roll_env("alpha")
+    hook = refuse_lock_commits(env, "requirements-dev.txt")
+    first = prepare(*env)
+    assert (first.state, first.step, first.reason) == ("BLOCKED", "c1", "c1: hook refused")
+    hook.unlink()
+    r = prepare(*env)
+    assert (r.state, r.attempt) == ("GATED", "alpha-2")
+    assert commit_subjects(r) == [C1_MSG, f"chore(guard): bump agent-ratchet to v4.0.1 ({env.t})"]
+
+
+def test_resume_retries_pyproject_c1_when_uv_lock_is_untouched(roll_env):
+    env = roll_env("beta")
+    start_worktree(env)   # the interrupted C1 wrote the pin file and died before uv lock
+    pin = env.wt / "pyproject.toml"
+    pin.write_bytes(pin.read_bytes().replace(env.p.encode(), env.t.encode()))
+    r = prepare(*env)
+    assert r.state == "GATED"
+    assert git_show(r.worktree, "HEAD:uv.lock") == uv_lock_text(env.t).encode()
+    assert commit_subjects(r)[0] == C1_MSG
+
+
+def test_resume_blocks_on_a_foreign_uv_lock(roll_env):
+    env = roll_env("beta")
+    start_worktree(env)
+    (env.wt / "uv.lock").write_text(uv_lock_text(env.p) + "# foreign edit\n")
+    r = prepare(*env)
+    assert r.state == "BLOCKED" and "uv.lock" in r.reason
+    assert commit_calls(env[0]) == []
+
+
+def test_resume_blocks_when_a_refused_pyproject_c1_left_a_regenerated_uv_lock(roll_env):
+    env = roll_env("beta")
+    hook = refuse_lock_commits(env, "pyproject.toml")
+    assert prepare(*env).reason == "c1: hook refused"
+    hook.unlink()
+    r = prepare(*env)
+    assert r.state == "BLOCKED" and "uv.lock" in r.reason
+
+
+# -- git network loss ----------------------------------------------------------
+
+
+def test_git_network_loss_stops_the_run_instead_of_blocking(roll_env):
+    env = roll_env("alpha")
+    ctx = env[0]
+    real = ctx.git.run
+
+    def flaky(argv, **kw):
+        if "fetch" in argv:
+            return Result(tuple(argv), 128, b"", b"fatal: Could not resolve host: example.invalid", False)
+        return real(argv, **kw)
+
+    ctx.git.run = flaky
+    with pytest.raises(GitNetworkError):
+        prepare(*env)
+    records, _ = ctx.ledger.records()
+    assert records[-1].step == "attempt-end" and records[-1].detail == {"ok": False}
+    assert not env.wt.exists()

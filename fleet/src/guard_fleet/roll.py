@@ -15,7 +15,7 @@ from .config import Consumer, FleetConfig
 from .deps import Deps
 from .env import commit_env
 from .gh import Gh, GhAuthError, GhError, GhNetworkError
-from .git import (Git, GitError, fetch_default, has_commit, origin_url, rev_parse, show_bytes,
+from .git import (Git, GitError, GitNetworkError, fetch_default, has_commit, origin_url, rev_parse, show_bytes,
                   status_porcelain)
 from .ledger import Ledger, Record
 from .lockfile import LockParseError, LockSpec, parse_lock, render_lock
@@ -173,7 +173,7 @@ class _Roll:
             head = rev_parse(self.ctx.git, self.wt, "HEAD")
         except _Blocked as b:
             return self.blocked(b)
-        except (GhAuthError, GhNetworkError):
+        except (GhAuthError, GhNetworkError, GitNetworkError):
             self.close_failed()
             raise
         except (GhError, GitError, OSError) as exc:
@@ -314,6 +314,11 @@ class _Roll:
         allowed = set(files) | ({"uv.lock"} if c1 and self.c.pin_kind == "pyproject" else set())
         if dirt - allowed:
             raise _Blocked("worktree", f"worktree: dirty paths the fleet did not write: {sorted(dirt - allowed)}")
+        if c1 and "uv.lock" in dirt:
+            # uv lock keeps existing resolutions, so a foreign edit would be committed as the fleet's own
+            if (self.wt / "uv.lock").read_bytes() != show_bytes(self.ctx.git, self.wt, base, "uv.lock"):
+                raise _Blocked("worktree", "worktree: uv.lock differs from BASE; resume cannot vouch for its bytes",
+                               manual_step=CLEANUP)
         for path in sorted(dirt & set(files)):
             try:
                 same = (self.wt / path).read_bytes() == files[path]
