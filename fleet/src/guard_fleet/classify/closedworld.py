@@ -15,6 +15,8 @@ IMPORTLIB_OK = frozenset({"importlib.util.find_spec", "importlib.metadata.distri
 IMPORTLIB_MODS = frozenset({"importlib", "importlib.util", "importlib.metadata"})
 
 FIND_SPEC = "importlib.util.find_spec"
+# Module objects that may only be used as the base of an attribute access (never stored, passed or returned).
+GUARDED_MODULE_OBJECTS = frozenset({PREDICATE_MODULE, *IMPORTLIB_MODS, "sys"})
 _SYS_FORBIDDEN = frozenset({"sys.executable", "sys.modules"})
 _TABLE_NODES = (ast.Constant, ast.Tuple, ast.List, ast.Set, ast.Dict, ast.Load)
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
@@ -68,6 +70,10 @@ class _Checker:
 
     def _reference(self, node: ast.AST, full: str) -> Iterator[str]:
         top = full.split(".")[0]
+        if full in GUARDED_MODULE_OBJECTS or full in FORBIDDEN_MODULES:
+            parent = self.parents.get(id(node))
+            if not (isinstance(parent, ast.Attribute) and parent.value is node):
+                yield f"module object {full} used as a value"   # aliases made by assignment are not tracked
         if top in FORBIDDEN_MODULES:
             yield f"use of {full}"
         if full in _SYS_FORBIDDEN:

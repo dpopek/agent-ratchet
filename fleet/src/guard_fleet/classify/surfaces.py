@@ -81,14 +81,27 @@ def _roots(tree: SourceTree, known: frozenset[str]) -> tuple[set[str], list[str]
 
 
 def _levels(roots: set[str], edges: Mapping[str, list[Edge]], known: frozenset[str]) -> dict[str, Level]:
-    """Lowest level at which each module is reached from the roots; a path's level is its highest gate."""
-    level: dict[str, Level] = {m: Level.CORE for m in roots}
-    work = deque(sorted(roots))
+    """core = closure of the roots over CORE edges; php = closure (over every edge) of the targets of PHP-gated
+    edges, minus core; magento likewise, minus core and php. Only edges of modules reachable from the roots
+    count, and anything left over is core. A module in both surfaces is PHP (magento implies php)."""
+    core = _closure(roots, edges, only=Level.CORE)
+    reachable = _closure(roots, edges)
+
+    def surface(gate: Level) -> set[str]:
+        targets = {e.dst for src in reachable for e in edges.get(src, ()) if e.level is gate}
+        return _closure(targets, edges)
+
+    php = surface(Level.PHP) - core
+    magento = surface(Level.MAGENTO) - core - php
+    return {m: Level.PHP if m in php else Level.MAGENTO if m in magento else Level.CORE for m in sorted(known)}
+
+
+def _closure(starts: set[str], edges: Mapping[str, list[Edge]], only: Level | None = None) -> set[str]:
+    seen = set(starts)
+    work = deque(sorted(starts))
     while work:
-        src = work.popleft()
-        for edge in edges.get(src, ()):
-            reached = max(level[src], edge.level)
-            if edge.dst not in level or reached < level[edge.dst]:
-                level[edge.dst] = reached
+        for edge in edges.get(work.popleft(), ()):
+            if (only is None or edge.level is only) and edge.dst not in seen:
+                seen.add(edge.dst)
                 work.append(edge.dst)
-    return {m: level.get(m, Level.CORE) for m in sorted(known)}   # unreached → core
+    return seen

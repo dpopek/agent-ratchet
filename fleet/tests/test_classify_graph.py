@@ -276,7 +276,7 @@ def test_levels_compose_along_paths():
         **BASE,
         PHP_SCAN: PHP_HEADER + "def php_scan(cfg):\n    if php_profile_active(cfg):\n"
                                "        import agent_ratchet.php.extract\n",
-        # a PHP module's ungated import stays PHP; its magento gate raises the target to MAGENTO
+        # a PHP module's ungated import stays PHP; so does a magento-gated one (it is in the php closure)
         "src/agent_ratchet/php/extract.py": (
             "import agent_ratchet.php.codes\n\n\n"
             "def f(cfg):\n"
@@ -290,11 +290,42 @@ def test_levels_compose_along_paths():
     m = levels(files)
     assert m["agent_ratchet.php.extract"] is Level.PHP
     assert m["agent_ratchet.php.codes"] is Level.PHP
-    assert m["agent_ratchet.magento.compare"] is Level.MAGENTO
+    assert m["agent_ratchet.magento.compare"] is Level.PHP
     assert m["agent_ratchet.php.orphan"] is Level.CORE        # reached by nothing → core
     assert m["agent_ratchet.php.parser"] is Level.CORE
     files["src/agent_ratchet/report.py"] = "import agent_ratchet.php.codes\n"   # a core route wins
     assert levels(files)["agent_ratchet.php.codes"] is Level.CORE
+
+
+MAGENTO_GATED_SCAN = '''def magento_scan(cfg):
+    if "magento" not in cfg.get("frameworks", ()):
+        return []
+    import agent_ratchet.magento.compare
+'''
+
+
+def test_php_gate_behind_a_magento_gate_is_php():
+    # root −MAGENTO→ magento.compare −PHP→ php.extract: the php closure holds php.extract
+    files = {**BASE, MAGENTO_SCAN: MAGENTO_GATED_SCAN,
+             "src/agent_ratchet/magento/compare.py": PHP_HEADER + (
+                 "def f(cfg):\n    if not php_profile_active(cfg):\n        return []\n"
+                 "    import agent_ratchet.php.extract\n")}
+    m = levels(files)
+    assert m["agent_ratchet.magento.compare"] is Level.MAGENTO
+    assert m["agent_ratchet.php.extract"] is Level.PHP
+
+
+def test_magento_gate_behind_a_php_gate_is_php():
+    # root −PHP→ php.extract −MAGENTO→ magento.compare: magento.compare is in the php closure
+    files = {**BASE, PHP_SCAN: SCAN_WITH_EARLY_GATE,
+             "src/agent_ratchet/php/extract.py": (
+                 "TEST = 1\n\n\ndef f(cfg):\n"
+                 '    if "magento" not in cfg.get("frameworks", ()):\n'
+                 "        return []\n"
+                 "    import agent_ratchet.magento.compare\n")}
+    m = levels(files)
+    assert m["agent_ratchet.php.extract"] is Level.PHP
+    assert m["agent_ratchet.magento.compare"] is Level.PHP
 
 
 def test_parent_packages_and_from_import_submodule():          # `from agent_ratchet.php import extract` adds php, php.extract
@@ -466,6 +497,16 @@ def test_gated_edge_carries_the_gate_level():
     ("import importlib.util\nfor m in names():\n    importlib.util.find_spec(m)\n", "find_spec"),
     ("import importlib.util\nT = ('a',)\ndef f():\n    T = ('a.b',)\n    for m in T:\n"
      "        importlib.util.find_spec(m)\n", "find_spec"),
+    # a guarded module object used as a value escapes the alias tracking of the checks above
+    ("import agent_ratchet.php.scope\ns = agent_ratchet.php.scope\ns.php_profile_active = f\n",
+     "module object agent_ratchet.php.scope used as a value"),
+    ("from agent_ratchet.php import scope as sc\ndef f(m=sc):\n    m.php_profile_active = g\n",
+     "module object agent_ratchet.php.scope used as a value"),
+    ("import importlib\nil = importlib\nil.import_module('x')\n", "module object importlib used as a value"),
+    ("import sys\ns = sys\ns.modules['x'] = m\n", "module object sys used as a value"),
+    ("import importlib\ngetattr(importlib, 'import_module')('x')\n", "module object importlib used as a value"),
+    ("from importlib import util\nT = [util]\n", "module object importlib.util used as a value"),
+    ("import sys\ndef f():\n    return sys\n", "module object sys used as a value"),
     ("def f(:\n", "parse error"),
     ("x = 1\0\n", "parse error"),
 ])
