@@ -85,3 +85,7 @@ def make_upstream(root: Path, tags: Mapping[str, Mapping[str, bytes]], *,
         _git(work, "checkout", "-q", "main")
     push_all(work)
     return bare
+
+
+def sha_of(repo: Path, rev: str) -> str:
+    return _git(repo, "rev-parse", f"{rev}^{{commit}}")
