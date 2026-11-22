@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from guard_fleet import proc
+from guard_fleet.env import base_child_env
+from guard_fleet.git import Git
 from guard_fleet.deps import ConfirmResult, Deps
 from guard_fleet.dirs import Dirs
 from guard_fleet.proc import Result
@@ -85,3 +87,8 @@ def make_deps(tmp_home: Path, routes=(), confirm=None, environ=None) -> Deps:
         err=io.StringIO(),
         platform="linux",
     )
+
+
+def real_git() -> Git:
+    """A Git over the real subprocess seam, with the test's clean environment."""
+    return Git(proc.run, base_child_env(os.environ, tool_bin=Path("/nonexistent")), lambda s: None)

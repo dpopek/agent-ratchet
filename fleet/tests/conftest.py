@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import io
+import os
+from pathlib import Path
+
 import pytest
+
+from guard_fleet.env import base_child_env
 
 AGENT_MARKERS = ("CLAUDECODE", "AI_AGENT", "CODEX_THREAD_ID", "CODEX_SHELL", "ANTIGRAVITY_AGENT")
 
@@ -19,3 +25,13 @@ def fleet_home(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("HOME", str(home))
     return home
+
+
+@pytest.fixture
+def fake_deps(fleet_home):
+    """Deps with a clean env (HOME = the tmp home), a FakeRunner and fake clock/sleep."""
+    from fakes import make_deps
+
+    environ = base_child_env(os.environ, tool_bin=Path("/nonexistent"))
+    environ["HOME"] = str(fleet_home)
+    return make_deps(fleet_home, environ=environ)
