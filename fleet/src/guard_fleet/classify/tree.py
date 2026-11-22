@@ -1,4 +1,4 @@
-"""Source trees: every blob under `src/` at one commit, plus the `[project.scripts]` table."""
+"""Source trees: every blob under `src/` at one commit, plus the root `pyproject.toml` and its `[project.scripts]`."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ class SourceTree:
     files: Mapping[str, bytes]   # path → blob bytes, for every blob under src/ (symlinks hold their target)
     modes: Mapping[str, str]     # path → git mode, for every entry under src/ (gitlinks included)
     scripts: Mapping[str, str]   # [project.scripts] of pyproject.toml at the commit
+    pyproject: bytes | None = None   # the root pyproject.toml at the commit; None when absent
 
 
 class TreeError(ValueError):
@@ -47,7 +48,8 @@ def load_tree(git: Git, mirror: Path, commit: str) -> SourceTree:
         modes[path] = mode
         if kind == "blob":
             blobs.append((path, oid))
-    return SourceTree(commit, _cat_blobs(git, mirror, blobs), modes, _scripts(git, mirror, commit))
+    pyproject = show_bytes(git, mirror, commit, "pyproject.toml")
+    return SourceTree(commit, _cat_blobs(git, mirror, blobs), modes, _scripts(pyproject, commit), pyproject)
 
 
 def _cat_blobs(git: Git, mirror: Path, blobs: list[tuple[str, str]]) -> dict[str, bytes]:
@@ -70,8 +72,7 @@ def _cat_blobs(git: Git, mirror: Path, blobs: list[tuple[str, str]]) -> dict[str
     return files
 
 
-def _scripts(git: Git, mirror: Path, commit: str) -> dict[str, str]:
-    raw = show_bytes(git, mirror, commit, "pyproject.toml")
+def _scripts(raw: bytes | None, commit: str) -> dict[str, str]:
     if raw is None:
         return {}
     try:
