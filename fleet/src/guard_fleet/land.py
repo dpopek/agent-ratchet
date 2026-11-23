@@ -530,8 +530,11 @@ class Lander:
         out = dataclasses.replace(out, pr_url=url)
         return self._finish(c, out) if out.state == "LANDED" else out
 
-    def reverify_current(self, consumer: Consumer, *, canary: bool) -> Outcome:
-        """A consumer CURRENT at T with a ledger attempt for T: its fleet PR merged at a gated H, re-verified live."""
+    def merged_verified(self, consumer: Consumer) -> Outcome:
+        """Read-only: the fleet PR MERGED at a gated H, verified live (no push-run gate, no cleanup, no mutation).
+
+        LANDED, FAILED (the merge or the verify misses) or BLOCKED (no merged fleet PR at a gated head).
+        """
         ctx, c = self.ctx, consumer
         records, bad = ctx.ledger.records()
         for pr in ctx.gh.pr_list(c.slug, head=self.branch, base=c.default_branch, state="merged"):
@@ -552,13 +555,18 @@ class Lander:
             # BASE as the gates saw it (a resumed roll gates on the merge-base, not on the plan's D)
             base = next((r.base for r in reversed(records) if r.attempt == attempt and r.step == "G8"), None)
             rolled = Rolled(c.short, "GATED", "gates", "", base, h, attempt, "", {}, None, None)
-            out = dataclasses.replace(self.verify(c, rolled, merge_sha), pr_url=str(pr.get("url")))
-            if out.state == "LANDED" and canary:
-                out = self.push_run_gate(c, merge_sha) or out
-            if out.state != "LANDED":
-                return dataclasses.replace(out, pr_url=str(pr.get("url")))
-            return self._finish(c, out)
+            return dataclasses.replace(self.verify(c, rolled, merge_sha), pr_url=str(pr.get("url")))
         return self._outcome(c, "BLOCKED", "verify", f"verify: no merged fleet PR on {self.branch} at a gated head")
+
+    def reverify_current(self, consumer: Consumer, *, canary: bool) -> Outcome:
+        """A consumer CURRENT at T with a ledger attempt for T: its fleet PR merged at a gated H, re-verified live."""
+        out = self.merged_verified(consumer)
+        if out.state == "LANDED" and canary:
+            assert out.merge_sha is not None
+            gate = self.push_run_gate(consumer, out.merge_sha)
+            if gate is not None:
+                out = dataclasses.replace(gate, pr_url=out.pr_url)
+        return self._finish(consumer, out) if out.state == "LANDED" else out
 
     # -- --rebuild -------------------------------------------------------------
 

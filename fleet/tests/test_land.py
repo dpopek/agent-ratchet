@@ -573,6 +573,37 @@ def test_reverify_current_without_a_merged_pr_blocks(land_env):
     assert (out.state, out.step) == ("BLOCKED", "verify")
 
 
+def test_merged_verified_reads_and_verifies_without_mutating_anything(land_env):
+    out = land_env.lander.land_consumer(land_env.alpha, land_env.rolled)
+    assert out.state == "LANDED"
+    # land's cleanup removed B; put the remote branch back so a stray cleanup would have something to delete
+    _git(land_env.bare, "branch", land_env.branch, land_env.rolled.head)
+    before = len(land_env.calls)
+    again = land_env.lander.merged_verified(land_env.alpha)
+    assert (again.state, again.step, again.merge_sha, again.pr_url) == ("LANDED", "verify", out.merge_sha,
+                                                                       out.pr_url)
+    assert again.cleanup == () and not again.cleanup_kept
+    assert _git(land_env.bare, "branch", "--list", land_env.branch) != ""   # cleanup did not run
+    new = [a for a, _, _ in land_env.calls[before:]]
+    assert not [a for a in new if a[:1] == ("gh",) and (a[1:3] in (("pr", "merge"), ("pr", "close"), ("pr", "create"))
+                                                        or "-X" in a)]
+    assert not [a for a in new if a[:1] == ("git",) and any(w in a for w in ("push", "branch", "worktree"))]
+    assert [r.detail["verdict"] for r in land_env.records("verify")] == ["pass", "pass"]
+
+
+def test_merged_verified_failed_when_the_default_head_lost_the_lock(land_env):
+    out = land_env.lander.land_consumer(land_env.alpha, land_env.rolled)
+    assert out.state == "LANDED"
+    land_env.move_main({"guard.lock": "tampered\n"})
+    failed = land_env.lander.merged_verified(land_env.alpha)
+    assert (failed.state, failed.step) == ("FAILED", "verify") and failed.merge_sha == out.merge_sha
+
+
+def test_merged_verified_without_a_merged_pr_blocks(land_env):
+    out = land_env.lander.merged_verified(land_env.alpha)
+    assert (out.state, out.step) == ("BLOCKED", "verify") and out.merge_sha is None
+
+
 def test_rebuild_local_removes_the_fleet_worktree_and_branch(land_env):
     (land_env.wt / "guard.lock").write_bytes((land_env.wt / "guard.lock").read_bytes())   # same bytes: fine
     land_env.lander.rebuild_local(land_env.alpha)
