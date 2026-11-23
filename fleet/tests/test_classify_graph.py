@@ -315,6 +315,17 @@ def test_php_gate_behind_a_magento_gate_is_php():
     assert m["agent_ratchet.php.extract"] is Level.PHP
 
 
+def test_php_gated_edge_from_an_unreachable_surface_module_counts():
+    # spec §6.5 item 4: the php surface is the closure of every php-gated edge target. php.dead is reached from no
+    # root, but a consumer may import it directly; its php-gated import makes magento.compare php, not magento.
+    files = {**BASE, MAGENTO_SCAN: MAGENTO_GATED_SCAN,
+             "src/agent_ratchet/php/dead.py": PHP_HEADER + (
+                 "def f(cfg):\n    if not php_profile_active(cfg):\n        return []\n"
+                 "    import agent_ratchet.magento.compare\n")}
+    m = levels(files)
+    assert m["agent_ratchet.magento.compare"] is Level.PHP
+
+
 def test_magento_gate_behind_a_php_gate_is_php():
     # root −PHP→ php.extract −MAGENTO→ magento.compare: magento.compare is in the php closure
     files = {**BASE, PHP_SCAN: SCAN_WITH_EARLY_GATE,

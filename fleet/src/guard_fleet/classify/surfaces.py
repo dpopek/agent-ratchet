@@ -82,13 +82,13 @@ def _roots(tree: SourceTree, known: frozenset[str]) -> tuple[set[str], list[str]
 
 def _levels(roots: set[str], edges: Mapping[str, list[Edge]], known: frozenset[str]) -> dict[str, Level]:
     """core = closure of the roots over CORE edges; php = closure (over every edge) of the targets of PHP-gated
-    edges, minus core; magento likewise, minus core and php. Only edges of modules reachable from the roots
-    count, and anything left over is core. A module in both surfaces is PHP (magento implies php)."""
+    edges, minus core; magento likewise, minus core and php. Gated edges count from every module, reachable or
+    not (a consumer may import a module no root reaches), and anything left over is core. A module in both
+    surfaces is PHP (magento implies php)."""
     core = _closure(roots, edges, only=Level.CORE)
-    reachable = _closure(roots, edges)
 
     def surface(gate: Level) -> set[str]:
-        targets = {e.dst for src in reachable for e in edges.get(src, ()) if e.level is gate}
+        targets = {e.dst for src_edges in edges.values() for e in src_edges if e.level is gate}
         return _closure(targets, edges)
 
     php = surface(Level.PHP) - core
