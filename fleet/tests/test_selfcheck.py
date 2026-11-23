@@ -177,3 +177,17 @@ def test_self_pin_removes_temp_file_when_replace_fails(selfpin_env, monkeypatch)
     with pytest.raises(OSError):
         run_self_pin(e.deps, e.git, "v4.1.0")
     assert list(e.lock.parent.iterdir()) == []
+
+
+def test_self_pin_fsyncs_the_config_directory(selfpin_env, monkeypatch):
+    e = selfpin_env
+    synced = []
+    real = os.fsync
+
+    def spy(fd):
+        synced.append(os.path.isdir(f"/dev/fd/{fd}"))
+        real(fd)
+
+    monkeypatch.setattr("guard_fleet.selfpin.os.fsync", spy)
+    run_self_pin(e.deps, e.git, "v4.1.0")
+    assert synced == [False, True]  # the temp file, then the directory

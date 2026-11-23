@@ -13,12 +13,16 @@ MSG
   exit 10
 fi
 
-lines=$(wc -l < "$lock" | tr -d ' ')
-if [ "$lines" -gt 1 ] || ! grep -Eqx '[0-9a-f]{40}' "$lock"; then
+# Strict: the whole file is 40 lower-case hex, optionally followed by one newline.
+bytes=$(wc -c < "$lock" | tr -d ' ')
+sha=$(cat "$lock")
+nl='
+'
+case "$sha" in *"$nl"*) bytes=0 ;; esac
+if { [ "$bytes" -ne 40 ] && [ "$bytes" -ne 41 ]; } || ! printf '%s\n' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
   echo "guard-fleet: ~/.config/guard-fleet/self.lock must hold one 40-hex lower-case SHA." >&2
   exit 11
 fi
-sha=$(cat "$lock")
 
 if ! command -v uvx >/dev/null 2>&1; then
   echo "guard-fleet: uvx not found on PATH; install uv first." >&2

@@ -38,6 +38,11 @@ def run_self_pin(deps: Deps, git: Git, tag: str) -> FleetExit:
                 os.fsync(tmp.fileno())
             os.chmod(tmp.name, 0o644)
             os.replace(tmp.name, deps.dirs.self_lock)
+            dir_fd = os.open(config_dir, os.O_RDONLY)  # make the rename durable
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
         except BaseException:
             try:
                 os.unlink(tmp.name)

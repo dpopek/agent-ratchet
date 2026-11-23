@@ -64,7 +64,7 @@ def test_missing_lock_prints_bootstrap_and_exits_10(launcher):
 
 
 @pytest.mark.parametrize("content", ["abc\n", "", "a" * 40 + "\n" + "b" * 40 + "\n", "A" * 40 + "\n",
-                                     "a" * 40 + " \n", "a" * 41 + "\n", "a" * 40 + "\n\n"])
+                                     "a" * 40 + " \n", "a" * 41 + "\n", "a" * 40 + "\n\n", "xyz\n" + "a" * 40, "\n" + "a" * 40])
 def test_malformed_lock_exits_11(launcher, content):
     r = launcher(lock=content)
     assert r.returncode == 11 and r.stderr.strip() and r.stdout == ""
