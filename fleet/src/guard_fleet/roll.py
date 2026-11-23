@@ -1,4 +1,4 @@
-"""Roll steps 1-5 for one consumer: preflight, base, worktree, C1 and C2, with stateless resume (spec 6.7, 6.11)."""
+"""Roll steps 1-6 for one consumer: preflight, base, worktree, C1, C2, gates; stateless resume (spec 6.7, 6.11)."""
 
 from __future__ import annotations
 
@@ -14,10 +14,11 @@ from typing import Literal, Mapping
 from .config import Consumer, FleetConfig
 from .deps import Deps
 from .env import commit_env
+from .gates import GateResult, run_gates
 from .gh import Gh, GhAuthError, GhError, GhNetworkError
 from .git import (Git, GitError, GitNetworkError, fetch_default, has_commit, origin_url, rev_parse, show_bytes,
                   status_porcelain)
-from .ledger import Ledger, Record
+from .ledger import GATES, Ledger, Record
 from .lockfile import LockParseError, LockSpec, parse_lock, render_lock
 from .names import branch_for, worktree_for
 from .pins import PinError, pin_test_hardcodes, rewrite_pin
@@ -171,6 +172,12 @@ class _Roll:
                 self.step = "c2"
                 self.c2()
             head = rev_parse(self.ctx.git, self.wt, "HEAD")
+            if head is None:
+                raise _Blocked(self.step, f"{self.step}: HEAD of {self.wt} is unreadable")
+            self.step = "gates"
+            assert self.base is not None and self.attempt is not None and self.row.p is not None
+            results = run_gates(self.ctx, self.c, base=self.base, head=head, worktree=self.wt, attempt=self.attempt,
+                                extras=self.row.extras, p=self.row.p)
         except _Blocked as b:
             return self.blocked(b)
         except (GhAuthError, GhNetworkError, GitNetworkError):
@@ -178,7 +185,21 @@ class _Roll:
             raise
         except (GhError, GitError, OSError) as exc:
             return self.blocked(_Blocked(self.step, f"{self.step}: {exc}"))
-        return Rolled(self.c.short, "GATED", "c2", "", self.base, head, self.attempt, self.hooks, {}, self.wt, None)
+        return self.gated(head, results)
+
+    def gated(self, head: str, results: list[GateResult]) -> Rolled:
+        """GATED iff all nine gates ran and none FAILed; the attempt ends ok exactly then."""
+        assert self.attempt is not None
+        failed = [g for g in results if g.verdict == "FAIL"]
+        ok = not failed and tuple(g.gate for g in results) == GATES
+        self.ctx.ledger.end_attempt(self.attempt, self.c.short, head=head, ok=ok)
+        gates = {g.gate: (g.verdict, str(g.log)) for g in results}
+        if ok:
+            return Rolled(self.c.short, "GATED", "gates", "", self.base, head, self.attempt, self.hooks, gates,
+                          self.wt, None)
+        step, reason = (failed[0].gate, failed[0].reason) if failed else ("gates", "gates: incomplete gate table")
+        return Rolled(self.c.short, "BLOCKED", step, reason, self.base, head, self.attempt, self.hooks, gates,
+                      self.wt, None)
 
     def close_failed(self) -> None:
         self.open_attempt()
@@ -401,5 +422,5 @@ class _Roll:
 
 
 def prepare(ctx: RollContext, consumer: Consumer, row: PlanRow) -> Rolled:
-    """Steps 1-5. Until the gates are wired in, success ends at C2 as state GATED with no gate results."""
+    """Steps 1-6. GATED (step "gates") iff no gate FAILs; a FAIL is BLOCKED with the first failing gate as step."""
     return _Roll(ctx, consumer, row).run()

@@ -1,11 +1,12 @@
-"""Roll steps 1-5 against real fixture repositories (real git, routed uv and gh).
+"""Roll steps 1-6 against real fixture repositories (real git, routed uv, sh and gh).
 
-Task 14 extends this fixture: gate commands are routed by appending `Route`s to `env.routes`
-(`ctx.deps.run.routes` is the same list), or `run_gates` is injected into `prepare`.
+`env.routes` is the runner's own route list (`ctx.deps.run.routes`), so a test can change what a gate
+command returns by inserting a `Route` at the front. By default every gate command passes (`gate_routes`).
 """
 
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -15,7 +16,7 @@ from guard_fleet.env import base_child_env
 from guard_fleet.gh import Gh
 from guard_fleet.git import Git, GitNetworkError
 from guard_fleet.proc import Result
-from guard_fleet.ledger import Ledger
+from guard_fleet.ledger import GATES, Ledger
 from guard_fleet.lockfile import render_lock
 from guard_fleet.names import branch_for, worktree_for
 from guard_fleet.plan import PlanRow
@@ -34,6 +35,8 @@ KINDS = {  # name -> (pin_kind, pin_file, extras)
     "gamma": ("none", None, "none"),
 }
 C1_MSG = "build(deps): pin agent-ratchet v4.0.1 in dev dependencies"
+PIN_TEST_TEXT = "def test_pin():\n    assert True\n"
+PASSING_JUNIT = '<testsuites><testsuite tests="1" skipped="0" failures="0" errors="0"/></testsuites>'
 
 
 class RollEnv(tuple):
@@ -66,9 +69,33 @@ def uv_lock_text(sha):
     return f'name = "agent-ratchet"\nsource = {{ git = "https://github.com/dpopek/agent-ratchet?rev={sha}#{sha}" }}\n'
 
 
+def is_trusted(argv) -> bool:
+    return argv[:1] == ("sh",) and len(argv) > 1 and argv[1].endswith("trusted-guard")
+
+
+def is_g6(argv) -> bool:
+    return argv[:2] == ("uv", "run") and "pytest" in argv
+
+
+def write_junit(text):
+    """A G6 route effect: write `text` to the `--junitxml` path of the command."""
+    def effect(argv, cwd, env):
+        Path(argv[argv.index("--junitxml") + 1]).write_text(text)
+    return effect
+
+
+def gate_routes(t) -> list[Route]:
+    """Every gate command passes: trusted and new shims exit 0, the new shim reports T, G6 runs 1 test."""
+    return [Route(match=is_trusted),
+            Route(match=("sh", "scripts/guard", "version", "--sha"), stdout=f"{t}\n".encode()),
+            Route(match=("sh", "scripts/guard")),
+            Route(match=is_g6, effect=write_junit(PASSING_JUNIT))]
+
+
 def build_env(tmp_path, home, name, *, lock_update=False, default_branch="main", hook_needs=(),
-              node_modules=False, extra_files=None):
-    up = make_upstream(tmp_path / "up", {"v4.0.0": {"consumer/guard": OLD_SHIM}, TAG: {"consumer/guard": NEW_SHIM}})
+              node_modules=False, extra_files=None, upstream_files=None):
+    up = make_upstream(tmp_path / "up", {"v4.0.0": {"consumer/guard": OLD_SHIM},
+                                         TAG: {"consumer/guard": NEW_SHIM, **(upstream_files or {})}})
     p, t = sha_of(up, "v4.0.0"), sha_of(up, TAG)
     kind, pin_file, extras = KINDS[name]
     gh_bare = make_bare(tmp_path / "gh", name)
@@ -78,8 +105,13 @@ def build_env(tmp_path, home, name, *, lock_update=False, default_branch="main",
         files[pin_file] = pin_text(name, p)
     if kind == "pyproject":
         files["uv.lock"] = uv_lock_text(p)
+    if kind != "none":
+        files["tests/ci/test_guard_pin.py"] = PIN_TEST_TEXT
     for path, text in (extra_files or {}).items():
-        files[path] = text.replace("@P@", p)
+        if text is None:
+            files.pop(path, None)
+        else:
+            files[path] = text.replace("@P@", p)
     commit_files(clone, "init", files)
     commit_files(clone, "shim", {"scripts/guard": OLD_SHIM}, mode="755")
     push_all(clone)
@@ -115,16 +147,16 @@ def build_env(tmp_path, home, name, *, lock_update=False, default_branch="main",
         lock.write_text(lock.read_text().replace(p, t))
 
     fake_gh = FakeGh({f"owner/{name}": gh_bare})
-    routes = [fake_gh.route(), Route(match=("uv", "lock"), effect=fake_uv_lock)]
-    deps = make_deps(home, routes=routes, environ=environ)
+    deps = make_deps(home, routes=[fake_gh.route(), Route(match=("uv", "lock"), effect=fake_uv_lock),
+                                   *gate_routes(t)], environ=environ)
     git = Git(deps.run, environ, deps.sleep)
     gh = Gh(deps.run, environ, deps.sleep, home)
     ledger = Ledger(deps.dirs.ledger(TAG), deps.clock)
     ctx = RollContext(deps, git, gh, up, cfg, Target(TAG, t, (4, 0, 1)), ledger, lock_update, environ)
     row = PlanRow(short=name, pin_tag="v4.0.0", p=p, extras=extras, t=t, d=sha_of(clone, "HEAD"), decision="BUMP",
                   reason="", evidence=(), exposure=None, provisional=False)
-    return RollEnv(ctx, consumer, row, clone=clone, fake_gh=fake_gh, fakebin=fakebin, routes=routes, p=p, t=t,
-                   branch=branch_for("4.0.1"), wt=worktree_for(cfg, consumer, "4.0.1"), home=home,
+    return RollEnv(ctx, consumer, row, clone=clone, fake_gh=fake_gh, fakebin=fakebin, routes=deps.run.routes,
+                   p=p, t=t, up=up, branch=branch_for("4.0.1"), wt=worktree_for(cfg, consumer, "4.0.1"), home=home,
                    dirs=deps.dirs)
 
 
@@ -153,8 +185,9 @@ def commit_calls(ctx):
 def test_roll_writes_two_commits_and_preserves_extras(roll_env):
     env = roll_env("alpha")
     r = prepare(*env)
-    assert (r.state, r.step, r.reason) == ("GATED", "c2", "")
-    assert r.gates == {} and r.manual_step is None
+    assert (r.state, r.step, r.reason) == ("GATED", "gates", "")
+    assert r.gates == {g: ("n/a" if g == "G7" else "PASS", str(env.dirs.gate_log(TAG, "alpha", g))) for g in GATES}
+    assert r.manual_step is None
     assert r.worktree == env.wt and r.base == env[2].d and r.attempt == "alpha-1"
     assert git_show(r.worktree, "HEAD:guard.lock") == env.t.encode() + b"\nEXTRAS=php\n"
     assert commit_subjects(r) == [C1_MSG, f"chore(guard): bump agent-ratchet to v4.0.1 ({env.t})"]
@@ -168,13 +201,23 @@ def test_roll_writes_two_commits_and_preserves_extras(roll_env):
     assert r.hooks == "hooks: none"
 
 
+def test_env_routes_are_the_runners_own_list(roll_env):
+    env = roll_env("alpha")
+    assert env.routes is env[0].deps.run.routes
+    env.routes.insert(0, Route(match=("sh", "scripts/guard", "scan"), rc=1))
+    r = prepare(*env)
+    assert (r.state, r.step) == ("BLOCKED", "G4")
+
+
 def test_roll_ledger_has_one_record_per_step_in_one_attempt(roll_env):
     env = roll_env("alpha")
     r = prepare(*env)
     records, bad = env[0].ledger.records()
     assert bad == []
-    assert [x.step for x in records] == ["attempt-start", "preflight", "base", "worktree", "c1", "c2"]
+    assert [x.step for x in records] == ["attempt-start", "preflight", "base", "worktree", "c1", "c2", *GATES,
+                                         "attempt-end"]
     assert {x.attempt for x in records} == {r.attempt}
+    assert (records[-1].head, records[-1].detail) == (r.head, {"ok": True})
     by_step = {x.step: x for x in records}
     assert by_step["base"].base == env[2].d
     assert by_step["c2"].head == r.head and by_step["c2"].rc == 0
@@ -200,7 +243,9 @@ def test_pin_kind_none_makes_one_commit(roll_env):
     assert r.state == "GATED"
     assert commit_subjects(r) == [f"chore(guard): bump agent-ratchet to v4.0.1 ({env.t})"]
     assert not any(c[0][:2] == ("uv", "lock") for c in env[0].deps.run.calls)
-    assert [x.step for x in env[0].ledger.records()[0]] == ["attempt-start", "preflight", "base", "worktree", "c2"]
+    assert [x.step for x in env[0].ledger.records()[0]] == ["attempt-start", "preflight", "base", "worktree", "c2",
+                                                            *GATES, "attempt-end"]
+    assert r.gates["G6"][0] == "n/a"
 
 
 def test_lock_update_flag_reaches_only_c2(roll_env):
