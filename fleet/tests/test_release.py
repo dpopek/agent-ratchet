@@ -348,6 +348,37 @@ def test_land_without_a_roll_lands_nothing_and_points_at_release(release_env):
     assert f"Run: ALLOW_GUARD_LOCK_UPDATE=1 guard-fleet release {TAG}" in release_env.out()
 
 
+def _c1_only_leftover(env, short):
+    """A release interrupted between C1 and C2: the consumer's hook refused the guard.lock commit once."""
+    hook = env.clones[short] / ".git" / "hooks" / "pre-commit"
+    hook.write_text('#!/bin/sh\nif git diff --cached --name-only | grep -qx guard.lock; then exit 1; fi\n')
+    hook.chmod(0o755)
+    assert env.release(only=(short,)) is FleetExit.BLOCKED
+    assert env.end()[short] == "BLOCKED c2: c2: hook refused"
+    hook.unlink()
+
+
+def test_land_with_a_c1_only_leftover_blocks_before_any_write_and_points_at_release(release_env):
+    _c1_only_leftover(release_env, "alpha")
+    seen = len(release_env.calls)
+    assert release_env.land(only=("alpha",)) is FleetExit.BLOCKED
+    since = [a for a, _, _ in release_env.calls[seen:] if a[:1] == ("git",)]
+    assert not [a for a in since if "commit" in a or "add" in a]            # nothing staged or committed
+    assert release_env.end()["alpha"].startswith("BLOCKED c2: ")
+    assert f"alpha: Run: ALLOW_GUARD_LOCK_UPDATE=1 guard-fleet release {TAG}\n" in release_env.out()
+    assert f"alpha: guard-fleet land {TAG}" not in release_env.out()      # never a next command that loops
+
+
+def test_land_with_a_c1_only_leftover_under_markers_has_no_ready_line(release_env):
+    _c1_only_leftover(release_env, "alpha")
+    release_env.deps.environ["CLAUDECODE"] = "1"
+    assert release_env.land(only=("alpha",)) is FleetExit.BLOCKED
+    out = release_env.out()
+    land_out = out[out.rindex("CONSUMER  STATE"):]
+    assert f"alpha: Run in your own terminal: guard-fleet release {TAG}" in land_out
+    assert "ALLOW_GUARD_LOCK_UPDATE=1 guard-fleet" not in land_out and "Run: " not in land_out
+
+
 def test_end_table_next_release_command_under_markers_has_no_ready_line(release_env):
     release_env.deps.environ["CLAUDECODE"] = "1"
     assert release_env.land() is FleetExit.BLOCKED

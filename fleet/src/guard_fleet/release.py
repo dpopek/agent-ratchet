@@ -202,7 +202,7 @@ class _Run:
             if s is None or s.plan.decision != "BUMP" or s.rolled is not None or s.outcome is not None:
                 continue
             if self.in_rings(c) and (roll_new or self.has_leftover(c)):
-                self.put(c.short, rolled=prepare(self.ctx, c, s.plan))
+                self.put(c.short, rolled=prepare(self.ctx, c, s.plan, require_lock_update=True))
         lines = []
         if self.opts.diff:
             for s in self.gated():

@@ -106,8 +106,9 @@ def _worktrees(git: Git, repo: Path) -> list[dict[str, str]]:
 
 
 class _Roll:
-    def __init__(self, ctx: RollContext, consumer: Consumer, row: PlanRow) -> None:
+    def __init__(self, ctx: RollContext, consumer: Consumer, row: PlanRow, *, require_lock_update: bool) -> None:
         self.ctx, self.c, self.row = ctx, consumer, row
+        self.require_lock_update = require_lock_update
         self.version = ".".join(str(n) for n in ctx.target.version)
         self.tag = ctx.target.tag
         self.t = ctx.target.sha
@@ -164,6 +165,11 @@ class _Roll:
             self.record("base", detail={"p": self.row.p, "extras": self.row.extras})
             self.step = "worktree"
             done = self.worktree()
+            if (self.require_lock_update and not self.ctx.lock_update
+                    and done < (2 if self.has_c1 else 1)):   # before any write: C2 would be refused (spec 6.11)
+                raise _Blocked("c2", "c2: the guard.lock commit needs the lock-update variable set by the "
+                               "operator; land carries it only with --rebuild",
+                               manual_step=f"guard-fleet release {self.tag}")
             if self.has_c1 and done == 0:
                 self.step = "c1"
                 self.c1()
@@ -421,6 +427,9 @@ class _Roll:
                     detail={"hooks": self.hooks} if step == "c2" else {})
 
 
-def prepare(ctx: RollContext, consumer: Consumer, row: PlanRow) -> Rolled:
-    """Steps 1-6. GATED (step "gates") iff no gate FAILs; a FAIL is BLOCKED with the first failing gate as step."""
-    return _Roll(ctx, consumer, row).run()
+def prepare(ctx: RollContext, consumer: Consumer, row: PlanRow, *, require_lock_update: bool = False) -> Rolled:
+    """Steps 1-6. GATED (step "gates") iff no gate FAILs; a FAIL is BLOCKED with the first failing gate as step.
+
+    require_lock_update: a C2 still to commit without ctx.lock_update is BLOCKED before any write, with
+    `guard-fleet release <tag>` as its next step (the consumer's lock policy would refuse that commit)."""
+    return _Roll(ctx, consumer, row, require_lock_update=require_lock_update).run()
