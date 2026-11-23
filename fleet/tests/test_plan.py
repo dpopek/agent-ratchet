@@ -148,6 +148,27 @@ def test_plan_skip_prints_evidence(plan_env):            # upstream v4.0.0 -> v4
     assert res.target.tag == "v4.0.1" and res.mirror_note is None
 
 
+def test_plan_evidence_carries_the_tree_scan_result_and_exposure_reasons(plan_env):
+    from guard_fleet.report import render_plan
+    res = run_plan(*plan_env, "v4.0.1", only=(), include_unexposed=False)
+    alpha, beta = rows(res)["alpha"], rows(res)["beta"]
+    assert alpha.decision == "SKIP" and "tree scan: no hits" in alpha.evidence
+    assert beta.decision == "BUMP" and "exposure php: php profile" in beta.evidence
+    assert "tree scan: no hits" in beta.evidence
+    text = render_plan(res)
+    assert "  alpha: tree scan: no hits\n" in text and "  beta: exposure php: php profile\n" in text
+
+
+def test_plan_evidence_lists_each_tree_scan_hit(plan_env, tmp_path):
+    work = make_clone(plan_env.gh_bares["owner/alpha"], tmp_path / "adv-alpha")
+    commit_files(work, "use php", {"tools/x.py": "import agent_ratchet.php.compare\n"})
+    push_all(work)
+    row = run_plan(*plan_env, "v4.0.1", only=("alpha",), include_unexposed=False).rows[0]
+    assert row.decision == "BUMP" and row.exposure.level is Level.PHP
+    assert "tree scan: agent_ratchet.php imported: tools/x.py:1 [php]" in row.evidence
+    assert sum("tools/x.py:1" in line for line in row.evidence) == 1      # the hit is listed once, not per reason
+
+
 def test_plan_bump_for_a_php_exposed_consumer(plan_env):
     res = run_plan(*plan_env, "v4.0.1", only=(), include_unexposed=False)
     beta = rows(res)["beta"]
@@ -265,6 +286,7 @@ def test_plan_lock_free_skips_the_scan_when_d_is_not_in_the_clone(plan_env, tmp_
         held.release()
     assert row.decision == "SKIP" and row.provisional
     assert row.exposure.tree_scan.skipped == "lock-free: D not in clone"
+    assert "tree scan: not run: lock-free: D not in clone" in row.evidence
     assert _git(clone, "for-each-ref") == before
 
 

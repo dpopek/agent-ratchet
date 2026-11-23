@@ -119,8 +119,8 @@ class Planner:
         decision = decide(rel, exposure, include_unexposed=include_unexposed)
         provisional = decision == "SKIP" and (self.lock_free or scan.skipped is not None)
         return PlanRow(consumer.short, pin_tag, lock.sha, lock.extras, target.sha, d, decision,
-                       self._why(rel, exposure, decision, include_unexposed), tuple(evidence_lines(rel)),
-                       exposure, provisional)
+                       self._why(rel, exposure, decision, include_unexposed),
+                       (*evidence_lines(rel), *exposure_evidence(exposure)), exposure, provisional)
 
     def _scan(self, consumer: Consumer, d: str) -> TreeScan | None:
         """The tree scan of D in the consumer's checkout; None when D cannot be fetched there."""
@@ -145,6 +145,19 @@ class Planner:
         if decision == "BUMP":
             return f"changed {name} surface is within exposure {exposure.level.name.lower()}"
         return f"changed surfaces start at {name}; exposure is {exposure.level.name.lower()}"
+
+
+def exposure_evidence(exposure: Exposure) -> list[str]:
+    """Where the exposure level came from, and the tree-scan result: each hit, 'no hits', or why it did not run."""
+    lines = [f"exposure {r}" for r in exposure.reasons if ": tree scan: " not in r]   # hits are listed below
+    scan = exposure.tree_scan
+    if scan.skipped is not None:
+        lines.append(f"tree scan: not run: {scan.skipped}")
+    elif scan.evidence:
+        lines += [f"tree scan: {e}" for e in scan.evidence]
+    else:
+        lines.append("tree scan: no hits")
+    return lines
 
 
 def _clients(deps: Deps) -> tuple[Git, Gh]:
