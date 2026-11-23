@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .deps import Deps
-from .gh import Gh
+from .gh import Gh, GhNotFound
 
 BILLING_PREFIX = "The job was not started because recent account payments have failed"
 
@@ -19,7 +19,6 @@ POLL_START = 15.0
 POLL_CEILING = 60.0
 _PENDING_STATUSES = frozenset({"queued", "in_progress", "waiting", "requested", "pending"})
 _PASS_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
-_JOB_URL_RE = re.compile(r"/job/(\d+)")
 
 
 @dataclass(frozen=True)
@@ -31,12 +30,18 @@ class Check:
     success: bool
 
 
-def check_run_id(entry: Mapping) -> int | None:
-    """The check-run id: `databaseId`, else the job id in `detailsUrl` (gh's rollup omits databaseId)."""
+def check_run_id(entry: Mapping, slug: str | None = None) -> int | None:
+    """The check-run id: `databaseId`, else the job id of a GitHub Actions `detailsUrl` of this repo.
+
+    gh's rollup omits databaseId; non-Actions checks (other hosts, other repos) yield None.
+    """
     raw = entry.get("databaseId")
-    if isinstance(raw, int):
+    if isinstance(raw, int) and not isinstance(raw, bool):
         return raw
-    m = _JOB_URL_RE.search(str(entry.get("detailsUrl") or ""))
+    if slug is None:
+        return None
+    m = re.fullmatch(rf"https://github\.com/{re.escape(slug)}/actions/runs/\d+/job/(\d+)",
+                     str(entry.get("detailsUrl") or ""))
     return int(m.group(1)) if m else None
 
 
@@ -55,7 +60,7 @@ def _is_billing_not_run(job: Mapping | None, annotations: Sequence[Mapping]) -> 
 
 
 def _classify_check_run(entry: Mapping, jobs: Mapping[int, dict],
-                        annotations: Mapping[int, Sequence[dict]]) -> Check:
+                        annotations: Mapping[int, Sequence[dict]], slug: str | None) -> Check:
     name = str(entry.get("name") or "")
     status = str(entry.get("status") or "").lower()
     conclusion = str(entry.get("conclusion") or "").lower()
@@ -66,7 +71,7 @@ def _classify_check_run(entry: Mapping, jobs: Mapping[int, dict],
     if conclusion in _PASS_CONCLUSIONS:
         return Check(name, "check_run", "pass", conclusion, conclusion == "success")
     if conclusion == "failure":
-        cid = check_run_id(entry)
+        cid = check_run_id(entry, slug)
         if cid is not None:
             billing = _is_billing_not_run(jobs.get(cid), annotations.get(cid, ()))
             if billing is not None:
@@ -84,24 +89,39 @@ def _classify_status_context(entry: Mapping) -> Check:
     return Check(name, "status_context", "blocks", state or "no state", False)
 
 
+_WORST = {"blocks": 3, "pending": 2, "not_run": 1, "pass": 0}
+
+
+def _stamp(*values: object) -> str:
+    """Sort key of a timestamp; missing or zero (not yet started) counts as newest."""
+    for v in values:
+        text = str(v or "")
+        if text and not text.startswith("0001-"):
+            return text
+    return "\uffff"
+
+
 def classify_rollup(rollup: Sequence[dict], jobs_by_check: Mapping[int, dict],
-                    annotations_by_check: Mapping[int, Sequence[dict]]) -> list[Check]:
-    latest: dict[tuple[str, str], dict] = {}
+                    annotations_by_check: Mapping[int, Sequence[dict]], *,
+                    slug: str | None = None) -> list[Check]:
+    """Latest attempt per check; equal-newest duplicates resolve to the worst verdict."""
+    groups: dict[tuple[str, str], list[tuple[tuple[str, str], dict]]] = {}
     for entry in rollup:
         if entry.get("__typename") == "StatusContext":
             key = ("status_context", str(entry.get("context") or ""))
-            order = (str(entry.get("createdAt") or ""), "")
+            order = (_stamp(entry.get("startedAt"), entry.get("createdAt")), "")
         else:
             key = ("check_run", str(entry.get("name") or ""))
-            order = (str(entry.get("startedAt") or ""), str(entry.get("completedAt") or ""))
-        held = latest.get(key)
-        if held is None or order >= held["_order"]:
-            latest[key] = {"_order": order, "entry": entry}
+            started = _stamp(entry.get("startedAt"))
+            order = (started, "" if started == "\uffff" else str(entry.get("completedAt") or ""))
+        groups.setdefault(key, []).append((order, entry))
     checks = []
-    for (kind, _), item in latest.items():
-        entry = item["entry"]
-        checks.append(_classify_status_context(entry) if kind == "status_context"
-                      else _classify_check_run(entry, jobs_by_check, annotations_by_check))
+    for (kind, _), items in groups.items():
+        newest = max(o for o, _ in items)
+        cands = [_classify_status_context(e) if kind == "status_context"
+                 else _classify_check_run(e, jobs_by_check, annotations_by_check, slug)
+                 for o, e in items if o == newest]
+        checks.append(max(cands, key=lambda c: _WORST[c.verdict]))
     return checks
 
 
@@ -117,60 +137,50 @@ def verdict(checks: Sequence[Check], mode: Literal["if-run", "required"]) -> Lit
     return "pending" if not checks else "blocks"
 
 
-def _app_key(entry: Mapping) -> str | None:
-    """App identity of a check run, matching `check_suites[].app.slug`.
-
-    gh's rollup carries no app field; a CheckRun with a `workflowName` is produced by GitHub Actions
-    (slug `github-actions`). An explicit `app.slug` wins when present. None = unknown app.
-    """
-    app = entry.get("app")
-    if isinstance(app, Mapping) and app.get("slug"):
-        return str(app["slug"])
-    return "github-actions" if entry.get("workflowName") else None
-
-
-def _suites_cover(gh: Gh, slug: str, head: str, rollup: Sequence[dict]) -> bool:
-    keys = [_app_key(e) for e in rollup if e.get("__typename") != "StatusContext"]
-    if not keys or None in keys:
-        return False  # no reliable key: fall back to the time/stability clause only
-    suites = gh.api(f"repos/{slug}/commits/{head}/check-suites").json().get("check_suites", [])
-    present = {str((s.get("app") or {}).get("slug")) for s in suites}
-    return set(keys) <= present
-
-
 def wait_for_ci(deps: Deps, gh: Gh, slug: str, number: int, head: str, *,
                 mode: Literal["if-run", "required"], cap_min: int, pushed_at_mono: float
                 ) -> tuple[Literal["pass", "blocks", "timeout"], list[Check]]:
-    deadline: float | None = None
+    cap = cap_min * 60
+    deadline: float | None = None  # starts at the first poll on `head`; until then, at the first poll
+    matched = False
     previous: list[tuple[str, str]] | None = None
     delay = POLL_START
     checks: list[Check] = []
     jobs: dict[int, dict] = {}
     notes: dict[int, list[dict]] = {}
+    unfetchable: set[int] = set()
     while True:
         view = gh.pr_view(slug, number, ["headRefOid", "statusCheckRollup"])
         now = deps.clock.monotonic()
         if deadline is None:
-            deadline = now + cap_min * 60
-        rollup = view.get("statusCheckRollup") or []
+            deadline = now + cap
         if view.get("headRefOid") == head:
+            if not matched:
+                matched = True
+                deadline = now + cap  # first classification
+            rollup = view.get("statusCheckRollup") or []
             for entry in rollup:
-                cid = check_run_id(entry)
-                if (cid is not None and cid not in jobs and entry.get("__typename") != "StatusContext"
+                cid = check_run_id(entry, slug)
+                if (cid is not None and cid not in jobs and cid not in unfetchable
+                        and entry.get("__typename") != "StatusContext"
                         and str(entry.get("status") or "").lower() == "completed"
                         and str(entry.get("conclusion") or "").lower() == "failure"):
-                    jobs[cid] = gh.job(slug, cid)
-                    notes[cid] = gh.check_run_annotations(slug, cid)
-            checks = classify_rollup(rollup, jobs, notes)
+                    try:
+                        jobs[cid] = gh.job(slug, cid)
+                        notes[cid] = gh.check_run_annotations(slug, cid)
+                    except GhNotFound:
+                        jobs.pop(cid, None)
+                        unfetchable.add(cid)  # no billing exemption: the check blocks
+            checks = classify_rollup(rollup, jobs, notes, slug=slug)
             overall = verdict(checks, mode)
             signature = sorted((c.name, c.verdict) for c in checks)
-            if overall != "pending":
-                stable = now - pushed_at_mono >= SETTLE_SECONDS and signature == previous
-                if stable or _suites_cover(gh, slug, head, rollup):
-                    return overall, checks
+            if (overall != "pending" and now - pushed_at_mono >= SETTLE_SECONDS
+                    and signature == previous):
+                return overall, checks
             previous = signature
         else:
             previous = None  # the PR head is not ours yet: the rollup belongs to another commit
+        assert deadline is not None
         if now >= deadline:
             return "timeout", checks
         deps.sleep(min(delay, deadline - now))

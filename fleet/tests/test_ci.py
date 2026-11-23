@@ -71,12 +71,10 @@ def test_pending_status_context_is_pending():
 class StubGh:
     """Exposes exactly the Gh methods wait_for_ci calls, scripted per poll (last script repeats)."""
 
-    def __init__(self, polls, suites=None, head="h" * 40):
+    def __init__(self, polls, head="h" * 40):
         self.polls = list(polls)
-        self.suites = suites if suites is not None else []
         self.head = head
         self.pr_calls = 0
-        self.suite_calls = 0
         self.jobs: list[int] = []
         self.annotation_calls: list[int] = []
 
@@ -85,15 +83,6 @@ class StubGh:
         rollup = self.polls[min(self.pr_calls, len(self.polls) - 1)]
         self.pr_calls += 1
         return {"headRefOid": self.head, "statusCheckRollup": rollup}
-
-    def api(self, path):
-        assert path == f"repos/o/a/commits/{self.head}/check-suites"
-        self.suite_calls += 1
-
-        class R:
-            def json(_):
-                return {"check_suites": [{"app": {"slug": s}} for s in self.suites]}
-        return R()
 
     def job(self, slug, job_id):
         self.jobs.append(job_id)
@@ -139,13 +128,105 @@ def test_wait_returns_blocks_and_reads_billing_only_for_failures(tmp_path):
     assert state == "blocks" and gh.jobs == [] and gh.annotation_calls == []
 
 
-def test_wait_settles_early_when_every_app_has_a_suite(tmp_path):
-    gh = StubGh([[cr(1, "t", "COMPLETED", "SUCCESS")]], suites=["github-actions"])
-    (state, _), elapsed = _run(tmp_path, gh)
-    assert state == "pass" and elapsed == 0 and gh.pr_calls == 1 and gh.suite_calls == 1
-    gh = StubGh([[cr(1, "t", "COMPLETED", "SUCCESS")]], suites=["other-app"])
-    (_, _), elapsed = _run(tmp_path, gh)
-    assert elapsed == 105
+def test_pass_before_settle_window_is_never_returned(tmp_path):
+    gh = StubGh([[cr(1, "t", "COMPLETED", "SUCCESS")]])
+    deps = make_deps(tmp_path)
+    t0 = deps.clock.monotonic()
+    seen = []
+    orig = gh.pr_view
+
+    def spy(*a):
+        seen.append(deps.clock.monotonic() - t0)
+        return orig(*a)
+    gh.pr_view = spy
+    wait_for_ci(deps, gh, "o/a", 5, gh.head, mode="if-run", cap_min=10, pushed_at_mono=t0)
+    assert seen == [0, 15, 45, 105]
+
+
+def test_head_mismatch_never_settles_and_cap_starts_at_first_matching_poll(tmp_path):
+    passing = [cr(1, "t", "COMPLETED", "SUCCESS")]
+    class Moving(StubGh):
+        def pr_view(self, slug, number, fields):
+            view = super().pr_view(slug, number, fields)
+            if self.pr_calls <= 3:
+                view["headRefOid"] = "0" * 40
+            return view
+    gh = Moving([passing])
+    (state, _), elapsed = _run(tmp_path, gh, cap_min=10)
+    # mismatching polls at 0, 15, 45; first matching poll at 105 starts the cap; settle needs one more equal poll
+    assert state == "pass" and elapsed == 165 and gh.pr_calls == 5
+    gh = Moving([[cr(1, "t", "IN_PROGRESS")]])
+    (state, _), elapsed = _run(tmp_path, gh, cap_min=3)
+    assert (state, elapsed) == ("timeout", 105 + 180)  # cap runs from the first matching poll
+    class Never(StubGh):
+        def pr_view(self, slug, number, fields):
+            view = super().pr_view(slug, number, fields)
+            view["headRefOid"] = "0" * 40
+            return view
+    (state, checks), elapsed = _run(tmp_path, Never([passing]), cap_min=2)
+    assert (state, checks, elapsed) == ("timeout", [], 120)
+
+
+def test_detailsurl_fallback_is_anchored_to_actions_jobs_of_this_repo(tmp_path):
+    url = "https://github.com/o/a/actions/runs/9/job/77"
+    entry = cr(None, "t", "COMPLETED", "FAILURE") | {"databaseId": None, "detailsUrl": url}
+    gh = StubGh([[entry]])
+    (state, checks), _ = _run(tmp_path, gh)
+    assert gh.jobs == [77] and checks[0].verdict == "not_run" and state == "pass"
+    for bad in ("https://ci.example.com/x/job/77", "https://github.com/o/other/actions/runs/9/job/77", ""):
+        gh = StubGh([[entry | {"detailsUrl": bad}]])
+        (state, checks), _ = _run(tmp_path, gh)
+        assert gh.jobs == [] and gh.annotation_calls == [] and state == "blocks"
+
+
+def test_not_found_on_job_blocks_but_auth_and_network_errors_propagate(tmp_path):
+    from guard_fleet.gh import GhAuthError, GhNetworkError, GhNotFound
+    failing = [cr(1, "t", "COMPLETED", "FAILURE")]
+    gh = StubGh([failing])
+    gh.job = lambda slug, jid: (_ for _ in ()).throw(GhNotFound(404, "gone"))
+    (state, checks), _ = _run(tmp_path, gh)
+    assert state == "blocks" and checks[0].verdict == "blocks"
+    for exc in (GhAuthError(401, "x"), GhNetworkError(None, "x")):
+        gh = StubGh([failing])
+        gh.job = lambda slug, jid, exc=exc: (_ for _ in ()).throw(exc)
+        with pytest.raises(type(exc)):
+            _run(tmp_path, gh)
+        gh = StubGh([failing])
+        gh.pr_view = lambda *a, exc=exc: (_ for _ in ()).throw(exc)
+        with pytest.raises(type(exc)):
+            _run(tmp_path, gh)
+
+
+def test_unknown_values_fail_closed():
+    for status, conclusion in (("COMPLETED", "MYSTERY"), ("COMPLETED", None), ("WEIRD", None)):
+        assert classify_rollup([cr(1, "t", "COMPLETED", None) | {"status": status, "conclusion": conclusion}],
+                               {}, {})[0].verdict == "blocks"
+    assert classify_rollup([sc("c", "MYSTERY")], {}, {})[0].verdict == "blocks"
+
+
+@pytest.mark.parametrize("started", ["", None, "0001-01-01T00:00:00Z"])
+def test_unstarted_rerun_is_newest(started):
+    old = cr(1, "t", "COMPLETED", "SUCCESS", started="2026-11-22T10:00:00Z")
+    rerun = cr(2, "t", "QUEUED", None, started=started)
+    for rollup in ([old, rerun], [rerun, old]):
+        assert [c.verdict for c in classify_rollup(rollup, {}, {})] == ["pending"]
+
+
+def test_equal_timestamps_resolve_to_worst_verdict():
+    ok = cr(1, "t", "COMPLETED", "SUCCESS")
+    bad = cr(2, "t", "COMPLETED", "CANCELLED")
+    assert classify_rollup([bad, ok], {}, {})[0].verdict == "blocks"
+    assert classify_rollup([ok, bad], {}, {})[0].verdict == "blocks"
+
+
+def test_status_context_duplicates():
+    old_ok = sc("c", "SUCCESS") | {"createdAt": "2026-11-22T10:00:00Z"}
+    new_bad = sc("c", "FAILURE") | {"createdAt": "2026-11-22T10:05:00Z"}
+    assert classify_rollup([new_bad, old_ok], {}, {})[0].verdict == "blocks"
+    assert classify_rollup([old_ok, new_bad], {}, {})[0].verdict == "blocks"
+    started = sc("c", "SUCCESS") | {"startedAt": "2026-11-22T10:09:00Z"}
+    assert classify_rollup([started, new_bad], {}, {})[0].verdict == "pass"
+    assert classify_rollup([sc("c", "SUCCESS"), sc("c", "FAILURE")], {}, {})[0].verdict == "blocks"
 
 
 def test_required_with_empty_rollup_keeps_waiting(tmp_path):
