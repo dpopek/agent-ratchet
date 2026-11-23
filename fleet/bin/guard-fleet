@@ -1,0 +1,32 @@
+#!/bin/sh
+# guard-fleet launcher: runs the fleet pinned in ~/.config/guard-fleet/self.lock.
+set -eu
+
+lock="$HOME/.config/guard-fleet/self.lock"
+if [ ! -f "$lock" ]; then
+  cat >&2 <<'MSG'
+guard-fleet: ~/.config/guard-fleet/self.lock is missing.
+One-time bootstrap: run
+  git ls-remote https://github.com/dpopek/agent-ratchet 'refs/tags/v4.4.0^{}'
+and write the 40-hex SHA it prints, on one line, to ~/.config/guard-fleet/self.lock.
+MSG
+  exit 10
+fi
+
+lines=$(wc -l < "$lock" | tr -d ' ')
+if [ "$lines" -gt 1 ] || ! grep -Eqx '[0-9a-f]{40}' "$lock"; then
+  echo "guard-fleet: ~/.config/guard-fleet/self.lock must hold one 40-hex lower-case SHA." >&2
+  exit 11
+fi
+sha=$(cat "$lock")
+
+if ! command -v uvx >/dev/null 2>&1; then
+  echo "guard-fleet: uvx not found on PATH; install uv first." >&2
+  exit 12
+fi
+
+src="git+https://github.com/dpopek/agent-ratchet@$sha#subdirectory=fleet"
+if [ "$(uname -s)" = "Darwin" ] && command -v caffeinate >/dev/null 2>&1; then
+  exec caffeinate -i uvx --isolated --no-config --from "$src" guard-fleet --expect-sha "$sha" "$@"
+fi
+exec uvx --isolated --no-config --from "$src" guard-fleet --expect-sha "$sha" "$@"

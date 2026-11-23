@@ -24,6 +24,10 @@ class Cancelled(Exception):
     """Confirmation cancelled or timed out: exit 4."""
 
 
+class ShaMismatch(Exception):
+    """--expect-sha differs from the installed PEP 610 commit: exit 3."""
+
+
 class NoHelper(Exception):
     """No confirmation helper available (needs macOS with swiftc): exit 5."""
 
