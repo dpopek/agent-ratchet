@@ -85,6 +85,40 @@ including one in a malformed manifest, is judged as before. Do not add
 look-alike files in the adoption change: git's rename detection (`-M`) can pair
 a deleted guard test with a similar new file, and a renamed test is not exempt.
 
+## guard-fleet
+
+`fleet/` holds guard-fleet, a stdlib-only tool that rolls an agent-ratchet release to consumer repositories. It is launched through a pinned launcher (`fleet/bin/guard-fleet`, installed as `~/.local/bin/guard-fleet`), which runs:
+
+```sh
+uvx --isolated --no-config --from "git+https://github.com/dpopek/agent-ratchet@<40hex>#subdirectory=fleet" guard-fleet --expect-sha <40hex> <command>
+```
+
+Consumers are configured in `~/.config/guard-fleet/consumers.toml`.
+
+| command | what it does |
+|---|---|
+| `status` | read-only fleet overview |
+| `plan [tag]` | what a release would do (read only) |
+| `release <tag>` | roll, confirm once, land ring 1 then ring 2 (`--hold-ring-2` stops after ring 1) |
+| `land <tag>` | resume a stopped run or land the held ring 2 |
+| `cleanup [tag]` | remove the fleet's merged leftovers (`--remote` for remote branches) |
+| `self-pin <tag>` | pin the launcher to a release |
+| `venvs` | report (or `--refresh`) the consumers' virtualenvs |
+
+Exit codes:
+
+| code | meaning |
+|---|---|
+| 0 | done or nothing to do, including a requested `--hold-ring-2` stop |
+| 1 | some consumer BLOCKED, or a cleanup item kept |
+| 2 | usage, config, target, self-check or busy-lock error |
+| 3 | `--expect-sha` mismatch |
+| 4 | aborted: confirmation cancelled or timed out, gh auth, or network lost |
+| 5 | stopped before land: no confirmation helper on this machine |
+| 6 | FAILED after a remote side effect (merged, then post-merge verify or push-run gate failed) |
+
+When several apply, the highest-ranked wins: 6 > 4 > 1 > 5 > 0. The launcher itself exits 10 (`self.lock` missing), 11 (malformed) or 12 (`uvx` not found).
+
 ## Guard fixture exemptions
 
 Test files that contain deliberate slop (guard fixtures) are exempt only when listed in the
