@@ -123,7 +123,7 @@ def _calls_of(modules: dict[str, ast.Module], gate_module: str, name: str):
     """Yield (caller module, enclosing function or None, call) for every call that can reach `gate_module.name`."""
     for mod_name, module in modules.items():
         imported_as = {name} if mod_name == gate_module else set()
-        for node in module.body:
+        for node in ast.walk(module):   # lazy imports inside function bodies count too
             if isinstance(node, ast.ImportFrom) and node.module == gate_module:
                 imported_as |= {a.asname or a.name for a in node.names if a.name == name}
         enclosing: dict[int, ast.FunctionDef | ast.AsyncFunctionDef] = {}
@@ -144,11 +144,14 @@ def untraced_gate_parameters(tree: SourceTree) -> list[tuple[str, int]]:
     produce. A gate is parameter-gated when its test reads one of its function's own parameters."""
     modules = _modules(tree)
     untraced: list[tuple[str, int]] = []
+    unmatched: list[tuple[str, int]] = []
     for gate in compute_surfaces(tree).gates:
         funcs = [f for f in _functions(modules[gate.module]) if f.name == gate.func.rsplit(".", 1)[-1]]
+        matched = False
         for func in funcs:
             gate_if = next((n for n in ast.walk(func) if isinstance(n, ast.If) and n.lineno == gate.lineno), None)
             arg = _gate_argument(gate_if.test) if gate_if is not None else None
+            matched = matched or arg is not None
             if arg is None or arg not in _params(func):
                 continue
             position = _params(func).index(arg)
@@ -159,6 +162,9 @@ def untraced_gate_parameters(tree: SourceTree) -> list[tuple[str, int]]:
                     passed = next((kw.value for kw in call.keywords if kw.arg == arg), None)
                 if passed is None or not _bound_from_loader(caller_func, passed):
                     untraced.append((caller, call.lineno))
+        if not matched:
+            unmatched.append((gate.module, gate.lineno))
+    assert not unmatched, f"gates not matched to an If with a readable predicate/membership test: {unmatched}"
     return sorted(set(untraced))
 
 
@@ -186,6 +192,12 @@ def test_parameter_gated_caller_with_literal_dict_fails():
     tree = tree_from({"src/agent_ratchet/a.py": _GATED,
                       "src/agent_ratchet/b.py": "from agent_ratchet.a import run\nrun({'profiles': ['php']})\n"})
     assert untraced_gate_parameters(tree) == [("agent_ratchet.b", 2)]
+
+
+def test_parameter_gated_caller_importing_lazily_is_traced():
+    tree = tree_from({"src/agent_ratchet/a.py": _GATED,
+                      "src/agent_ratchet/b.py": "def go():\n    from agent_ratchet.a import run\n    run({'profiles': ['php']})\n"})
+    assert untraced_gate_parameters(tree) == [("agent_ratchet.b", 3)]
 
 
 def test_parameter_gated_caller_with_own_parameter_fails():

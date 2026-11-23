@@ -30,22 +30,26 @@ import contextlib, io, json, sys
 import agent_ratchet.cli as cli
 import agent_ratchet.transition_scan as ts
 
-counts = {"transitions": 0, "gate_calls": 0}
+import agent_ratchet.test_baseline_integrity as tbi
 
-def counted(name, key):
-    original = getattr(ts, name)
+counts = {"transitions": 0, "gate_calls": 0, "baseline_ranges": 0}
+
+def counted(name, key, module=ts):
+    original = getattr(module, name)
     def wrapper(*args, **kwargs):
         counts[key] += 1
         return original(*args, **kwargs)
-    setattr(ts, name, wrapper)
+    setattr(module, name, wrapper)
 
 counted("_evaluate_transition", "transitions")
 counted("php_transition_violations", "gate_calls")
 counted("magento_transition_violations", "gate_calls")
-sink = io.StringIO()
-with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+counted("_evaluate_commit_range", "baseline_ranges", tbi)
+stdout, stderr = io.StringIO(), io.StringIO()
+with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
     rc = cli.main(json.loads(sys.argv[1]))
-print(json.dumps({"rc": rc, "modules": sorted(sys.modules), **counts}))
+print(json.dumps({"rc": rc, "stdout": stdout.getvalue(), "stdout_len": len(stdout.getvalue()),
+                  "stderr_len": len(stderr.getvalue()), "modules": sorted(sys.modules), **counts}))
 """
 
 
@@ -122,26 +126,34 @@ def digest_of(surfaces: SurfaceMap) -> str:
                    tuple((g.module, g.func, g.kind, int(g.level), g.lineno) for g in surfaces.gates)))
 
 
-# (argv, minimum `_evaluate_transition` calls). At this commit only the commit-range scan evaluates transitions:
-# a plain `scan` reads worktree files and `baseline-integrity` never calls the transition scan, so both expect 0.
+# (argv, minimum `_evaluate_transition` calls, expected exit code, stdout must be non-empty, minimum baseline range
+# evaluations). R23.5: only the commit-range scan evaluates transitions at this commit; plain `scan` reads worktree
+# files and `baseline-integrity` never calls the transition scan, so those two must instead prove the command ran:
+# exit code, captured stdout, and (baseline-integrity, which prints nothing on success) its range evaluation.
+# Exit codes and output were observed in a real run of each form on this fixture at v4.3.4: scan -> 0 with a
+# "Scanned files" line, scan --commit-range -> 0 with the "Git snapshot clean" line, baseline-integrity -> 0, silent.
 FORMS = [
-    pytest.param(["scan"], 0, id="scan-worktree"),
-    pytest.param(["scan", "--commit-range", "{base}..HEAD"], 2, id="scan-commit-range"),
+    pytest.param(["scan"], 0, 0, True, 0, id="scan-worktree"),
+    pytest.param(["scan", "--commit-range", "{base}..HEAD"], 2, 0, True, 0, id="scan-commit-range"),
     pytest.param(["baseline-integrity", "--require-base-ref", "--enforce-policy-isolation",
-                  "--commit-range", "{base}..HEAD"], 0, id="baseline-integrity-range"),
+                  "--commit-range", "{base}..HEAD"], 0, 0, False, 1, id="baseline-integrity-range"),
 ]
 
 
-@pytest.mark.parametrize("form,min_transitions", FORMS)
-def test_core_only_run_loads_no_surface_module(tmp_path, form, min_transitions):
-    """Transition count path: the brief's fallback is not needed for the range form, which hits a stable hook
-    (`transition_scan._evaluate_transition`, counted by a wrapper installed before `main`). The other two forms
-    never evaluate transitions, so for them the count is asserted to be exactly what the code does (0) and the
-    test still proves the import claim for a run that loaded the whole CLI."""
+@pytest.mark.parametrize("form,min_transitions,expected_rc,has_stdout,min_baseline_ranges", FORMS)
+def test_core_only_run_loads_no_surface_module(tmp_path, form, min_transitions, expected_rc, has_stdout,
+                                               min_baseline_ranges):
+    """The transition count comes from a stable hook (`transition_scan._evaluate_transition`, counted by a wrapper
+    installed before `main`), so the brief's findings fallback is not needed. Every form must also have done its
+    work (exit code, stdout, baseline range evaluation) so the import assertion cannot pass vacuously."""
     repo, home, base = php_magento_fixture(tmp_path)
     out = run_cli_in_subprocess(repo, home, [a.format(base=base) for a in form])
     surface = surface_modules(compute_surfaces(load_tree_from_worktree(ROOT)))
     assert surface, "the classifier found no php or magento surface module"
+    assert out["rc"] == expected_rc, out["stdout"]
+    if has_stdout:
+        assert out["stdout_len"] > 0 and out["stdout"].strip()
+    assert out["baseline_ranges"] >= min_baseline_ranges
     assert out["transitions"] >= min_transitions
     if min_transitions:
         assert out["gate_calls"] >= 2 * min_transitions   # php and magento entry per evaluated transition
