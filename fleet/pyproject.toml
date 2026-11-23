@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-ratchet-fleet"
+version = "4.4.0"
+description = "Operator tool that rolls an agent-ratchet release out to the consumer repositories."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+guard-fleet = "guard_fleet.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/guard_fleet"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.4.0
+
+- Added: guard-fleet: one-command rollout of agent-ratchet releases to consumer repositories (`fleet/`).
+
 ## 4.3.4
 
 - Fixed: a 4.3.3 regression that could leave an added PHP suppression unreported.

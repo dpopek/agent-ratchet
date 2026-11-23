@@ -11,3 +11,4 @@ Notes for coding agents working on agent-ratchet.
   The rule lives in `php/directives._ignored_row`. It was probed on PHPCS 3.13.5 and 4.0.4 and on PHPStan 2.3.6.
 - [verified] tree-sitter-php parses `new class {}` as `anonymous_class`. Its methods get the symbol `<ns>\class@anonymous#<k>::<method>`, where `k` is the class's position in file order.
 - [verified] `--config-file` / `AGENT_RATCHET_CONFIG` is a deliberately unprotected, local-only mode (see README). `external_config.activate_cli` resets the override on every run.
+- [verified] fleet/ never imports agent_ratchet; parity with the core lives in tests/test_fleet_parity.py.
