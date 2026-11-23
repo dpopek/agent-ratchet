@@ -30,6 +30,7 @@ from .status import _worktree_records
 from .target import check_tag_syntax
 
 IGNORED_ALLOWLIST = (".pytest_cache", "__pycache__", ".mypy_cache", ".ruff_cache")
+IGNORED_ALLOWLIST_SET = frozenset(IGNORED_ALLOWLIST)
 _BRANCH_GLOB = "refs/heads/chore/agent-ratchet-*"
 LOCK = "guard.lock"
 
@@ -192,8 +193,7 @@ def _clean_worktree(git: Git, w: Path) -> str | None:
     for entry in (e for e in out.split("\0") if e):
         if entry[:2] != "!!":
             return f"worktree is not clean ({entry[:2].strip() or '?'} {entry[3:]})"
-        name = entry[3:].rstrip("/").rsplit("/", 1)[-1]
-        if name not in IGNORED_ALLOWLIST:
+        if not IGNORED_ALLOWLIST_SET.intersection(entry[3:].rstrip("/").split("/")):   # any depth
             return f"worktree has an ignored path outside the allowlist: {entry[3:]}"
     return None
 
@@ -207,8 +207,10 @@ def _execute(ctx: CleanupContext, item: Item) -> tuple[bool, str]:
     c, b, git = item.consumer, item.branch, ctx.git
     label = f"{c.short} {b}"
 
+    unlinked = False
+
     def kept(why: str) -> tuple[bool, str]:
-        return False, f"{label}: kept: {why}"
+        return False, f"{label}: kept: {why}" + ("; node_modules symlink unlinked" if unlinked else "")
 
     fleet, foreign = _worktrees(ctx, c)
     if b in foreign:
@@ -218,6 +220,7 @@ def _execute(ctx: CleanupContext, item: Item) -> tuple[bool, str]:
         link = w / "node_modules"   # 1. only the fleet's own symlink to the configured target
         if link.is_symlink() and os.readlink(link) == str(c.dir / "node_modules"):
             link.unlink()
+            unlinked = True
         dirty = _clean_worktree(git, w)   # 2.
         if dirty:
             return kept(dirty)
@@ -238,7 +241,10 @@ def _execute(ctx: CleanupContext, item: Item) -> tuple[bool, str]:
             if still:
                 return kept(f"remote delete refused: {_tail(pushed.stderr, pushed.stdout)}")
         done.append("remote branch")
-    if w is not None:   # 5. never --force
+    if w is not None:   # 5. never --force; `worktree remove` deletes ignored files, so re-check just before
+        dirty = _clean_worktree(git, w)
+        if dirty:
+            return kept(dirty + (" (remote branch already deleted)" if done else ""))
         removed = git(c.dir, "worktree", "remove", str(w), check=False)
         if removed.rc != 0:
             return kept(f"worktree remove refused: {_tail(removed.stderr, removed.stdout)}"
@@ -269,7 +275,13 @@ def execute(ctx: CleanupContext, item: Item) -> tuple[bool, str]:
 
 def cleanup_landed(ctx: CleanupContext, consumer: Consumer, version: str) -> list[str]:
     """After a landed consumer: its leftovers of this version, remote branch first, under the land approval."""
-    return [execute(ctx, item)[1] for item in collect(ctx, consumer, version=version, remote=True)]
+    lines = []
+    for item in collect(ctx, consumer, version=version, remote=True):
+        if item.safe:
+            lines.append(execute(ctx, item)[1])
+        else:   # judged unsafe: reported, never executed (execute would unlink the node_modules symlink first)
+            lines.append(f"{item.consumer.short} {item.branch}: kept: {item.reason}")
+    return lines
 
 
 def _render(items: list[Item]) -> str:
@@ -301,9 +313,10 @@ def run_cleanup(deps: Deps, cfg: FleetConfig, tag: str | None, *, remote: bool) 
         safe = [i for i in items if i.safe]
         if not safe:
             deps.out.write(table)
-            return FleetExit.OK
+            prune_tag_dirs(deps.dirs.state)
+            return FleetExit.BLOCKED if items else FleetExit.OK
         ask(deps, table, reason_simple(f"cleanup {len(safe)} items", markers=agent_markers_present(deps.environ)))
-        blocked = False
+        blocked = len(safe) < len(items)   # an unsafe item is a kept item
         for item in safe:
             removed, line = execute(ctx, item)
             deps.out.write(line + "\n")

@@ -16,7 +16,7 @@ from guard_fleet.cleanup import (IGNORED_ALLOWLIST, CleanupContext, Item, cleanu
 from guard_fleet.config import load_config
 from guard_fleet.confirm import AGENT_SUFFIX
 from guard_fleet.env import base_child_env
-from guard_fleet.exits import FleetExit, UsageError
+from guard_fleet.exits import Cancelled, FleetExit, UsageError
 from guard_fleet.gh import Gh
 from guard_fleet.git import GIT_SAFE, Git, GitError, rev_parse
 from guard_fleet.locks import RunLock
@@ -498,7 +498,7 @@ def test_run_cleanup_asks_once_and_prunes_tag_dirs(cleanup_env):
     for minor in range(7):
         (state / f"v4.0.{minor}").mkdir(parents=True)
     code = run_cleanup(cleanup_env.deps, cleanup_env.cfg, None, remote=False)
-    assert code == FleetExit.OK
+    assert code == FleetExit.BLOCKED   # the unsafe item was kept
     assert cleanup_env.confirm.reasons == ["cleanup 2 items"]
     assert not cleanup_env.wt("alpha").exists() and not cleanup_env.wt("beta").exists()
     assert cleanup_env.wt("beta", "4.0.2").is_dir() and branch_exists(cleanup_env, "beta", "4.0.2")
@@ -509,14 +509,34 @@ def test_run_cleanup_asks_once_and_prunes_tag_dirs(cleanup_env):
 
 def test_run_cleanup_with_nothing_safe_asks_nothing(cleanup_env):
     cleanup_env.leftover("alpha", foreign=True)
-    assert run_cleanup(cleanup_env.deps, cleanup_env.cfg, None, remote=False) == FleetExit.OK
+    state = cleanup_env.deps.dirs.state
+    for minor in range(7):
+        (state / f"v4.0.{minor}").mkdir(parents=True)
+    assert run_cleanup(cleanup_env.deps, cleanup_env.cfg, None, remote=False) == FleetExit.BLOCKED
     assert cleanup_env.confirm.reasons == []
     assert branch_exists(cleanup_env, "alpha") and "README" in cleanup_env.deps.out.getvalue()
+    assert sorted(p.name for p in state.glob("v4.*")) == [f"v4.0.{m}" for m in range(2, 7)]   # pruned anyway
 
 
 def test_run_cleanup_with_no_items_is_ok_without_confirmation(cleanup_env):
+    state = cleanup_env.deps.dirs.state
+    for minor in range(6):
+        (state / f"v4.0.{minor}").mkdir(parents=True)
     assert run_cleanup(cleanup_env.deps, cleanup_env.cfg, None, remote=True) == FleetExit.OK
     assert cleanup_env.confirm.reasons == []
+    assert sorted(p.name for p in state.glob("v4.*")) == [f"v4.0.{m}" for m in range(1, 6)]
+
+
+def test_run_cleanup_cancelled_confirmation_does_not_prune(tmp_path, fleet_home):
+    env = CleanupEnv(tmp_path, fleet_home, confirms=0)
+    env.confirm._results = ["cancelled"]
+    env.merged_leftover("alpha")
+    state = env.deps.dirs.state
+    for minor in range(7):
+        (state / f"v4.0.{minor}").mkdir(parents=True)
+    with pytest.raises(Cancelled):
+        run_cleanup(env.deps, env.cfg, None, remote=False)
+    assert len(list(state.glob("v4.*"))) == 7 and branch_exists(env, "alpha")
 
 
 def test_run_cleanup_filters_by_tag(cleanup_env):
@@ -573,3 +593,54 @@ def test_rev_parse_helper_sees_no_branch_after_cleanup(cleanup_env):
     item = cleanup_env.merged_leftover("alpha")
     assert execute(cleanup_env.ctx, item)[0]
     assert rev_parse(cleanup_env.git, cleanup_env.clones["alpha"], f"refs/heads/{branch_for(VERSION)}") is None
+
+
+def test_self_ignoring_tool_caches_do_not_keep_worktree(cleanup_env):
+    item = cleanup_env.merged_leftover("alpha")
+    wt = cleanup_env.wt("alpha")
+    for cache in (".pytest_cache", ".ruff_cache"):   # each tool writes its own `*` .gitignore; no outer pattern
+        (wt / cache / "v" / "cache").mkdir(parents=True)
+        (wt / cache / ".gitignore").write_text("*\n")
+        (wt / cache / "README.md").write_text("cache\n")
+        (wt / cache / "v" / "cache" / "lastfailed").write_text("{}\n")
+    ok, _ = execute(cleanup_env.ctx, item)
+    assert ok and not wt.exists()
+
+
+def test_ignored_path_outside_the_allowlist_still_keeps_worktree(cleanup_env):
+    item = cleanup_env.merged_leftover("alpha")
+    wt = cleanup_env.wt("alpha")
+    (wt / "build").mkdir()
+    (wt / "build" / ".gitignore").write_text("*\n")
+    (wt / "build" / "out.o").write_text("o\n")
+    ok, _ = execute(cleanup_env.ctx, item)
+    assert not ok and wt.is_dir()
+
+
+def test_cleanup_landed_does_not_execute_unsafe_items(cleanup_env):
+    cleanup_env.leftover("alpha", foreign=True, node_modules=True, remote=True)
+    wt = cleanup_env.wt("alpha")
+    lines = cleanup_landed(cleanup_env.ctx, cleanup_env.consumer("alpha"), VERSION)
+    assert len(lines) == 1 and "kept" in lines[0] and "README" in lines[0]
+    assert (wt / "node_modules").is_symlink()   # not unlinked
+    assert not [c for c in cleanup_env.git_calls() if c[:1] == ("push",) or c[:2] == ("worktree", "remove")]
+    assert branch_exists(cleanup_env, "alpha") and cleanup_env.remote_branches("alpha") == [branch_for(VERSION)]
+
+
+def test_kept_line_says_when_the_node_modules_symlink_was_unlinked(cleanup_env):
+    item = cleanup_env.merged_leftover("alpha", node_modules=True)
+    wt = cleanup_env.wt("alpha")
+    (wt / "x.txt").write_text("x\n")
+    ok, line = execute(cleanup_env.ctx, item)
+    assert not ok and "node_modules symlink unlinked" in line and not (wt / "node_modules").exists()
+
+
+def test_worktree_dirtied_after_the_safety_check_is_kept(cleanup_env):
+    item = cleanup_env.merged_leftover("alpha", remote=True)
+    wt = cleanup_env.wt("alpha")
+    cleanup_env.hook("alpha", f'echo late > "{wt}/late.txt"')   # runs during the remote delete, after the checks
+    ok, line = execute(cleanup_env.ctx, item)
+    assert not ok and "remote branch already deleted" in line and "kept" in line
+    assert (wt / "late.txt").read_text() == "late\n" and branch_exists(cleanup_env, "alpha")
+    assert cleanup_env.remote_branches("alpha") == []
+    assert not [c for c in cleanup_env.git_calls() if c[:2] in (("worktree", "remove"), ("update-ref", "-d"))]
