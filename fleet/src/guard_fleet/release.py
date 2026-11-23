@@ -14,8 +14,8 @@ from .deps import Deps
 from .difftool import run_diff
 from .env import agent_markers_present, refusal_lines
 from .exits import Cancelled, FleetExit, NoHelper, UsageError, combine
-from .gh import Gh, GhAuthError, GhNetworkError
-from .git import Git, GitNetworkError, ls_remote, rev_parse
+from .gh import Gh, GhAuthError, GhError, GhNetworkError
+from .git import Git, GitError, GitNetworkError, ls_remote, rev_parse
 from .land import REBUILD_FLAG, Approval, Lander, Outcome, RebuildBlocked
 from .ledger import Ledger
 from .locks import RunLock, guard_bump_running
@@ -278,25 +278,36 @@ class _Run:
             out = land_rings(lander, self.cfg, self.target, list(self.states.values()), rings=self.rings,
                              hold_ring_2=hold_ring_2)
         except NETWORK_ERRORS as exc:
-            new = self.ctx.ledger.records()[0][before:]
-            merges = {r.consumer: str(r.detail["merge"]) for r in new if r.step == "merge" and r.detail.get("merge")}
-            verified = {r.consumer for r in new if r.step == "verify" and r.detail.get("verdict") == "pass"}
             kind = network_kind(exc)
-            for short, s in list(self.states.items()):   # the outcomes died with land_rings: rebuild from the ledger
-                if s.outcome is not None or s.plan.decision != "BUMP" or not self.in_rings(self.cfg.by_short(short)):
-                    continue
-                merge = merges.get(short)
-                if merge and short in verified:
-                    out = Outcome(short, "LANDED", "verify", "", None, merge, None, False)
-                else:
-                    why = f"{kind}: merged {merge[:12]}, not verified" if merge else f"{kind}: not merged"
-                    out = Outcome(short, "NOT_RUN", "land", why, None, merge, resume_command(self.target.tag), False)
-                self.put(short, outcome=out)
+            merges, _ = self.stopped_in_land(before, kind)
             self.finish(live=False)   # the network is gone: no venv report
             self.deps.err.write(f"{kind}: {exc}\nResume: {resume_command(self.target.tag)}\n")
             return FleetExit.FAILED if merges else FleetExit.CANCELLED
+        except (GitError, GhError) as exc:   # not the network: FAILED only when a merge of this run is unverified
+            kind = "gh error" if isinstance(exc, GhError) else "git error"
+            merges, verified = self.stopped_in_land(before, kind)
+            code = self.finish(live=False)
+            self.deps.err.write(f"{kind}: {exc}\nResume: {resume_command(self.target.tag)}\n")
+            return combine([code, FleetExit.FAILED if set(merges) - verified else FleetExit.BLOCKED])
         self.states = {s.short: s for s in out}
         return None
+
+    def stopped_in_land(self, before: int, kind: str) -> tuple[dict[str, str], set[str]]:
+        """The outcomes died with land_rings: rebuild them from this run's ledger records; (merges, verified)."""
+        new = self.ctx.ledger.records()[0][before:]
+        merges = {r.consumer: str(r.detail["merge"]) for r in new if r.step == "merge" and r.detail.get("merge")}
+        verified = {r.consumer for r in new if r.step == "verify" and r.detail.get("verdict") == "pass"}
+        for short, s in list(self.states.items()):
+            if s.outcome is not None or s.plan.decision != "BUMP" or not self.in_rings(self.cfg.by_short(short)):
+                continue
+            merge = merges.get(short)
+            if merge and short in verified:
+                out = Outcome(short, "LANDED", "verify", "", None, merge, None, False)
+            else:
+                why = f"{kind}: merged {merge[:12]}, not verified" if merge else f"{kind}: not merged"
+                out = Outcome(short, "NOT_RUN", "land", why, None, merge, resume_command(self.target.tag), False)
+            self.put(short, outcome=out)
+        return merges, verified
 
     def end_state(self, c: Consumer) -> tuple[EndState, FleetExit]:
         tag = self.target.tag

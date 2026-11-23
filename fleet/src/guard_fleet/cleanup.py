@@ -288,7 +288,13 @@ def cleanup_landed(ctx: CleanupContext, consumer: Consumer, version: str) -> lis
 
     One (removed?, report line) per item; a kept item (False) makes the run exit BLOCKED (spec 6.12)."""
     lines: list[tuple[bool, str]] = []
-    for item in collect(ctx, consumer, version=version, remote=True):
+    try:
+        items = collect(ctx, consumer, version=version, remote=True)
+    except GitNetworkError:
+        raise
+    except GitError as exc:   # e.g. a concurrent git lock: the leftovers stay, the run goes on
+        return [(False, f"{consumer.short}: kept: error: {exc}")]
+    for item in items:
         if item.safe:
             lines.append(execute(ctx, item))
         else:   # judged unsafe: reported, never executed (execute would unlink the node_modules symlink first)

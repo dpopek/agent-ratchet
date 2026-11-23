@@ -424,6 +424,68 @@ def test_network_lost_after_a_merge_is_failed_with_the_resume_command(release_en
     assert end["gamma"] == "NOT RUN land: network lost: not merged"
 
 
+# -- a non-network git or gh error during land (exit 1 or 6, never a traceback) ---------------------------------
+
+
+def test_a_git_lock_error_in_the_canary_cleanup_keeps_the_item_and_the_run_goes_on(release_env, monkeypatch):
+    from guard_fleet import cleanup as cleanup_mod
+    from guard_fleet.git import GitLockError
+    from guard_fleet.proc import Result
+    orig = cleanup_mod._default_head
+
+    def head(ctx, consumer):
+        if consumer.short == "beta":
+            raise GitLockError(Result(("git", "fetch"), 128, b"", b"Unable to create 'x.lock': File exists.", False))
+        return orig(ctx, consumer)
+    monkeypatch.setattr(cleanup_mod, "_default_head", head)
+    assert release_env.release() is FleetExit.BLOCKED                   # a kept cleanup item, not a traceback
+    assert release_env.merged() == ["beta", "alpha", "gamma"]           # the canary's push-run gate ran, then the rest
+    assert [r.detail["verdict"] for r in release_env.records("beta", "push-run")] == ["pass"]
+    end = release_env.end()
+    assert end["beta"].startswith("LANDED (cleanup kept: beta: kept: error: ") and "File exists" in end["beta"]
+    assert end["alpha"] == end["gamma"] == "LANDED"
+
+
+def _gh_error_at_merge_of(monkeypatch, slug):
+    from guard_fleet.gh import GhError
+    orig = gh_mod.Gh.pr_merge
+
+    def merge(self, s, number, head_sha):
+        if s == slug:
+            raise GhError(403, "secondary rate limit")
+        return orig(self, s, number, head_sha)
+    monkeypatch.setattr(gh_mod.Gh, "pr_merge", merge)
+
+
+def test_a_gh_error_after_verified_merges_prints_the_end_table_and_blocks(release_env, monkeypatch):
+    _gh_error_at_merge_of(monkeypatch, "owner/gamma")
+    assert release_env.release() is FleetExit.BLOCKED
+    assert release_env.merged() == ["beta", "alpha"]
+    err = release_env.deps.err.getvalue()
+    assert "secondary rate limit" in err and f"Resume: {RESUME}" in err
+    end = release_env.end()
+    assert end["beta"] == end["alpha"] == "LANDED"
+    assert end["gamma"].startswith("NOT RUN land: ") and "not merged" in end["gamma"]
+
+
+def test_a_git_error_after_an_unverified_merge_is_failed(release_env, monkeypatch):
+    from guard_fleet import land as land_mod
+    from guard_fleet.git import GitError
+    from guard_fleet.proc import Result
+    orig = land_mod.Lander.verify
+
+    def verify(self, consumer, rolled, merge_sha):
+        if consumer.short == "alpha":
+            raise GitError(Result(("git", "rev-parse"), 128, b"", b"fatal: odd", False))
+        return orig(self, consumer, rolled, merge_sha)
+    monkeypatch.setattr(land_mod.Lander, "verify", verify)
+    assert release_env.release() is FleetExit.FAILED                    # merged, not verified: 6
+    assert release_env.merged() == ["beta", "alpha"]
+    assert f"Resume: {RESUME}" in release_env.deps.err.getvalue()
+    end = release_env.end()
+    assert end["beta"] == "LANDED" and end["alpha"].startswith("NOT RUN land: ") and "not verified" in end["alpha"]
+
+
 def test_a_failed_canary_push_run_is_exit_6_and_nothing_else_merges(release_env):
     release_env.push_run_conclusion = "failure"
     assert release_env.release() is FleetExit.FAILED
