@@ -484,7 +484,7 @@ def test_cleanup_landed_deletes_remote_branch_first(cleanup_env):
     calls = cleanup_env.git_calls()
     assert index_of(calls, "push", "--force-with-lease=refs/heads/chore/agent-ratchet-4.0.1") < \
         index_of(calls, "worktree", "remove")
-    assert len(lines) == 1 and "4.0.1" in lines[0]
+    assert len(lines) == 1 and lines[0][0] is True and "4.0.1" in lines[0][1] and "removed" in lines[0][1]
     assert cleanup_env.remote_branches("alpha") == [branch_for("4.0.2")]
     assert branch_exists(cleanup_env, "alpha", "4.0.2") and other.worktree.is_dir()
     assert cleanup_env.confirm.reasons == []   # no extra confirmation under the land approval
@@ -621,7 +621,7 @@ def test_cleanup_landed_does_not_execute_unsafe_items(cleanup_env):
     cleanup_env.leftover("alpha", foreign=True, node_modules=True, remote=True)
     wt = cleanup_env.wt("alpha")
     lines = cleanup_landed(cleanup_env.ctx, cleanup_env.consumer("alpha"), VERSION)
-    assert len(lines) == 1 and "kept" in lines[0] and "README" in lines[0]
+    assert len(lines) == 1 and lines[0][0] is False and "kept" in lines[0][1] and "README" in lines[0][1]
     assert (wt / "node_modules").is_symlink()   # not unlinked
     assert not [c for c in cleanup_env.git_calls() if c[:1] == ("push",) or c[:2] == ("worktree", "remove")]
     assert branch_exists(cleanup_env, "alpha") and cleanup_env.remote_branches("alpha") == [branch_for(VERSION)]

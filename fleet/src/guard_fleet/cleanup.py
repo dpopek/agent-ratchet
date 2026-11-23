@@ -273,14 +273,16 @@ def execute(ctx: CleanupContext, item: Item) -> tuple[bool, str]:
         return False, f"{item.consumer.short} {item.branch}: kept: error: {exc}"
 
 
-def cleanup_landed(ctx: CleanupContext, consumer: Consumer, version: str) -> list[str]:
-    """After a landed consumer: its leftovers of this version, remote branch first, under the land approval."""
-    lines = []
+def cleanup_landed(ctx: CleanupContext, consumer: Consumer, version: str) -> list[tuple[bool, str]]:
+    """After a landed consumer: its leftovers of this version, remote branch first, under the land approval.
+
+    One (removed?, report line) per item; a kept item (False) makes the run exit BLOCKED (spec 6.12)."""
+    lines: list[tuple[bool, str]] = []
     for item in collect(ctx, consumer, version=version, remote=True):
         if item.safe:
-            lines.append(execute(ctx, item)[1])
+            lines.append(execute(ctx, item))
         else:   # judged unsafe: reported, never executed (execute would unlink the node_modules symlink first)
-            lines.append(f"{item.consumer.short} {item.branch}: kept: {item.reason}")
+            lines.append((False, f"{item.consumer.short} {item.branch}: kept: {item.reason}"))
     return lines
 
 

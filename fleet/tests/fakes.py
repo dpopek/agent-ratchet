@@ -190,6 +190,10 @@ class FakeGh:
             status = ("identical" if not (ahead or behind) else "ahead" if not behind
                       else "behind" if not ahead else "diverged")
             return _http(200, json.dumps({"status": status, "ahead_by": ahead, "behind_by": behind}).encode())
+        m = re.fullmatch(r"actions/runs/(\d+)/jobs(?:\?.*)?", rest)
+        if m:
+            jobs = [j for j in self.jobs.values() if j.get("run_id") == int(m.group(1))]
+            return _http(200, json.dumps({"total_count": len(jobs), "jobs": jobs}).encode())
         m = re.fullmatch(r"actions/jobs/(\d+)", rest)
         if m:
             job = self.jobs.get(int(m.group(1)))
@@ -214,7 +218,8 @@ class FakeGh:
 
     def _pr_list(self, argv: tuple[str, ...], slug: str, env: Mapping[str, str]) -> Result:
         head, base = _flag(argv, "--head"), _flag(argv, "--base")
-        found = [p for p in self.prs.get(slug, []) if p.get("state", "OPEN") == "OPEN"
+        state = (_flag(argv, "--state") or "open").upper()
+        found = [p for p in self.prs.get(slug, []) if state == "ALL" or p.get("state", "OPEN") == state
                  and (head is None or p.get("headRefName") == head)
                  and (base is None or p.get("baseRefName", "main") == base)]
         out = [self._project(p, _flag(argv, "--json") or "number") for p in found]
@@ -239,7 +244,8 @@ class FakeGh:
         self.prs.setdefault(slug, []).append({
             "number": number, "url": url, "state": "OPEN", "headRefName": head, "baseRefName": base,
             "headRefOid": oid, "isCrossRepository": False, "author": {"login": self.login},
-            "title": _flag(argv, "--title"), "mergeCommit": None})
+            "title": _flag(argv, "--title"), "mergeCommit": None, "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN", "statusCheckRollup": []})
         return Result(argv, 0, (url + "\n").encode(), b"", False)
 
     def _pr_close(self, argv: tuple[str, ...], slug: str, env: Mapping[str, str]) -> Result:

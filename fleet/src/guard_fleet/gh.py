@@ -203,9 +203,9 @@ class Gh:
 
     # -- pull requests -------------------------------------------------------
 
-    def pr_list(self, slug: str, *, head: str, base: str) -> list[dict]:
+    def pr_list(self, slug: str, *, head: str, base: str, state: str = "open") -> list[dict]:
         return self._json("pr", "list", "--repo", slug, "--head", head, "--base", base,
-                          "--state", "open", "--json", _PR_FIELDS)
+                          "--state", state, "--json", _PR_FIELDS)
 
     def pr_list_open(self, slug: str, *, base: str) -> list[dict]:
         return self._json("pr", "list", "--repo", slug, "--base", base, "--state", "open",
@@ -239,6 +239,9 @@ class Gh:
             if value is not None:
                 args += [flag, value]
         return self._json(*args, "--limit", "100", "--json", _RUN_FIELDS)
+
+    def run_jobs(self, slug: str, run_id: int) -> list[dict]:
+        return list(self.api(f"repos/{slug}/actions/runs/{run_id}/jobs?per_page=100").json()["jobs"])
 
     def job(self, slug: str, job_id: int) -> dict:
         return self.api(f"repos/{slug}/actions/jobs/{job_id}").json()

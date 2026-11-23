@@ -333,3 +333,23 @@ def test_pr_close_and_non_get_api_are_single_attempt(tmp_path):
     with pytest.raises(GhNetworkError):
         g.api(f"repos/{SLUG}/x", method="POST")
     assert len(runner.calls) == 2
+
+
+def test_pr_list_state_parameter_reaches_argv_and_fake(fake_gh_env):
+    g, runner = fake_gh_env
+    number, head = _open_pr(g)
+    g.pr_list(SLUG, head="feature", base="main", state="merged")
+    argv = runner.calls[-1][0]
+    assert argv[argv.index("--state") + 1] == "merged"
+    assert g.pr_list(SLUG, head="feature", base="main", state="merged") == []
+    g.pr_merge(SLUG, number, head)
+    assert [p["number"] for p in g.pr_list(SLUG, head="feature", base="main", state="merged")] == [number]
+    assert g.pr_list(SLUG, head="feature", base="main") == []
+
+
+def test_run_jobs_lists_the_jobs_of_one_run(fake_gh_env):
+    g, runner = fake_gh_env
+    g.fake.jobs[11] = {"id": 11, "run_id": 5, "name": "a", "conclusion": "success"}
+    g.fake.jobs[12] = {"id": 12, "run_id": 6, "name": "b", "conclusion": "failure"}
+    assert [j["id"] for j in g.run_jobs(SLUG, 5)] == [11]
+    assert runner.calls[-1][0][-1] == f"repos/{SLUG}/actions/runs/5/jobs?per_page=100"
