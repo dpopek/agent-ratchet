@@ -420,6 +420,8 @@ class Lander:
                 hits = self._gate_hits(c, w, spec, base, first)
                 if hits:
                     misses.append(f"the base moved into gate inputs before the merge: {', '.join(hits)}")
+        except GitNetworkError:
+            raise   # not a verdict: nothing is recorded, the caller maps the network loss
         except (GitError, AskError, _Miss) as exc:
             misses.append(str(exc))
         verdict = "fail" if misses else "pass"

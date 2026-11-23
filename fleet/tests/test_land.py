@@ -373,6 +373,26 @@ def test_verify_checks_lock_and_shim_at_the_new_default_head(land_env):
     assert order[:2] == ["ls-remote", "fetch"]   # D first, then its objects (as _base_moved does)
 
 
+@pytest.mark.parametrize("network", [False, True])
+def test_a_git_error_in_verify_fails_network_loss_propagates_unrecorded(land_env, monkeypatch, network):
+    out = land_env.lander.land_consumer(land_env.alpha, land_env.rolled)
+    assert out.state == "LANDED"
+    before = [r.detail["verdict"] for r in land_env.records("verify")]
+    err = (GitNetworkError if network else GitError)(Result(("git", "diff"), 128, b"", b"fatal: bad", False))
+
+    def boom(*a, **k):
+        raise err
+    monkeypatch.setattr(land_env.lander, "_gate_hits", boom)
+    if network:
+        with pytest.raises(GitNetworkError):
+            land_env.lander.verify(land_env.alpha, land_env.rolled, out.merge_sha)
+        assert [r.detail["verdict"] for r in land_env.records("verify")] == before   # nothing recorded
+        return
+    again = land_env.lander.verify(land_env.alpha, land_env.rolled, out.merge_sha)
+    assert (again.state, again.step) == ("FAILED", "verify") and "fatal: bad" in again.reason
+    assert [r.detail["verdict"] for r in land_env.records("verify")] == [*before, "fail"]
+
+
 # -- the push-run gate -----------------------------------------------------------------------------------------
 
 
