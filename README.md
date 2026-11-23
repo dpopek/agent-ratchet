@@ -113,9 +113,9 @@ Exit codes:
 | 1 | some consumer BLOCKED, or a cleanup item kept |
 | 2 | usage, config, target, self-check or busy-lock error |
 | 3 | `--expect-sha` mismatch |
-| 4 | aborted: confirmation cancelled or timed out, gh auth, or network lost |
+| 4 | aborted: confirmation cancelled or timed out, gh exit 4 (auth), or the network lost |
 | 5 | stopped before land: no confirmation helper on this machine |
-| 6 | FAILED after a remote side effect (merged, then post-merge verify or push-run gate failed) |
+| 6 | FAILED after a remote side effect: merged, then post-merge verify or the push-run gate failed |
 
 When several apply, the highest-ranked wins: 6 > 4 > 1 > 5 > 0. The launcher itself exits 10 (`self.lock` missing), 11 (malformed) or 12 (`uvx` not found).
 
