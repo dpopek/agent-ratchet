@@ -24,6 +24,10 @@ class Cancelled(Exception):
     """Confirmation cancelled or timed out: exit 4."""
 
 
+class NoHelper(Exception):
+    """No confirmation helper available (needs macOS with swiftc): exit 5."""
+
+
 _PRECEDENCE = (FleetExit.FAILED, FleetExit.CANCELLED, FleetExit.BLOCKED, FleetExit.NO_HELPER)
 
 

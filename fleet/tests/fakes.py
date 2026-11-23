@@ -92,6 +92,19 @@ def make_deps(tmp_home: Path, routes=(), confirm=None, environ=None) -> Deps:
     )
 
 
+class FakeConfirm:
+    """Returns the next scripted status as a ConfirmResult and records each reason."""
+
+    def __init__(self, results: Sequence[str]) -> None:
+        self._results = list(results)
+        self.reasons: list[str] = []
+
+    def __call__(self, reason: str) -> ConfirmResult:
+        self.reasons.append(reason)
+        status = self._results.pop(0)
+        return ConfirmResult(status, f"detail-{status}")  # type: ignore[arg-type]
+
+
 def real_git() -> Git:
     """A Git over the real subprocess seam, with the test's clean environment."""
     return Git(proc.run, base_child_env(os.environ, tool_bin=Path("/nonexistent")), lambda s: None)

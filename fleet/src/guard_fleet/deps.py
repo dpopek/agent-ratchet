@@ -45,14 +45,16 @@ class Deps:
     platform: str
 
 
-def _unwired_confirm(_reason: str) -> ConfirmResult:
-    return ConfirmResult("no_helper", "confirmation helper is not wired")
+def _touch_id(reason: str) -> ConfirmResult:
+    from . import confirm  # local import: confirm imports ConfirmResult from this module
+
+    return confirm.touch_id(reason)
 
 
 def default_deps() -> Deps:
     return Deps(
         run=proc.run,
-        confirm=_unwired_confirm,  # wired in the confirm task
+        confirm=_touch_id,
         clock=SystemClock(),
         sleep=time.sleep,
         environ=dict(os.environ),
