@@ -531,7 +531,10 @@ class Lander:
         return self._finish(c, out) if out.state == "LANDED" else out
 
     def merged_verified(self, consumer: Consumer) -> Outcome:
-        """Read-only: the fleet PR MERGED at a gated H, verified live (no push-run gate, no cleanup, no mutation).
+        """The fleet PR MERGED at a gated H, verified live (no push-run gate).
+
+        It writes the ledger "verify" record and does an object-only fetch of the default branch; it never pushes,
+        closes, merges or cleans up.
 
         LANDED, FAILED (the merge or the verify misses) or BLOCKED (no merged fleet PR at a gated head).
         """

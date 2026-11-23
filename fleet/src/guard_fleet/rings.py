@@ -6,7 +6,7 @@ import dataclasses
 import re
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
-from typing import Mapping, Sequence
+from typing import Collection, Mapping, Sequence
 
 from .ci import _is_billing_not_run
 from .config import Consumer, FleetConfig
@@ -18,7 +18,7 @@ from .roll import Rolled, prepare
 from .target import Target
 
 QUEUED = frozenset({"queued", "in_progress", "waiting", "requested", "pending"})
-_FAIL_STEPS = ("verify", "push-run")
+_FAIL_STEPS = ("verify", "push-run", "merge")
 
 
 @dataclass(frozen=True)
@@ -89,9 +89,16 @@ def _green_push_run(records: Sequence[Record], short: str, merge: str | None) ->
     return bool(verdicts) and verdicts[-1] == "pass"
 
 
-def ring2_ready(lander: Lander, cfg: FleetConfig, target: Target) -> tuple[bool, str]:
-    """Ring 2 may start: ring 1 verified live or BLOCKED, none FAILED, the canary green or SKIP. Mutates nothing."""
-    records, _ = lander.ctx.ledger.records()
+def ring2_ready(lander: Lander, cfg: FleetConfig, target: Target, *,
+                skip_canaries: Collection[str] = ()) -> tuple[bool, str]:
+    """Ring 2 may start: ring 1 verified live or BLOCKED, none FAILED, every canary SKIP (by plan) or green.
+
+    `skip_canaries` names the canaries whose plan decision is SKIP; nothing else makes a canary SKIP, whatever the
+    ledger holds. Mutates nothing (see Lander.merged_verified).
+    """
+    records, bad = lander.ctx.ledger.records()
+    if bad:
+        return False, f"ledger has unparsable lines {', '.join(map(str, bad))}: a failure could be hidden there"
     ring1 = cfg.ring_order(1)
     for c in ring1:
         failure = _recorded_failure(records, c.short)
@@ -102,13 +109,12 @@ def ring2_ready(lander: Lander, cfg: FleetConfig, target: Target) -> tuple[bool,
         out = lander.merged_verified(c)
         if out.state == "FAILED":
             return False, f"{c.short} FAILED at {out.step}: {out.reason}"
-        if c.short not in canaries:
+        if c.short not in canaries or c.short in skip_canaries:
             continue   # a BLOCKED ring-1 consumer is listed by the caller and does not hold ring 2
-        if out.state == "LANDED":
-            if not _green_push_run(records, c.short, out.merge_sha):
-                return False, f"canary {c.short} landed without a green push-run gate recorded for {target.tag}"
-        elif any(r.consumer == c.short and r.step == "attempt-start" for r in records):
-            return False, f"canary {c.short} is not landed: {out.reason}"   # no attempt at all = SKIP
+        if out.state != "LANDED":
+            return False, f"canary {c.short} is not landed: {out.reason}"
+        if not _green_push_run(records, c.short, out.merge_sha):
+            return False, f"canary {c.short} landed without a green push-run gate recorded for {target.tag}"
     return True, ""
 
 
@@ -170,7 +176,7 @@ def land_rings(lander: Lander, cfg: FleetConfig, target: Target, states: list[Co
             s = states[index[c.short]]
             is_canary = c.short in canaries
             why = None if is_canary else canary_block(cfg, states)
-            out = _outcome(c.short, "BLOCKED", "canary", why) if why else _land_one(lander, c, s, canary=is_canary)
+            out = _outcome(c.short, "BLOCKED", "canary", why, f"guard-fleet land {tag}") if why else _land_one(lander, c, s, canary=is_canary)
             put(c.short, out)
             if out.state == "FAILED":
                 return stop(out)
@@ -182,7 +188,9 @@ def land_rings(lander: Lander, cfg: FleetConfig, target: Target, states: list[Co
         elif members:
             why = canary_block(cfg, states) if 1 in rings else None
             if why is None:
-                ready, why = ring2_ready(lander, cfg, target)
+                skip = {c.short for c in cfg.canaries(1)
+                        if c.short in index and states[index[c.short]].plan.decision == "SKIP"}
+                ready, why = ring2_ready(lander, cfg, target, skip_canaries=skip)
                 why = None if ready else why
             for c in members:
                 if why:
@@ -202,20 +210,21 @@ def land_rings(lander: Lander, cfg: FleetConfig, target: Target, states: list[Co
 def render_confirmation(target: Target, running_sha: str, states: Sequence[ConsumerState], *,
                         prs_to_open: Sequence[str], prs_to_close: Sequence[str], canary_order: Sequence[str],
                         deploy_lines: Sequence[str], billing: str, notes: Mapping[str, str],
-                        diff_lines: Sequence[str], rebuild_commits: Mapping[str, Sequence[str]],
-                        cfg: FleetConfig | None = None) -> str:
+                        diff_lines: Sequence[str], rebuild_commits: Mapping[str, Sequence[str] | None],
+                        cfg: FleetConfig) -> str:
     """The table printed before the confirmation (spec 6.8). `cfg` supplies each consumer's ci and commit_env."""
     out = [f"Release {target.tag}: T {target.sha}, running fleet {running_sha[:12]}", ""]
     header = ("CONSUMER", "RING", "CI", "DECISION", "H")
     rows = []
+    known = {x.short: x for x in cfg.consumers}
     for s in states:
-        c = cfg.by_short(s.short) if cfg is not None and any(x.short == s.short for x in cfg.consumers) else None
+        c = known.get(s.short)
         head = s.rolled.head[:12] if s.rolled is not None and s.rolled.head else "-"
         rows.append((s.short, str(s.ring), c.ci if c else "-", s.plan.decision, head))
     widths = [max(len(r[i]) for r in (header, *rows)) for i in range(len(header))]
     out += ["  ".join(cell.ljust(w) for cell, w in zip(r, widths)).rstrip() for r in (header, *rows)]
     for s in states:
-        c = cfg.by_short(s.short) if cfg is not None and any(x.short == s.short for x in cfg.consumers) else None
+        c = known.get(s.short)
         out += ["", f"{s.short}:"]
         if s.rolled is not None:
             out += [f"  {gate}: {verdict}" for gate, (verdict, _log) in sorted(s.rolled.gates.items())]
@@ -238,6 +247,10 @@ def render_confirmation(target: Target, running_sha: str, states: Sequence[Consu
     if diff_lines:
         out += ["", "Differences (--diff):", *[f"  {line}" for line in diff_lines]]
     for short, commits in rebuild_commits.items():
+        if commits is None:
+            out += ["", f"--rebuild {short}: strict G8 fails on the remote branch; it stays BLOCKED, "
+                    "--rebuild will not replace it"]
+            continue
         out += ["", f"--rebuild {short}: the remote branch would be replaced over these commits:",
                 *[f"  {line}" for line in commits or ["(a head the ledger recorded)"]]]
     return "\n".join(out) + "\n"
@@ -263,21 +276,21 @@ def _filter(children: Sequence[tuple[int, str]], key: str) -> list[str] | None:
             return _scalars(m.group(1))
         items = []
         for deeper, text in children[i + 1:]:
-            if deeper <= base:
-                break
-            if text.startswith("- "):
-                items.append(text[2:].strip().strip("'\""))
+            if not text.startswith("- ") and text != "-" or deeper < base:
+                break   # a sequence item may sit at the key's own indent or deeper
+            items.append(text[1:].strip().strip("'\""))
         return items
     return None
 
 
 def triggers_on_push(text: str, branch: str) -> bool:
-    """Does the workflow file run on a push to `branch`? A small reader of the common `on:` shapes, not YAML."""
-    lines = []
-    for raw in text.splitlines():
-        body = re.sub(r"(^|\s+)#.*$", "", raw).strip()
-        if body:
-            lines.append((len(raw) - len(raw.lstrip(" ")), body))
+    """Does the workflow file run on a push to `branch`? A small reader of the common `on:` shapes, not YAML.
+
+    It errs towards True: an empty or unreadable `on:` / `push:` / `branches:` means "push, filters unknown".
+    """
+    stripped = "\n".join(re.sub(r"(^|\s+)#.*$", "", raw).rstrip() for raw in text.splitlines())
+    stripped = re.sub(r"\[[^\]]*\]", lambda m: re.sub(r"\s+", " ", m.group(0)), stripped)   # multi-line flow lists
+    lines = [(len(raw) - len(raw.lstrip(" ")), raw.strip()) for raw in stripped.splitlines() if raw.strip()]
     for i, (indent, body) in enumerate(lines):
         m = re.fullmatch(r"""["']?on["']?\s*:\s*(.*)""", body)
         if indent == 0 and m:
@@ -291,13 +304,13 @@ def triggers_on_push(text: str, branch: str) -> bool:
         return "push" in _scalars(rest)
     block = []
     for indent, body in lines[i + 1:]:
-        if indent == 0:
+        if indent == 0 and not body.startswith("-"):
             break
         block.append((indent, body))
     if not block:
-        return False
+        return True   # `on:` with nothing readable under it
     base = block[0][0]
-    if any(indent == base and body.strip("- '\"") == "push" and body.startswith("-") for indent, body in block):
+    if any(indent == base and body.startswith("-") and body[1:].strip(" '\"") == "push" for indent, body in block):
         return True
     for j, (indent, body) in enumerate(block):
         m = re.fullmatch(r"push\s*:\s*(.*)", body)
@@ -314,9 +327,9 @@ def triggers_on_push(text: str, branch: str) -> bool:
             return True if not found else any(fnmatchcase(branch, p) for p in _scalars(found.group(1)))
         branches, ignored = _filter(deeper, "branches"), _filter(deeper, "branches-ignore")
         if branches is not None:
-            return any(fnmatchcase(branch, p) for p in branches)
+            return not branches or any(fnmatchcase(branch, p) for p in branches)   # empty: filters unknown
         if ignored is not None:
-            return not any(fnmatchcase(branch, p) for p in ignored)
+            return not ignored or not any(fnmatchcase(branch, p) for p in ignored)
         return _filter(deeper, "tags") is None and _filter(deeper, "tags-ignore") is None
     return False
 
@@ -339,7 +352,9 @@ def deploy_lines(gh: Gh, cfg: FleetConfig, d_by_short: Mapping[str, str]) -> lis
             if state != "active":
                 continue
             raw = gh.contents_raw(c.slug, f".github/workflows/{wf}", d_by_short.get(c.short, c.default_branch))
-            if raw is not None and triggers_on_push(raw.decode("utf-8", errors="replace"), c.default_branch):
+            if raw is None:
+                lines.append(f"{c.short}: {wf} is active; its trigger could not be read (assume merging deploys)")
+            elif triggers_on_push(raw.decode("utf-8", errors="replace"), c.default_branch):
                 lines.append(f"{c.short}: merging deploys to production ({wf} on push to {c.default_branch})")
     return lines
 

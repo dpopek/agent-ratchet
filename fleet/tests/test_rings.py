@@ -170,6 +170,7 @@ def test_canary_blocked_at_land_blocks_the_other_ring1_consumers(stub, cfg):
     assert stub.names("land") == ["beta"] and stub.names("gate") == []
     assert out["beta"].outcome.step == "ci"
     assert out["alpha"].outcome.state == "BLOCKED" and "canary beta is BLOCKED at ci" in out["alpha"].outcome.reason
+    assert out["alpha"].outcome.next_command == f"guard-fleet land {TAG}"
 
 
 def test_only_without_the_canary_blocks_the_other_ring1_consumers(stub, cfg):
@@ -356,11 +357,49 @@ def test_ring2_refused_when_the_canary_is_an_unlanded_bump(stub, cfg):
     assert ready is False and "beta" in why
 
 
-def test_ring2_ready_when_the_canary_never_ran_a_skip(stub, cfg):
+def test_ring2_ready_when_the_canary_is_skip_by_plan(stub, cfg):
     for short in ("alpha", "gamma"):
         stub.ledger.start_attempt(short, "b" * 40)
         stub.landed[short] = landed(short)
-    assert ring2_ready(stub, cfg, TARGET) == (True, "")
+    assert ring2_ready(stub, cfg, TARGET, skip_canaries={"beta"}) == (True, "")
+
+
+@pytest.mark.parametrize("attempted", [False, True])
+def test_ring2_refuses_a_canary_that_is_not_skip_by_plan_whatever_the_ledger_holds(stub, cfg, attempted):
+    for short in ("alpha", "gamma"):
+        stub.ledger.start_attempt(short, "b" * 40)
+        stub.landed[short] = landed(short)
+    if attempted:
+        stub.ledger.start_attempt("beta", "b" * 40)
+    ready, why = ring2_ready(stub, cfg, TARGET)   # beta: BUMP or plan-BLOCKED, never landed
+    assert ready is False and "canary beta" in why
+
+
+def test_ring_2_only_run_refuses_a_plan_blocked_canary(stub, cfg):
+    states = make_states(cfg, stub, decisions={"beta": "BLOCKED", "alpha": "SKIP", "gamma": "SKIP"})
+    out = by_short(run(stub, cfg, states, rings=(2,)))
+    assert stub.names("land") == [] and out["delta"].outcome.state == "BLOCKED" and "beta" in out["delta"].outcome.reason
+
+
+def test_ring_2_only_run_refuses_a_canary_left_out_of_the_states(stub, cfg):
+    out = by_short(run(stub, cfg, make_states(cfg, stub, drop=("beta",)), rings=(2,)))
+    assert "land" not in {c[0] for c in stub.calls}
+    assert out["delta"].outcome.state == "BLOCKED"
+
+
+def test_ring2_refused_after_a_wrong_head_merge_recorded_by_another_process(stub, cfg):
+    seed_landed_ring1(stub)
+    stub._record("alpha", "merge", "fail", "a" * 40)
+    ready, why = ring2_ready(stub, cfg, TARGET)
+    assert ready is False and "alpha FAILED" in why and "merge" in why
+
+
+def test_ring2_refused_when_the_ledger_has_unparsable_lines(stub, cfg):
+    seed_landed_ring1(stub)
+    with stub.ledger.path.open("ab") as fh:
+        fh.write(b"not json\n")
+    ready, why = ring2_ready(stub, cfg, TARGET)
+    assert ready is False and "unparsable" in why
 
 
 def test_ring2_ready_lets_network_and_auth_errors_propagate(stub, cfg):
@@ -456,19 +495,21 @@ def test_confirmation_table_lists_everything(stub, cfg):
         prs_to_close=["alpha: #7 superseded by the new PR"], canary_order=["beta"],
         deploy_lines=["alpha: merging deploys to production (deploy.yml on push to main)"],
         billing="Actions billing: ok", notes={"alpha": "alpha is busy"}, diff_lines=["diff: README only"],
-        rebuild_commits={"alpha": ["a" * 40 + " build(deps): pin agent-ratchet v4.0.1"]}, cfg=cfg)
+        rebuild_commits={"alpha": ["a" * 40 + " build(deps): pin agent-ratchet v4.0.1"],
+                         "gamma": None}, cfg=cfg)
     for needle in ("v4.0.1", T, "f" * 12, "G1", "hooks: worktree", "commit_env", "FLEET_COMMIT_NOTE=kept",
                    "superseded", "canary order: beta", "billing", "Actions billing: ok", "alpha is busy",
                    "diff: README only", "deploy.yml on push to main", "--rebuild", "build(deps): pin",
                    "required", "SKIP", "BUMP", "RING"):
         assert needle in table, needle
     assert "no canary ran" not in table
+    assert "--rebuild gamma: strict G8 fails" in table and "ledger recorded" not in table
 
 
 def test_confirmation_table_for_a_bare_run_still_names_every_section(stub, cfg):
     table = render_confirmation(TARGET, "f" * 40, make_states(cfg, stub), prs_to_open=[], prs_to_close=[],
                                 canary_order=[], deploy_lines=[], billing="Actions billing: ok", notes={},
-                                diff_lines=[], rebuild_commits={})
+                                diff_lines=[], rebuild_commits={}, cfg=cfg)
     for needle in ("PRs to open", "superseded", "canary", "Deploy:", "billing", "commit_env"):
         assert needle in table, needle
 
@@ -495,6 +536,14 @@ PUSH_MAIN = "name: Deploy\non:\n  push:\n    branches: [main]\njobs: {}\n"
     ('"on":\n  push:\n    branches: [main]  # deploy\n', True),
     ("name: x\njobs:\n  push:\n    runs-on: x\n", False),
     ("", False),
+    ("on:\n  push:\n    branches:\n    - main\n", True),
+    ("on:\n    push:\n        branches:\n        - main\n", True),
+    ("on:\n    push:\n        branches:\n            - develop\n", False),
+    ("on:\n- push\n", True),
+    ("on:\n  push:\n    branches: [\n      main\n    ]\n", True),
+    ("on:\n  push:\n    branches: [\n      develop,\n      next\n    ]\n", False),
+    ("on:\n  push:\n    branches:\n", True),
+    ("on:\n", True),
 ])
 def test_triggers_on_push_to_the_default_branch(text, expected):
     assert triggers_on_push(text, "main") is expected
@@ -518,6 +567,10 @@ def test_deploy_line_from_live_trigger_and_state(land_env):  # noqa: F811
     assert any("deploy.yml" in ln and "active" in ln and "queued" in ln for ln in lines)   # the deploy queue
     assert any("off.yml" in ln and "disabled_manually" in ln for ln in lines)
     assert any("gone.yml" in ln and "not found" in ln for ln in lines)
+    fake.workflows[(SLUG, "unreadable.yml")] = "active"   # active, but the file is not in the tree at D
+    alpha = dataclasses.replace(alpha, deploy_workflows=("unreadable.yml",))
+    lines = deploy_lines(land_env.ctx.gh, FleetConfig(cfg.worktree_root, (alpha,)), {"alpha": d})
+    assert "alpha: unreadable.yml is active; its trigger could not be read (assume merging deploys)" in lines
 
 
 def test_billing_state_reads_the_newest_default_branch_run(land_env):  # noqa: F811
