@@ -390,6 +390,28 @@ def test_hook_refusal_blocks_without_no_verify(roll_env):
 # -- resume ------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("link", ["scripts/guard", "scripts"])
+def test_c2_never_writes_through_a_tracked_symlink(roll_env, tmp_path, link):
+    import dataclasses
+    env = roll_env("gamma")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "guard").write_bytes(b"outside\n")
+    clone = env.clone
+    _git(clone, "rm", "-q", "-r", "scripts")          # a tracked symlink at scripts/guard, or at scripts itself
+    if link == "scripts/guard":
+        (clone / "scripts").mkdir()
+        os.symlink(outside / "guard", clone / "scripts" / "guard")
+    else:
+        os.symlink(outside, clone / "scripts")
+    new_d = commit_files(clone, "link", {})
+    r = prepare(env[0], env[1], dataclasses.replace(env[2], d=new_d))
+    assert (outside / "guard").read_bytes() == b"outside\n"                 # not overwritten through the link
+    assert sorted(p.name for p in outside.iterdir()) == ["guard"]           # nothing created there
+    assert not os.access(outside / "guard", os.X_OK)                        # nor chmod-ed
+    assert (r.state, r.step) == ("BLOCKED", "c2") and "symlink" in r.reason
+
+
 def test_resume_retries_interrupted_c2_with_fleet_dirt_only(roll_env):
     env = roll_env("alpha")
     hook = refuse_lock_commits(env)

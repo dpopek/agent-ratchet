@@ -375,7 +375,7 @@ class _Roll:
         assert self.base is not None and c.pin_file is not None
         files = self.c1_files(self.base)
         for path, data in files.items():
-            (self.wt / path).write_bytes(data)
+            self.write_file(path, data)
         paths = [c.pin_file]
         log = self.log_path("c1")
         if c.pin_kind == "pyproject":
@@ -402,10 +402,8 @@ class _Roll:
     def c2(self) -> None:
         ctx = self.ctx
         files = self.c2_files()
-        (self.wt / "scripts").mkdir(exist_ok=True)
         for path, data in files.items():
-            (self.wt / path).write_bytes(data)
-        (self.wt / "scripts" / "guard").chmod(0o755)
+            self.write_file(path, data, executable=path == "scripts/guard")
         ctx.git(self.wt, "add", "--", "guard.lock", "scripts/guard")
         mode = ctx.git(self.wt, "ls-files", "-s", "scripts/guard").text.split(maxsplit=1)[:1]
         if mode != ["100755"]:
@@ -415,6 +413,22 @@ class _Roll:
             raise _Blocked("c2", f"c2: changed paths {sorted(dirt)} differ from {sorted(files)}")
         self.hooks = hooks_line(ctx.git, self.wt)
         self.commit("c2", self.c2_msg, lock_update=ctx.lock_update, log=self.log_path("c2"))
+
+    def write_file(self, rel: str, data: bytes, *, executable: bool = False) -> None:
+        """Write W/rel without following a symlink at rel or at any parent below W: the fleet writes only in W."""
+        step, target, parts = self.step, self.wt, Path(rel).parts
+        for i, part in enumerate(parts):
+            target = target / part
+            if target.is_symlink():
+                raise _Blocked(step, f"{step}: {target.relative_to(self.wt)} is a symlink; the fleet writes only "
+                               f"inside its worktree")
+            if i < len(parts) - 1:
+                target.mkdir(exist_ok=True)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o666)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            if executable:
+                os.fchmod(fh.fileno(), 0o755)
 
     def commit(self, step: str, message: str, *, lock_update: bool, log: Path) -> None:
         ctx = self.ctx
