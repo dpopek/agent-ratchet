@@ -30,23 +30,46 @@ def _replace_strings(value: object, p: str, t: str) -> object:
     return value
 
 
+def _is_agent_ratchet(pkg: object) -> bool:
+    return isinstance(pkg, dict) and pkg.get("name") == AGENT_RATCHET
+
+
+def _agent_ratchet_entries(data: dict) -> list[dict]:
+    packages = data.get("package")
+    return [pkg for pkg in packages if _is_agent_ratchet(pkg)] if isinstance(packages, list) else []
+
+
 def _drop_agent_ratchet(data: dict) -> dict:
     packages = data.get("package")
     if not isinstance(packages, list):
         return data
-    kept = [pkg for pkg in packages if not (isinstance(pkg, dict) and pkg.get("name") == AGENT_RATCHET)]
-    return {**data, "package": kept}
+    return {**data, "package": [pkg for pkg in packages if not _is_agent_ratchet(pkg)]}
 
 
-def uvlock_equal(base: bytes, head: bytes, p: str, t: str) -> bool:
-    """BASE and H parse equal once every agent-ratchet [[package]] is dropped and P reads as T on the base side."""
+def uvlock_problem(base: bytes, head: bytes, p: str, t: str) -> str | None:
+    """None iff H's uv.lock is BASE's with P read as T, except inside the agent-ratchet [[package]] entries. Those
+    may change version, dependencies and artifacts, but H keeps BASE's number of them and each H entry's `source`
+    is the matching BASE entry's `source` with P -> T (a foreign source is exactly what G8 exists to catch)."""
     try:
         b = tomllib.loads(base.decode("utf-8"))
         h = tomllib.loads(head.decode("utf-8"))
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
-        return False
-    b = _drop_agent_ratchet(_replace_strings(b, p, t))   # type: ignore[arg-type]
-    return canonical_toml(b) == canonical_toml(_drop_agent_ratchet(h))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        return f"uv.lock does not parse: {exc}"
+    b = _replace_strings(b, p, t)   # type: ignore[assignment]
+    b_ar, h_ar = _agent_ratchet_entries(b), _agent_ratchet_entries(h)
+    if len(b_ar) != len(h_ar):
+        return f"uv.lock has {len(h_ar)} agent-ratchet [[package]] entries at H, BASE has {len(b_ar)}"
+    for b_entry, h_entry in zip(b_ar, h_ar):
+        if h_entry.get("source") != b_entry.get("source"):
+            return (f"uv.lock: agent-ratchet source at H is {h_entry.get('source')!r}, expected BASE's with P -> T: "
+                    f"{b_entry.get('source')!r}")
+    if canonical_toml(_drop_agent_ratchet(b)) != canonical_toml(_drop_agent_ratchet(h)):
+        return "uv.lock differs from BASE beyond the agent-ratchet entry and P -> T"
+    return None
+
+
+def uvlock_equal(base: bytes, head: bytes, p: str, t: str) -> bool:
+    return uvlock_problem(base, head, p, t) is None
 
 
 def _commits(git: Git, repo: Path, base: str, head: str) -> list[str]:
@@ -127,8 +150,12 @@ def _problems(git: Git, repo: Path, mirror: Path, consumer: Consumer, *, base: s
         problems.append(f"scripts/guard at H has mode {mode}, expected 100755")
     if uv:
         before, after = show_bytes(git, repo, base, UV_LOCK), show_bytes(git, repo, head, UV_LOCK)
-        if before is None or after is None or not uvlock_equal(before, after, p, t):
-            problems.append("uv.lock differs from BASE beyond the agent-ratchet entry and P -> T")
+        if before is None or after is None:
+            problems.append(f"uv.lock is missing at {'BASE' if before is None else 'H'}")
+        else:
+            problem = uvlock_problem(before, after, p, t)
+            if problem:
+                problems.append(problem)
     return problems
 
 

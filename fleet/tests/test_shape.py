@@ -3,7 +3,7 @@
 import pytest
 
 from guard_fleet.lockfile import render_lock
-from guard_fleet.shape import check, uvlock_equal
+from guard_fleet.shape import check, uvlock_equal, uvlock_problem
 from repos import _git, commit_files
 from test_roll import C1_MSG, NEW_SHIM, OLD_SHIM, PIN_URL, build_env, uv_lock_text
 
@@ -18,9 +18,9 @@ def c2_msg(env):
 def shape_env(tmp_path, fleet_home):
     """Builds BASE..H by hand in a worktree of alpha (or beta / gamma) and runs `shape.check` on it."""
     def make(name="alpha", *, mutate_pin=None, c1_extra=None, c2_extra=None, extra_commit=False, lock=None,
-             shim=NEW_SHIM, shim_mode="755", uv_lock=None):
-        env = build_env(tmp_path, fleet_home, name, extra_files={"requirements-dev.txt": PIN} if name == "alpha"
-                        else None)
+             shim=NEW_SHIM, shim_mode="755", uv_lock=None, base_files=None):
+        extra = {**({"requirements-dev.txt": PIN} if name == "alpha" else {}), **(base_files or {})}
+        env = build_env(tmp_path, fleet_home, name, extra_files=extra or None)
         ctx, consumer, row = env
         p, t = env.p, env.t
         wt = tmp_path / "w"
@@ -35,7 +35,7 @@ def shape_env(tmp_path, fleet_home):
                 pin = pin.replace("# dev tools", "# dev tools!")
             files = {consumer.pin_file: pin, **(c1_extra or {})}
             if consumer.pin_kind == "pyproject":
-                files["uv.lock"] = uv_lock if uv_lock is not None else uv_lock_text(t)
+                files["uv.lock"] = uv_lock.replace("@T@", t) if uv_lock is not None else uv_lock_text(t)
             commit_files(wt, C1_MSG, files)
         lock_bytes = render_lock(t, "none" if lock == "no-extras" else row.extras)
         commit_files(wt, c2_msg(env), {"guard.lock": lock_bytes, **(c2_extra or {})})
@@ -113,10 +113,47 @@ version = "8.0.0"
 def test_g8_uv_lock_ignores_only_agent_ratchet_entry():
     head = BASE_LOCK.replace(P, T).replace('version = "4.0.0"', 'version = "4.0.1"')
     assert uvlock_equal(BASE_LOCK.encode(), head.encode(), P, T)
-    # the agent-ratchet entry may change in any way, even disappear
+    assert uvlock_problem(BASE_LOCK.encode(), head.encode(), P, T) is None
+
+
+def test_g8_uv_lock_agent_ratchet_version_deps_and_artifacts_may_change():
     entry = AR_ENTRY.replace(P, T).replace('version = "4.0.0"', 'version = "4.0.1"')
-    assert entry in head
-    assert uvlock_equal(BASE_LOCK.encode(), head.replace(entry, "").encode(), P, T)
+    changed = entry.replace("\n\n", '\ndependencies = [{ name = "tomli" }]\n'
+                            'optional-dependencies = { php = [{ name = "tree-sitter" }] }\n'
+                            'sdist = { url = "https://example.com/a.tar.gz", hash = "sha256:00" }\n'
+                            'wheels = [{ url = "https://example.com/a.whl", hash = "sha256:11" }]\n\n')
+    head = BASE_LOCK.replace(P, T).replace(AR_ENTRY.replace(P, T), changed)
+    assert changed in head
+    assert uvlock_equal(BASE_LOCK.encode(), head.encode(), P, T)
+
+
+FORKED = f"https://github.com/other/agent-ratchet?rev={T}#{T}"
+
+
+@pytest.mark.parametrize("edit, word", [
+    (lambda h: h.replace(f"https://github.com/dpopek/agent-ratchet?rev={T}#{T}", FORKED), "source"),   # forked
+    (lambda h: h.replace(f"rev={T}#{T}", f"rev={T}#{P}"), "source"),                  # P left in the source
+    (lambda h: h.replace(AR_ENTRY.replace(P, T), ""), "agent-ratchet"),               # entry removed
+    (lambda h: h + "\n" + AR_ENTRY.replace(P, T), "agent-ratchet"),                   # entry duplicated
+    (lambda h: h.replace(f'source = {{ git = "https://github.com/dpopek/agent-ratchet?rev={T}#{T}" }}\n', ""),
+     "source"),                                                                       # source dropped
+])
+def test_g8_uv_lock_agent_ratchet_source_is_pinned_to_target(edit, word):
+    head = edit(BASE_LOCK.replace(P, T))
+    assert head != BASE_LOCK.replace(P, T)
+    assert not uvlock_equal(BASE_LOCK.encode(), head.encode(), P, T)
+    problem = uvlock_problem(BASE_LOCK.encode(), head.encode(), P, T)
+    assert problem is not None and word in problem and "agent-ratchet" in problem
+
+
+@pytest.mark.parametrize("fork, verdict", [(False, "PASS"), (True, "FAIL")])
+def test_g8_forked_agent_ratchet_source_fails_the_gate(shape_env, fork, verdict):
+    head = BASE_LOCK.replace(P, "@T@").replace('version = "4.0.0"', 'version = "4.0.1"')
+    if fork:
+        head = head.replace("github.com/dpopek/agent-ratchet?rev=", "github.com/other/agent-ratchet?rev=")
+    r = shape_env("beta", base_files={"uv.lock": BASE_LOCK.replace(P, "@P@")}, uv_lock=head)
+    assert r.verdict == verdict, r.reason
+    assert (verdict == "PASS") or "agent-ratchet source" in r.reason
 
 
 @pytest.mark.parametrize("edit", [
