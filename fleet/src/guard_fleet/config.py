@@ -169,7 +169,8 @@ def _consumer(raw: dict, index: int, home: Path) -> Consumer:
         pin_kind=pin_kind, pin_file=pin_file, ring=ring, ci=ci, ci_wait_min=wait,  # type: ignore[arg-type]
         deploy_workflows=_strs(who, raw, "deploy_workflows"),
         quiet_before_merge=_strs(who, raw, "quiet_before_merge"),
-        commit_env=dict(commit_env), node_modules=node_modules, hook_needs=tuple(hook_needs),
+        commit_env={k: expand(v, dir=dir_, home=home) for k, v in commit_env.items()},
+        node_modules=node_modules, hook_needs=tuple(hook_needs),
         venvs=venvs, surfaces=frozenset(surfaces), confirm_note=_str(who, raw, "confirm_note", ""))
 
 

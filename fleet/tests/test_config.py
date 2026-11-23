@@ -114,6 +114,15 @@ def test_config_accepts_allowed_commit_env(tmp_path):
     assert dict(cfg.by_short("alpha").commit_env) == {"FOO": "1"}
 
 
+def test_config_expands_dir_and_home_in_commit_env_values(tmp_path):
+    # spec 6.2: paths expand {dir} and ~; a hook reads the variable and must get the absolute interpreter path
+    cfg = load_config(write(tmp_path, ALPHA_IF_RUN + 'commit_env = { ALPHA_HOOK_PYTHON = "{dir}/venv/bin/python", '
+                                                     'ALPHA_TOOL = "~/bin/tool", FOO = "1" }\n'), home=tmp_path)
+    alpha = cfg.by_short("alpha")
+    assert dict(alpha.commit_env) == {"ALPHA_HOOK_PYTHON": f"{alpha.dir}/venv/bin/python",
+                                      "ALPHA_TOOL": f"{tmp_path}/bin/tool", "FOO": "1"}
+
+
 def test_config_pin_file_rules(tmp_path):
     with pytest.raises(ConfigError, match="pin_file"):
         load_config(write(tmp_path, ALPHA_IF_RUN.replace('pin_file = "requirements-dev.txt"\n', "")), home=tmp_path)
