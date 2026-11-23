@@ -122,6 +122,15 @@ def test_profile_table_covers_both_outcomes():
     assert len(PROFILE_TABLE) >= 12
 
 
+def test_missing_config_profile_matches_default_guard_config():
+    cfg = git_guard_io.default_guard_config()
+    ours = profile.parse_profile(None)
+    assert ours.status == "missing"
+    assert (profile.php_active(ours), profile.magento_active(ours)) == (
+        php_profile_active(cfg), "magento" in cfg.get("frameworks", ()))
+    assert ("src/agent_ratchet/git_guard_io.py", "default_guard_config") in fingerprints.FINGERPRINT_TARGETS
+
+
 def test_fingerprints_match_code_at_this_commit():
     tree = load_tree_from_worktree(ROOT)
     assert fingerprints.mismatches(tree) == ()

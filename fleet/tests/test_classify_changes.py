@@ -174,7 +174,7 @@ def test_real_version_py_is_in_the_accepted_form():
 
 def test_fingerprint_targets_and_reviewed_ids_agree():
     ids = {f"{path}::{name}" for path, name in FINGERPRINT_TARGETS}
-    assert set(REVIEWED) == ids and len(ids) == 5
+    assert set(REVIEWED) == ids and len(ids) == 6
     assert all(REVIEWED[i] and all(len(d) == 64 for d in REVIEWED[i]) for i in ids)
 
 
@@ -193,6 +193,15 @@ def test_absent_or_altered_definitions_are_mismatches():
     rebound = real[SCOPE_PATH] + "\n\nphp_profile_active = bool\n"          # a later rebinding wins at runtime
     assert mismatches(tree_from({**real, SCOPE_PATH: rebound})) == (SCOPE_ID,)
     assert mismatches(tree_from({**real, SCOPE_PATH: real[SCOPE_PATH] + "\n(\n"})) == (SCOPE_ID,)
+
+
+def test_a_changed_default_config_is_a_mismatch():
+    # the loader returns default_guard_config() when the config is missing; turning php on there must not pass
+    real = {path: data.decode("utf-8") for path, data in defining_files().items()}
+    io_path = "src/agent_ratchet/git_guard_io.py"
+    assert '"languages": [], "frameworks": []' in real[io_path]
+    php_default = real[io_path].replace('"languages": [], "frameworks": []', '"languages": ["php"], "frameworks": []', 1)
+    assert mismatches(tree_from({**real, io_path: php_default})) == (f"{io_path}::default_guard_config",)
 
 
 def test_a_symlinked_definition_file_is_a_mismatch():

@@ -21,6 +21,7 @@ FINGERPRINT_TARGETS: tuple[tuple[str, str], ...] = (
     ("src/agent_ratchet/git_guard_io.py", "_parse_profile"),
     ("src/agent_ratchet/git_guard_io.py", "load_guard_config_for_ref"),
     ("src/agent_ratchet/git_guard_io.py", "_read_guard_config_for_ref"),
+    ("src/agent_ratchet/git_guard_io.py", "default_guard_config"),   # the profile of a missing config
 )
 
 # Digests of `canonical(FunctionDef)` per target, computed from this repository's tags v4.0.0…v4.3.4 (identical
@@ -44,6 +45,12 @@ REVIEWED: Mapping[str, frozenset[str]] = MappingProxyType({
     }),
     "src/agent_ratchet/git_guard_io.py::_read_guard_config_for_ref": frozenset({
         "a9820ea521f15fa308cd61e812f5a7634c8df672422cd95e0b0f18fe2db1c4a4",   # v4.0.0–v4.3.4
+    }),
+    # every reviewed class returns "languages": [] and "frameworks": [] (core only)
+    "src/agent_ratchet/git_guard_io.py::default_guard_config": frozenset({
+        "3dd11a466b02b39ecfb68282e5ca06041f5f3b21e68f642515b41b5a2a22dbb2",   # v4.0.0–v4.0.1
+        "7bb4afa73b3d29c30ec9052fae82106775b1ee0257ca89760f426e76c1dd9e6e",   # v4.1.0–v4.1.4
+        "52ff906539da77d1af3b8d1622354d83b8d48812d83b7c94952e71eb818e00bd",   # v4.2.0–v4.3.4
     }),
 })
 

@@ -97,6 +97,7 @@ def test_reviewed_digests_group_the_tags_as_reviewed(repo_git, peel, head_sha):
         "load_guard_config_for_ref": sorted([v40, v41 + v42]),
         "_parse_profile": [v40 + v41 + v42],
         "_read_guard_config_for_ref": [v40 + v41 + v42],
+        "default_guard_config": sorted([v40, v41, v42]),
     }
     assert by_target["src/agent_ratchet/php/scope.py::php_profile_active"].get(None) == v40
     for target, found in by_target.items():
