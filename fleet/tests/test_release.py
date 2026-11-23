@@ -302,20 +302,38 @@ def test_hold_ring_2_exit_0_then_land_ring_2(release_env):
     assert release_env.confirm.reasons[1] == f"land {TAG} ({release_env.t[:7]}): ring 2 gamma"
 
 
-def test_rerun_reverifies_and_cleans_current_consumers(release_env):
+def _push_leftover(env, short):
+    head = env.records(short, "merge")[-1].head
+    _git(env.clones[short], "push", "-q", "origin", f"{head}:refs/heads/{BRANCH}")
+    assert env.remote_branch(short) != ""
+
+
+def test_rerun_reverifies_and_only_lists_cleanup_without_a_confirmation(release_env):
     assert release_env.release() is FleetExit.OK
-    head = release_env.records("alpha", "merge")[-1].head
-    _git(release_env.clones["alpha"], "push", "-q", "origin", f"{head}:refs/heads/{BRANCH}")   # a leftover
-    assert release_env.remote_branch("alpha") != ""
+    _push_leftover(release_env, "alpha")
     merges = len(release_env.merged())
     verified = len(release_env.records("alpha", "verify"))   # ring2_ready re-verifies ring 1 too
-    assert release_env.release() is FleetExit.OK
+    assert release_env.release() is FleetExit.OK                        # a deferred cleanup is not "kept"
     assert len(release_env.confirm.reasons) == 1                        # nothing GATED: no second confirmation
     assert len(release_env.merged()) == merges
-    assert release_env.remote_branch("alpha") == ""                     # cleaned on the rerun
+    assert release_env.remote_branch("alpha") != ""                     # R22.5: no deletion without a confirmation
     assert [r.detail["verdict"] for r in release_env.records("alpha", "verify")] == ["pass"] * (verified + 1)
     assert [r.detail["verdict"] for r in release_env.records("beta", "push-run")] == ["pass", "pass"]
-    assert release_env.end() == {"alpha": "CURRENT", "beta": "CURRENT", "gamma": "CURRENT"}
+    end = release_env.end()
+    assert end["beta"] == end["gamma"] == "CURRENT"
+    assert end["alpha"] == f"CURRENT (cleanup pending: {BRANCH} (remote))"
+    assert f"alpha: guard-fleet cleanup {TAG} --remote\n" in release_env.out()
+
+
+def test_rerun_cleanup_runs_after_this_runs_confirmation(release_env):
+    assert release_env.release(hold_ring_2=True) is FleetExit.OK
+    _push_leftover(release_env, "alpha")
+    release_env.confirm = FakeConfirm(["cancelled", "approved"])
+    assert release_env.land(rings=(2,)) is FleetExit.CANCELLED            # gamma re-gated, confirmation refused
+    assert release_env.remote_branch("alpha") != ""                       # alpha re-verified, cleanup only listed
+    assert release_env.land(rings=(2,)) is FleetExit.OK                   # approved: cleanup under that approval
+    assert release_env.remote_branch("alpha") == ""
+    assert release_env.end() == {"alpha": "CURRENT", "beta": "CURRENT", "gamma": "LANDED"}
 
 
 def test_land_needs_the_env_var_only_with_rebuild(release_env):
@@ -328,6 +346,21 @@ def test_land_without_a_roll_lands_nothing_and_points_at_release(release_env):
     assert release_env.land() is FleetExit.BLOCKED
     assert release_env.confirm.reasons == [] and release_env.remote_side_effects() == []
     assert f"Run: ALLOW_GUARD_LOCK_UPDATE=1 guard-fleet release {TAG}" in release_env.out()
+
+
+def test_end_table_next_release_command_under_markers_has_no_ready_line(release_env):
+    release_env.deps.environ["CLAUDECODE"] = "1"
+    assert release_env.land() is FleetExit.BLOCKED
+    out = release_env.out()
+    assert f"alpha: Run in your own terminal: guard-fleet release {TAG}" in out
+    assert "ALLOW_GUARD_LOCK_UPDATE=1 set by you" in out
+    assert "ALLOW_GUARD_LOCK_UPDATE=1 guard-fleet" not in out and "Run: " not in out
+
+
+def test_rebuild_outside_the_selected_ring_is_a_usage_error(release_env):
+    with pytest.raises(UsageError, match="--rebuild alpha: it is in ring 1, not in --ring 2"):
+        release_env.land(rings=(2,), rebuild=("alpha",), lock_update=True)
+    assert release_env.calls == [] and release_env.fake.argvs == []    # before any lock, git or GitHub call
 
 
 def test_land_regates_existing_worktrees_and_lands_them(release_env):
@@ -386,6 +419,9 @@ def test_network_lost_after_a_merge_is_failed_with_the_resume_command(release_en
     assert release_env.release() is FleetExit.FAILED
     assert release_env.merged() == ["beta", "alpha"]
     assert f"Resume: {RESUME}" in release_env.deps.err.getvalue()
+    end = release_env.end()                                              # the end table is printed even so
+    assert end["beta"] == end["alpha"] == "LANDED"
+    assert end["gamma"] == "NOT RUN land: network lost: not merged"
 
 
 def test_a_failed_canary_push_run_is_exit_6_and_nothing_else_merges(release_env):
@@ -394,6 +430,15 @@ def test_a_failed_canary_push_run_is_exit_6_and_nothing_else_merges(release_env)
     assert release_env.merged() == ["beta"]
     end = release_env.end()
     assert end["beta"].startswith("FAILED push-run: ") and end["alpha"].startswith("NOT RUN")
+
+
+def test_no_helper_with_a_blocked_consumer_exits_1_before_any_push(tmp_path, fleet_home):
+    env = ReleaseEnv(tmp_path, fleet_home, locks={"gamma": "not a lock\n"})
+    env.confirm = FakeConfirm(["no_helper"])
+    assert env.release() is FleetExit.BLOCKED                           # 1 outranks 5 (spec 6.12)
+    assert env.remote_side_effects() == []
+    gamma = env.end()["gamma"]
+    assert gamma.startswith("BLOCKED plan: ") and gamma.endswith("guard.lock unparseable")
 
 
 def test_plan_blocked_consumer_does_not_stop_the_others(tmp_path, fleet_home):

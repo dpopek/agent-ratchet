@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from . import venvs
+from .cleanup import CleanupContext, Item, cleanup_landed, collect
 from .config import Consumer, FleetConfig
 from .confirm import ask, reason_text
 from .deps import Deps
@@ -67,6 +68,9 @@ class _Run:
         self.branch = ""
         self.states: dict[str, ConsumerState] = {}   # every consumer of this run (not left out by --only)
         self.rings: tuple[int, ...] = (1, 2)
+        self.deferred: list[str] = []            # re-verified LANDED: cleanup waits for this run's confirmation
+        self.pending: dict[str, list[Item]] = {}  # deferred cleanup never run: listed in the end table
+        self.unconfirmed = False                 # stopped at the confirmation (no helper, cancelled, timeout)
 
     # -- setup -----------------------------------------------------------------
 
@@ -134,11 +138,47 @@ class _Run:
             if s is None or s.plan.decision != "CURRENT":
                 continue
             if c.short in attempted:
-                self.put(c.short, outcome=lander.reverify_current(c, canary=c.short in canaries))
+                self.put(c.short, outcome=self.reverify_one(lander, c, canary=c.short in canaries))
             else:   # current without a fleet roll for this tag: nothing to verify, nothing to land
                 self.put(c.short, outcome=Outcome(c.short, "LANDED", "current", s.plan.reason, None, None, None,
                                                   False))
         return not any(s.outcome is not None and s.outcome.state == "FAILED" for s in self.states.values())
+
+    def reverify_one(self, lander: Lander, c: Consumer, *, canary: bool) -> Outcome:
+        """Lander.reverify_current without its cleanup: that waits for this run's confirmation (R22.5)."""
+        out = lander.merged_verified(c)
+        if out.state == "LANDED" and canary:
+            assert out.merge_sha is not None
+            gate = lander.push_run_gate(c, out.merge_sha)
+            if gate is not None:
+                out = dataclasses.replace(gate, pr_url=out.pr_url)
+        if out.state == "LANDED":
+            assert out.merge_sha is not None
+            for line in lander.deploy_report(c, out.merge_sha):
+                self.deps.out.write(line + "\n")
+            self.deferred.append(c.short)
+        return out
+
+    def cleanup_ctx(self) -> CleanupContext:
+        return CleanupContext(self.deps, self.git, self.gh, self.ctx.mirror, self.cfg)
+
+    def clean_deferred(self) -> None:
+        """After this run's confirmation: clean up the re-verified consumers, under that approval."""
+        for short in self.deferred:
+            done = cleanup_landed(self.cleanup_ctx(), self.cfg.by_short(short), self.version)
+            out = self.states[short].outcome
+            assert out is not None
+            self.put(short, outcome=dataclasses.replace(out, cleanup=tuple(line for _, line in done),
+                                                        cleanup_kept=any(not removed for removed, _ in done)))
+        self.deferred = []
+
+    def list_deferred(self) -> None:
+        """No confirmation in this run: nothing is removed, the leftovers are listed (read only)."""
+        for short in self.deferred:
+            items = collect(self.cleanup_ctx(), self.cfg.by_short(short), version=self.version, remote=True)
+            if items:
+                self.pending[short] = items
+        self.deferred = []
 
     # -- roll ------------------------------------------------------------------
 
@@ -239,9 +279,22 @@ class _Run:
                              hold_ring_2=hold_ring_2)
         except NETWORK_ERRORS as exc:
             new = self.ctx.ledger.records()[0][before:]
-            merged = any(r.step == "merge" and r.detail.get("merge") for r in new)
-            self.deps.err.write(f"{network_kind(exc)}: {exc}\nResume: {resume_command(self.target.tag)}\n")
-            return FleetExit.FAILED if merged else FleetExit.CANCELLED
+            merges = {r.consumer: str(r.detail["merge"]) for r in new if r.step == "merge" and r.detail.get("merge")}
+            verified = {r.consumer for r in new if r.step == "verify" and r.detail.get("verdict") == "pass"}
+            kind = network_kind(exc)
+            for short, s in list(self.states.items()):   # the outcomes died with land_rings: rebuild from the ledger
+                if s.outcome is not None or s.plan.decision != "BUMP" or not self.in_rings(self.cfg.by_short(short)):
+                    continue
+                merge = merges.get(short)
+                if merge and short in verified:
+                    out = Outcome(short, "LANDED", "verify", "", None, merge, None, False)
+                else:
+                    why = f"{kind}: merged {merge[:12]}, not verified" if merge else f"{kind}: not merged"
+                    out = Outcome(short, "NOT_RUN", "land", why, None, merge, resume_command(self.target.tag), False)
+                self.put(short, outcome=out)
+            self.finish(live=False)   # the network is gone: no venv report
+            self.deps.err.write(f"{kind}: {exc}\nResume: {resume_command(self.target.tag)}\n")
+            return FleetExit.FAILED if merges else FleetExit.CANCELLED
         self.states = {s.short: s for s in out}
         return None
 
@@ -260,6 +313,11 @@ class _Run:
                 if out.cleanup_kept:
                     return EndState(c.short, f"{state} (cleanup kept: {'; '.join(out.cleanup)})",
                                     "guard-fleet cleanup"), FleetExit.BLOCKED
+                items = self.pending.get(c.short)
+                if items:   # deferred, not kept: it does not make the run BLOCKED
+                    remote = " --remote" if any(i.remote_head for i in items) else ""
+                    return (EndState(c.short, f"{state} (cleanup pending: {'; '.join(map(_where, items))})",
+                                     f"guard-fleet cleanup {tag}{remote}"), FleetExit.OK)
                 return EndState(c.short, state, None), FleetExit.OK
             if out.state == "HELD":
                 return EndState(c.short, "HELD", out.next_command), FleetExit.OK
@@ -280,18 +338,23 @@ class _Run:
             nxt = f"guard-fleet release {tag}"
             return EndState(c.short, "BLOCKED roll: not rolled", nxt, True), FleetExit.BLOCKED
         if s.rolled.state == "BLOCKED":
-            return (EndState(c.short, f"BLOCKED {s.rolled.step}: {s.rolled.reason}", s.rolled.manual_step),
+            nxt = s.rolled.manual_step or f"guard-fleet {self.command} {tag}"
+            return (EndState(c.short, f"BLOCKED {s.rolled.step}: {s.rolled.reason}", nxt, self.needs_flag(nxt)),
                     FleetExit.BLOCKED)
-        return EndState(c.short, "GATED, not landed", resume_command(tag)), FleetExit.BLOCKED
+        # stopped at the confirmation: the confirmation's own code (4 or 5) speaks for it
+        code = FleetExit.OK if self.unconfirmed else FleetExit.BLOCKED
+        return EndState(c.short, "GATED, not landed", resume_command(tag)), code
 
     @staticmethod
     def needs_flag(next_command: str | None) -> bool:
         return bool(next_command) and (next_command.startswith("guard-fleet release ")   # type: ignore[union-attr]
                                        or " --rebuild " in next_command)               # type: ignore[operator]
 
-    def finish(self, extra: Sequence[FleetExit] = ()) -> FleetExit:
+    def finish(self, extra: Sequence[FleetExit] = (), *, live: bool = True) -> FleetExit:
+        if live:
+            self.list_deferred()
         ends = [self.end_state(c) for c in self.cfg.consumers]
-        drift = venvs.drifted(venvs.report(self.deps, self.git, self.gh, self.cfg, only=()))
+        drift = live and venvs.drifted(venvs.report(self.deps, self.git, self.gh, self.cfg, only=()))
         self.deps.out.write(render_end([e for e, _ in ends], markers=self.markers, venv_drift=drift))
         return combine([*(code for _, code in ends), *extra])
 
@@ -303,11 +366,21 @@ class _Run:
                                                 resume_command(self.target.tag), False))
 
 
+def _where(item: Item) -> str:
+    parts = [name for name, there in (("worktree", item.worktree), ("local", item.local_head),
+                                      ("remote", item.remote_head)) if there]
+    return f"{item.branch} ({', '.join(parts)})"
+
+
 def _run(deps: Deps, cfg: FleetConfig, opts: Options, *, command: str, lock_update: bool, running_sha: str,
          typed: str, needs_flag: bool, roll_new: bool, rings: tuple[int, ...], hold_ring_2: bool) -> FleetExit:
     check_tag_syntax(opts.tag)   # before any lock or git call
     for short in (*opts.only, *opts.rebuild):
         cfg.by_short(short)
+    for short in opts.rebuild:   # before any local mutation: a rebuilt consumer outside the rings never lands
+        ring = cfg.by_short(short).ring
+        if ring not in rings:
+            raise UsageError(f"--rebuild {short}: it is in ring {ring}, not in --ring {', '.join(map(str, rings))}")
     run = _Run(deps, cfg, opts, command=command, lock_update=lock_update, running_sha=running_sha)
     run.rings = rings
     run.git, run.gh = _clients(deps)
@@ -338,11 +411,13 @@ def _run(deps: Deps, cfg: FleetConfig, opts: Options, *, command: str, lock_upda
             ask(deps, table, reason)
         except NoHelper as exc:
             deps.err.write(f"no confirmation helper: {exc}\n")
-            run.finish()
-            return FleetExit.NO_HELPER   # spec: exit 5 before any push, whatever the plan rows say
+            run.unconfirmed = True
+            return run.finish([FleetExit.NO_HELPER])
         except Cancelled as exc:
             deps.err.write(f"confirmation not given: {exc}\n")
+            run.unconfirmed = True
             return run.finish([FleetExit.CANCELLED])
+        run.clean_deferred()
         flags = frozenset(f"{REBUILD_FLAG}{short}" for short in opts.rebuild)
         approval = Approval(run.target.tag, run.target.sha,
                             {s.short: s.rolled.head for s in gated if s.rolled and s.rolled.head}, flags)
