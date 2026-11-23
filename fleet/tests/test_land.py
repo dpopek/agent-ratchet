@@ -6,7 +6,9 @@ import json
 import pytest
 
 from fakes import Route, _http
+from guard_fleet import land as land_mod
 from guard_fleet.gh import GhNetworkError
+from guard_fleet.git import GitError, GitNetworkError
 from guard_fleet.land import GOVERNANCE_JOB, REBUILD_FLAG, Approval, Lander, RebuildBlocked
 from guard_fleet.lockfile import render_lock
 from guard_fleet.mirror import UPSTREAM_URL
@@ -240,7 +242,74 @@ def test_quiet_before_merge_waits_until_the_queue_drains(land_env, fake_clock):
         return orig(argv, slug, env)
     land_env.fake._run_list = draining
     out = land_env.lander.land_consumer(alpha, land_env.rolled)
-    assert out.state == "LANDED" and len(seen) == 2   # busy once, drained on the next poll
+    assert out.state == "LANDED" and len(seen) == 3   # busy once, drained, then the premerge re-run's quiet poll
+    assert land_env.count_calls("contents/guard.lock") == 2   # premerge ran again after the wait
+
+
+def test_main_moving_into_a_gate_input_during_the_quiet_wait_blocks(land_env, fake_clock):
+    land_env.answer_gate_ask()
+    alpha = dataclasses.replace(land_env.alpha, quiet_before_merge=("deploy.yml",))
+    run = {"databaseId": 5, "workflowFile": "deploy.yml", "headBranch": "main", "status": "queued", "headSha": "x"}
+    land_env.fake.runs[SLUG] = [run]
+    orig = land_env.fake._run_list
+    seen = []
+
+    def draining(argv, slug, env):   # main moves into a gate input while the deploy queue drains
+        seen.append(argv)
+        if len(seen) == 1:
+            land_env.move_main({"tests/ci/test_new.py": "def test_x():\n    pass\n"})
+        else:
+            run["status"] = "completed"
+        return orig(argv, slug, env)
+    land_env.fake._run_list = draining
+    out = land_env.lander.land_consumer(alpha, land_env.rolled)
+    assert (out.state, out.step) == ("BLOCKED", "premerge") and "tests/ci/test_new.py" in out.reason
+    assert merge_calls(land_env) == [] and land_env.pr(1)["state"] == "CLOSED"
+
+
+def test_quiet_re_runs_are_bounded_and_share_one_wait_budget(land_env, fake_clock):
+    alpha = dataclasses.replace(land_env.alpha, quiet_before_merge=("deploy.yml",))
+    run = {"databaseId": 5, "workflowFile": "deploy.yml", "headBranch": "main", "status": "queued", "headSha": "x"}
+    land_env.fake.runs[SLUG] = [run]
+    orig = land_env.fake._run_list
+    seen = []
+
+    def flapping(argv, slug, env):   # every premerge sees one busy poll, then a drained one
+        seen.append(argv)
+        run["status"] = "queued" if len(seen) % 2 else "completed"
+        return orig(argv, slug, env)
+    land_env.fake._run_list = flapping
+    start = fake_clock.monotonic()
+    out = land_env.lander.land_consumer(alpha, land_env.rolled)
+    assert (out.state, out.step) == ("BLOCKED", "premerge") and "re-runs" in out.reason
+    assert out.keep_pr_open and out.next_command == f"guard-fleet land {TAG}"
+    assert land_env.count_calls("contents/guard.lock") == 1 + land_mod.PREMERGE_RERUNS
+    assert merge_calls(land_env) == [] and land_env.pr(1)["state"] == "OPEN"
+    assert fake_clock.monotonic() - start <= alpha.ci_wait_min * 60 + 60
+
+
+def test_ci_verdict_other_than_pass_fails_closed(land_env, monkeypatch):
+    monkeypatch.setattr(land_mod, "wait_for_ci", lambda *a, **k: ("pending", []))
+    out = land_env.lander.land_consumer(land_env.alpha, land_env.rolled)
+    assert (out.state, out.step) == ("BLOCKED", "ci") and "pending" in out.reason and out.keep_pr_open
+    assert merge_calls(land_env) == []
+
+
+@pytest.mark.parametrize("network", [False, True])
+def test_a_git_error_in_the_base_moved_diff_blocks_network_loss_propagates(land_env, monkeypatch, network):
+    land_env.move_main({"docs/notes.md": "notes\n"})
+    err = (GitNetworkError if network else GitError)(Result(("git", "diff"), 128, b"", b"fatal: bad", False))
+
+    def boom(*a, **k):
+        raise err
+    monkeypatch.setattr(land_env.lander, "_gate_hits", boom)
+    if network:
+        with pytest.raises(GitNetworkError):
+            land_env.lander.land_consumer(land_env.alpha, land_env.rolled)
+        return
+    out = land_env.lander.land_consumer(land_env.alpha, land_env.rolled)
+    assert (out.state, out.step) == ("BLOCKED", "premerge") and "cannot diff" in out.reason
+    assert merge_calls(land_env) == []
 
 
 # -- merge and the read-back ---------------------------------------------------------------------------------
@@ -296,8 +365,12 @@ def test_verify_checks_lock_and_shim_at_the_new_default_head(land_env):
     out = land_env.lander.land_consumer(land_env.alpha, land_env.rolled)
     assert out.state == "LANDED"
     land_env.move_main({"guard.lock": render_lock(land_env.p, "php")})   # someone reverted the lock on main
+    before = len(land_env.calls)
     again = land_env.lander.verify(land_env.alpha, land_env.rolled, out.merge_sha)
     assert again.state == "FAILED" and "guard.lock at main" in again.reason
+    order = [("ls-remote" if "ls-remote" in a else "fetch") for a, _, _ in land_env.calls[before:]
+             if a[:1] == ("git",) and ("ls-remote" in a or "fetch" in a)]
+    assert order[:2] == ["ls-remote", "fetch"]   # D first, then its objects (as _base_moved does)
 
 
 # -- the push-run gate -----------------------------------------------------------------------------------------
@@ -415,6 +488,10 @@ def test_rebuild_lease_only_on_recorded_head(land_env, remote, flag, landed):
     if landed:
         assert isinstance(got, tuple) and sha_of(land_env.bare, land_env.branch) == h
         assert any(f"--force-with-lease=refs/heads/{land_env.branch}:{old}" in a for a in pushes)
+    elif flag:   # --rebuild was given and refused: never suggest it again
+        assert got.state == "BLOCKED" and got.next_command is None
+        assert "inspect owner/alpha" in got.reason and "--rebuild will not replace it" in got.reason
+        assert pushes == [] and sha_of(land_env.bare, land_env.branch) == old
     else:
         assert got.state == "BLOCKED" and got.next_command == f"guard-fleet land {TAG} --rebuild alpha"
         assert pushes == [] and sha_of(land_env.bare, land_env.branch) == old
@@ -431,6 +508,21 @@ def test_rebuild_remote_ok_accepts_a_strict_fleet_bump_not_in_the_ledger(land_en
     assert other != land_env.rolled.head and other not in land_env.ctx.ledger.heads_recorded("alpha")
     _git(work, "push", "-q", "origin", f"{other}:refs/heads/{land_env.branch}")
     assert land_env.lander.rebuild_remote_ok(land_env.alpha, other) is True
+    commits = land_env.lander.rebuild_remote_commits(land_env.alpha, other)
+    pin = _git(work, "rev-parse", "HEAD^")   # C1 pin, then C2 bump: oldest first
+    assert commits == [f"{pin} build(deps): pin agent-ratchet v4.0.1 in dev dependencies",
+                       f"{other} chore(guard): bump agent-ratchet to v4.0.1 ({land_env.t})"]
+
+
+def test_rebuild_remote_commits_empty_for_a_recorded_head_none_for_a_foreign_one(land_env):
+    h = land_env.rolled.head
+    recorded = _git(land_env.clone, "rev-parse", f"{h}^")
+    assert land_env.lander.rebuild_remote_commits(land_env.alpha, recorded) == []
+    work = land_env.other_clone()
+    foreign = commit_files(work, "foreign", {"README": "foreign\n"})
+    _git(work, "push", "-q", "origin", f"{foreign}:refs/heads/{land_env.branch}")
+    assert land_env.lander.rebuild_remote_commits(land_env.alpha, foreign) is None
+    assert land_env.lander.rebuild_remote_ok(land_env.alpha, foreign) is False
 
 
 # -- approval, clocks ------------------------------------------------------------------------------------------
@@ -499,3 +591,36 @@ def test_rebuild_local_blocks_on_anything_not_the_fleets(land_env, dirt):
     with pytest.raises(RebuildBlocked):
         land_env.lander.rebuild_local(land_env.alpha)
     assert land_env.wt.is_dir() and _git(land_env.clone, "branch", "--list", land_env.branch) != ""
+
+
+def _exclude(env, *patterns):
+    info = env.clone / ".git" / "info"
+    info.mkdir(exist_ok=True)
+    (info / "exclude").write_text("".join(f"{p}\n" for p in patterns))
+
+
+def test_rebuild_local_blocks_on_an_ignored_file_outside_the_allowlist(land_env):
+    _exclude(land_env, "*.log", "__pycache__/")
+    (land_env.wt / "__pycache__").mkdir()
+    (land_env.wt / "__pycache__" / "x.pyc").write_bytes(b"\0")
+    (land_env.wt / "debug.log").write_text("keep me\n")
+    with pytest.raises(RebuildBlocked, match="debug.log"):
+        land_env.lander.rebuild_local(land_env.alpha)
+    assert (land_env.wt / "debug.log").read_text() == "keep me\n"
+    (land_env.wt / "debug.log").unlink()   # only allowlisted ignored files left: the rebuild goes ahead
+    land_env.lander.rebuild_local(land_env.alpha)
+    assert not land_env.wt.exists()
+
+
+def test_rebuild_local_mutates_nothing_before_it_blocks(land_env):
+    (land_env.clone / "node_modules").mkdir()
+    link = land_env.wt / "node_modules"
+    link.symlink_to(land_env.clone / "node_modules")
+    lock = land_env.wt / "guard.lock"
+    lock.chmod(0o755)   # a fleet path whose restore would reset the mode
+    (land_env.wt / "zz-notes.txt").write_text("mine\n")   # sorts after guard.lock
+    with pytest.raises(RebuildBlocked, match="zz-notes.txt"):
+        land_env.lander.rebuild_local(land_env.alpha)
+    assert link.is_symlink() and lock.stat().st_mode & 0o777 == 0o755
+    restores = [a for a, _, _ in land_env.calls if a[:1] == ("git",) and "restore" in a]
+    assert restores == []

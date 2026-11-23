@@ -185,6 +185,17 @@ def collect(ctx: CleanupContext, consumer: Consumer, *, version: str | None, rem
     return items
 
 
+def ignored_allowed(path: str) -> bool:
+    """An ignored path the fleet may delete with W: one of its components is on IGNORED_ALLOWLIST (any depth)."""
+    return bool(IGNORED_ALLOWLIST_SET.intersection(path.rstrip("/").split("/")))
+
+
+def fleet_node_modules(c: Consumer, w: Path) -> bool:
+    """W/node_modules is the fleet's own symlink to the configured target."""
+    link = w / "node_modules"
+    return link.is_symlink() and os.readlink(link) == str(c.dir / "node_modules")
+
+
 def _clean_worktree(git: Git, w: Path) -> str | None:
     """None when W is clean (ignored files only from the allowlist); otherwise why it is kept."""
     if git(w, "status", "--porcelain", "--untracked-files=all").stdout.strip():
@@ -193,7 +204,7 @@ def _clean_worktree(git: Git, w: Path) -> str | None:
     for entry in (e for e in out.split("\0") if e):
         if entry[:2] != "!!":
             return f"worktree is not clean ({entry[:2].strip() or '?'} {entry[3:]})"
-        if not IGNORED_ALLOWLIST_SET.intersection(entry[3:].rstrip("/").split("/")):   # any depth
+        if not ignored_allowed(entry[3:]):
             return f"worktree has an ignored path outside the allowlist: {entry[3:]}"
     return None
 
@@ -217,9 +228,8 @@ def _execute(ctx: CleanupContext, item: Item) -> tuple[bool, str]:
         return kept("checked out in a worktree that is not the fleet's")
     w = fleet.get(b)
     if w is not None:
-        link = w / "node_modules"   # 1. only the fleet's own symlink to the configured target
-        if link.is_symlink() and os.readlink(link) == str(c.dir / "node_modules"):
-            link.unlink()
+        if fleet_node_modules(c, w):   # 1. only the fleet's own symlink to the configured target
+            (w / "node_modules").unlink()
             unlinked = True
         dirty = _clean_worktree(git, w)   # 2.
         if dirty:

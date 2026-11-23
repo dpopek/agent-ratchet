@@ -11,11 +11,11 @@ from typing import Callable, Literal, Mapping, Sequence, TypeVar
 
 from . import api_compat, prbody, shape
 from .ci import wait_for_ci
-from .cleanup import CleanupContext, cleanup_landed
+from .cleanup import CleanupContext, cleanup_landed, fleet_node_modules, ignored_allowed
 from .config import Consumer
 from .gate_inputs import AskError, gate_inputs, touches
 from .gh import GhNotFound
-from .git import GitError, fetch_default, is_ancestor, ls_remote, rev_parse, show_bytes, status_porcelain
+from .git import GitError, GitNetworkError, fetch_default, is_ancestor, ls_remote, rev_parse, show_bytes, status_porcelain
 from .ledger import Record, gated_attempt
 from .lockfile import LockParseError, LockSpec, parse_lock, render_lock
 from .names import branch_for, parse_fleet_branch, worktree_for
@@ -27,6 +27,7 @@ MERGE_STATES_OK = frozenset({"CLEAN", "UNSTABLE", "HAS_HOOKS"})
 WALL_GAP_S = 120
 POLL_START, POLL_CEILING = 2.0, 30.0
 MERGE_READBACK = (2.0, 4.0, 8.0, 16.0, 30.0)
+PREMERGE_RERUNS = 3   # premerge re-runs after a quiet wait or a wall-clock gap before land gives up
 REBUILD_FLAG = "rebuild:"   # Approval.flags holds f"{REBUILD_FLAG}{short}" for every --rebuild short
 _FLEET_PATHS = ("guard.lock", "scripts/guard")
 
@@ -83,6 +84,8 @@ class Lander:
         self.branch = branch_for(self.version)
         self.tag, self.t = ctx.target.tag, ctx.target.sha
         self._skew = self._now_skew()
+        self._waited = False   # the latest premerge waited for the deploy queue
+        self._quiet_deadline: float | None = None   # one ci_wait_min quiet budget per land_consumer
 
     # -- helpers ---------------------------------------------------------------
 
@@ -158,6 +161,10 @@ class Lander:
                 lease = f"--force-with-lease=refs/heads/{b}:"
             elif f"{REBUILD_FLAG}{c.short}" in self.approval.flags and self.rebuild_remote_ok(c, remote):
                 lease = f"--force-with-lease=refs/heads/{b}:{remote}"
+            elif f"{REBUILD_FLAG}{c.short}" in self.approval.flags:
+                return self._outcome(c, "BLOCKED", "publish",
+                                     f"publish: remote {b} is at {remote[:12]}, neither a recorded head nor only "
+                                     f"the fleet's bump: inspect {c.slug} {b} by hand; --rebuild will not replace it")
             else:
                 return self._outcome(c, "BLOCKED", "publish",
                                      f"publish: remote {b} is at {remote[:12]}, not the gated head {h[:12]}",
@@ -218,6 +225,7 @@ class Lander:
         ctx, c, h, base = self.ctx, consumer, rolled.head, rolled.base
         assert h is not None and base is not None and rolled.worktree is not None
         w = rolled.worktree
+        self._waited = False
 
         def blocked(reason: str, **kw) -> Outcome:
             return self._outcome(c, "BLOCKED", "premerge", f"premerge: {reason}", **kw)
@@ -283,7 +291,8 @@ class Lander:
             return self._close(c, number, "premerge", f"premerge: {moved}",
                                next_command=f"guard-fleet land {self.tag} --rebuild {c.short}")
 
-        return self._quiet(c)
+        out, self._waited = self._quiet(c)
+        return out
 
     def _gate_hits(self, c: Consumer, repo: Path, spec: LockSpec, base: str, d: str) -> list[str]:
         ctx = self.ctx
@@ -312,13 +321,18 @@ class Lander:
             hits = self._gate_hits(c, w, spec, base, d2)
         except AskError as exc:
             return f"base moved: cannot tell the gate inputs ({exc})"
+        except GitNetworkError:
+            raise
+        except GitError as exc:
+            return f"base moved: cannot diff BASE..{c.default_branch} ({exc})"
         if hits:
             return f"base moved: {c.default_branch} {d2[:12]} changed gate inputs: {', '.join(hits)}"
         return None
 
-    def _quiet(self, c: Consumer) -> Outcome | None:
+    def _quiet(self, c: Consumer) -> tuple[Outcome | None, bool]:
+        """(BLOCKED or None, waited): waited is True when any poll saw a run in flight."""
         if not c.quiet_before_merge:
-            return None
+            return None, False
 
         def busy() -> list[str]:
             out = []
@@ -329,16 +343,21 @@ class Lander:
             return out
 
         last: list[str] = []
+        waited = False
 
         def probe() -> bool | None:   # True once no listed workflow has a run in flight
-            nonlocal last
+            nonlocal last, waited
             last = busy()
+            waited = waited or bool(last)
             return True if not last else None
 
-        if self._poll(c.ci_wait_min * 60, probe) is None:
+        now = self.ctx.deps.clock.monotonic()
+        if self._quiet_deadline is None:
+            self._quiet_deadline = now + c.ci_wait_min * 60
+        if self._poll(max(0.0, self._quiet_deadline - now), probe) is None:
             return self._outcome(c, "BLOCKED", "premerge", f"premerge: deploy queue busy: {', '.join(last)}",
-                                 keep_pr_open=True, next_command=self._resume())
-        return None
+                                 keep_pr_open=True, next_command=self._resume()), True
+        return None, waited
 
     # -- merge and verify ------------------------------------------------------
 
@@ -377,8 +396,8 @@ class Lander:
         assert h is not None and base is not None
         misses: list[str] = []
         try:
+            d = self._remote_ref(c, f"refs/heads/{c.default_branch}")   # D first, then its objects
             fetch_default(ctx.git, c.dir, c.default_branch)
-            d = self._remote_ref(c, f"refs/heads/{c.default_branch}")
             spec = self._base_lock(c, rolled)
             if spec is None:
                 raise _Miss("guard.lock at BASE is unreadable")
@@ -490,12 +509,21 @@ class Lander:
         if verdict == "timeout":
             return self._outcome(c, "BLOCKED", "ci", f"ci: still pending after {c.ci_wait_min} min", pr_url=url,
                                  keep_pr_open=True, next_command=self._resume())
-        if verdict == "blocks":
+        if verdict != "pass":   # "blocks" and anything unexpected fail closed
             failing = ", ".join(f"{k.name} ({k.detail})" for k in checks if k.verdict == "blocks") or "no checks"
-            return self._outcome(c, "BLOCKED", "ci", f"ci: blocking checks: {failing}", pr_url=url,
+            return self._outcome(c, "BLOCKED", "ci", f"ci: {verdict}: blocking checks: {failing}", pr_url=url,
                                  keep_pr_open=True, next_command=self._resume())
+        self._quiet_deadline = None
         out = self.premerge(c, rolled, number)
-        while out is None and self._drifted():   # a sleep since the previous check: re-check head, base and tag
+        reruns = 0
+        # a quiet wait or a sleep since the previous check: re-check head, base and tag before merging
+        while out is None and (self._drifted() | self._waited):
+            if reruns == PREMERGE_RERUNS:
+                out = self._outcome(c, "BLOCKED", "premerge", f"premerge: still re-checking after {reruns} "
+                                    "re-runs (deploy queue or clock kept moving)", keep_pr_open=True,
+                                    next_command=self._resume())
+                break
+            reruns += 1
             out = self.premerge(c, rolled, number)
         if out is None:
             out = self.merge(c, rolled, number)
@@ -555,15 +583,23 @@ class Lander:
         commits = ctx.git(c.dir, "log", "--reverse", "--format=%H %s", f"{base}..{tip}").text.splitlines()
         return base, commits
 
-    def rebuild_remote_ok(self, consumer: Consumer, remote_head: str) -> bool:
-        """May a push force over the live remote B? Only over a head the ledger recorded, or a strict-G8 bump."""
+    def rebuild_remote_commits(self, consumer: Consumer, remote_head: str) -> list[str] | None:
+        """What a --rebuild push would replace on the remote B, as "<sha> <subject>" lines (oldest first).
+
+        [] for a head the ledger recorded; None when remote_head is not strictly the fleet's bump (no replace).
+        """
         if remote_head in self.ctx.ledger.heads_recorded(consumer.short):
-            return True
+            return []
         self.ctx.git.retrying(consumer.dir, "fetch", "--no-tags", "--no-write-fetch-head", "--refmap=", "origin",
                               f"refs/heads/{self.branch}")   # objects only: the main checkout's refs stay
         if self.ctx.git(consumer.dir, "cat-file", "-e", f"{remote_head}^{{commit}}", check=False).rc != 0:
-            return False
-        return not isinstance(self._g8_from_merge_base(consumer, remote_head), str)
+            return None
+        g8 = self._g8_from_merge_base(consumer, remote_head)
+        return None if isinstance(g8, str) else g8[1]
+
+    def rebuild_remote_ok(self, consumer: Consumer, remote_head: str) -> bool:
+        """May a push force over the live remote B? Only over a head the ledger recorded, or a strict-G8 bump."""
+        return self.rebuild_remote_commits(consumer, remote_head) is not None
 
     def rebuild_local(self, consumer: Consumer) -> None:
         """Reset the local B and W before a fresh roll; raises RebuildBlocked unless they are only the fleet's."""
@@ -576,19 +612,28 @@ class Lander:
             raise RebuildBlocked(f"rebuild: {b} is not only the fleet's bump: {g8}")
         w = worktree_for(ctx.cfg, c, self.version)
         if w.exists():
-            link = w / "node_modules"
-            if link.is_symlink() and os.readlink(link) == str(c.dir / "node_modules"):
-                link.unlink()
+            link = fleet_node_modules(c, w)
             fleet = set(_FLEET_PATHS) | ({c.pin_file} if c.pin_kind != "none" and c.pin_file else set()) | (
                 {"uv.lock"} if c.pin_kind == "pyproject" else set())
-            for entry in status_porcelain(ctx.git, w):
+            restore: list[str] = []
+            for entry in status_porcelain(ctx.git, w, ignored=True):   # 1. prove every entry, mutate nothing
                 path = entry[3:]
+                if link and path.rstrip("/") == "node_modules":
+                    continue
+                if entry[:2] == "!!":
+                    if not ignored_allowed(path):   # worktree remove would delete it silently
+                        raise RebuildBlocked(f"rebuild: {w} has an ignored path outside the allowlist: {path}")
+                    continue
                 try:
                     same = path in fleet and (w / path).read_bytes() == show_bytes(ctx.git, w, b, path)
                 except OSError:
                     same = False
                 if not same:
                     raise RebuildBlocked(f"rebuild: {w} has a change the fleet did not write: {entry}")
+                restore.append(path)
+            if link:   # 2. only now: unlink, restore, remove
+                (w / "node_modules").unlink()
+            for path in restore:
                 ctx.git(w, "restore", "--staged", "--worktree", "--source", b, "--", path)
             removed = ctx.git(c.dir, "worktree", "remove", str(w), check=False)
             if removed.rc != 0:
