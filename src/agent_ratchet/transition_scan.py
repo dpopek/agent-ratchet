@@ -17,13 +17,13 @@ from agent_ratchet.git_guard_io import (
     parse_python, visit_bounded, verify_audit_guard_config_monotonicity, verify_commit_ref,
 )
 from agent_ratchet.lock_policy import LOCK_PATH, adopted_guard_files, lock_check_is_local, verify_lock_transition
-from agent_ratchet.magento.scan import magento_transition_violations
-from agent_ratchet.php.scan import dedupe_php_violations, php_transition_violations
+from agent_ratchet.php.scope import php_profile_active
 from agent_ratchet.refactoring_guard import compare_ast_snapshots
 from agent_ratchet.slop_text_scan import scan_diff_for_shortcut_escapes, scan_text_for_slop
 from agent_ratchet.source_metrics import (
     _count_ast_assertions, _count_js_top_level_items, _find_balanced_span, _parametrize_multiplier, strip_js_comments,
 )
+from agent_ratchet.violation_dedupe import dedupe_php_violations
 
 
 def _diff_unified_zero(base_ref: str | None, head_ref: str | None, cwd: str | None = None) -> str:
@@ -306,8 +306,12 @@ def _evaluate_transition(
     if diff_text:
         violations.extend(scan_diff_for_shortcut_escapes(diff_text, fixture_paths=fixtures))
     violations.extend(_check_transition_test_tampering(entries, base_ref, target_prefix, cwd=cwd))
-    violations.extend(php_transition_violations(entries, base_ref, target_prefix, base_cfg, cfg, cwd=cwd))
-    violations.extend(magento_transition_violations(entries, base_ref, target_prefix, base_cfg, cfg, cwd=cwd))
+    if php_profile_active(cfg):
+        from agent_ratchet.php.scan import php_transition_violations
+        violations.extend(php_transition_violations(entries, base_ref, target_prefix, base_cfg, cfg, cwd=cwd))
+    if "magento" in cfg.get("frameworks", ()):
+        from agent_ratchet.magento.scan import magento_transition_violations
+        violations.extend(magento_transition_violations(entries, base_ref, target_prefix, base_cfg, cfg, cwd=cwd))
     return violations
 
 
