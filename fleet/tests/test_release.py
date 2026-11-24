@@ -428,6 +428,35 @@ def test_lock_update_reaches_only_c2_end_to_end(release_env):
 # -- the network lost during land (exit 4 or 6) ----------------------------------------------------------------
 
 
+def _break_the_read_back_after_merge_of(monkeypatch, slug, exc):
+    """The PR merges for real, then the local fetch of the default branch raises `exc`."""
+    from guard_fleet import land as land_mod
+    from guard_fleet.proc import Result
+    orig, orig_fetch = gh_mod.Gh.pr_merge, land_mod.fetch_default
+    broken = []
+
+    def merge(self, s, number, head_sha):
+        res = orig(self, s, number, head_sha)
+        if s == slug:
+            broken.append(s)
+        return res
+
+    def fetch(*a, **k):
+        if broken:
+            raise exc(Result(("git", "fetch"), 128, b"", b"fatal: read-back lost", False))
+        return orig_fetch(*a, **k)
+    monkeypatch.setattr(gh_mod.Gh, "pr_merge", merge)
+    monkeypatch.setattr(land_mod, "fetch_default", fetch)
+
+
+def _assert_failed_read_back(release_env):
+    assert release_env.merged() == ["beta", "alpha"]
+    end = release_env.end()
+    assert end["beta"] == "LANDED"
+    assert end["alpha"].startswith("FAILED merge: merge: PR #") and "but the read-back failed" in end["alpha"]
+    assert "fatal: read-back lost" in end["alpha"]
+
+
 def _lose_network_at_merge_of(monkeypatch, slug):
     orig = gh_mod.Gh.pr_merge
 
@@ -453,6 +482,13 @@ def test_network_lost_after_a_merge_is_failed_with_the_resume_command(release_en
     end = release_env.end()                                              # the end table is printed even so
     assert end["beta"] == end["alpha"] == "LANDED"
     assert end["gamma"] == "NOT RUN land: network lost: not merged"
+
+
+def test_network_lost_in_the_read_back_after_a_merge_is_failed_exit_6(release_env, monkeypatch):
+    from guard_fleet.git import GitNetworkError
+    _break_the_read_back_after_merge_of(monkeypatch, "owner/alpha", GitNetworkError)
+    assert release_env.release() is FleetExit.FAILED
+    _assert_failed_read_back(release_env)
 
 
 # -- a non-network git or gh error during land (exit 1 or 6, never a traceback) ---------------------------------
@@ -515,6 +551,13 @@ def test_a_git_error_after_an_unverified_merge_is_failed(release_env, monkeypatc
     assert f"Resume: {RESUME}" in release_env.deps.err.getvalue()
     end = release_env.end()
     assert end["beta"] == "LANDED" and end["alpha"].startswith("NOT RUN land: ") and "not verified" in end["alpha"]
+
+
+def test_a_git_error_in_the_read_back_after_a_merge_is_failed_exit_6(release_env, monkeypatch):
+    from guard_fleet.git import GitError
+    _break_the_read_back_after_merge_of(monkeypatch, "owner/alpha", GitError)
+    assert release_env.release() is FleetExit.FAILED
+    _assert_failed_read_back(release_env)
 
 
 def test_a_failed_canary_push_run_is_exit_6_and_nothing_else_merges(release_env):
