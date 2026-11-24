@@ -150,6 +150,45 @@ def test_every_guard_exec_on_a_line_counts(consumer_repo):
     assert level is Level.MAGENTO
 
 
+_WRAPPER = "    'exec sh scripts/guard exec -- python3 scripts/audit/lower_baseline.py \"$@\"',"
+
+
+@pytest.fixture
+def py_exec_repo(consumer_repo):
+    return consumer_repo({"scripts/audit/lower_baseline.py": "import os\n"})
+
+
+def test_guard_exec_inside_a_python_string_literal_is_resolved(py_exec_repo):
+    repo, d = py_exec_repo
+    level, note = resolve_guard_exec(real_git(), repo, d, f"tests/test_x.py:12:{_WRAPPER}")
+    assert level is Level.CORE and note == "guard exec scripts/audit/lower_baseline.py: tests/test_x.py:12"
+
+
+def test_the_same_line_outside_a_py_file_stays_opaque(py_exec_repo):
+    repo, d = py_exec_repo
+    level, note = resolve_guard_exec(real_git(), repo, d, f"docs.txt:3:{_WRAPPER}")
+    assert level is Level.MAGENTO and note.startswith("opaque guard exec: docs.txt:3")
+
+
+@pytest.mark.parametrize("text", [
+    "os.system(x)  # scripts/guard exec -- python3 a.py",   # the marker sits in a COMMENT token
+    "f'scripts/guard exec -- python3 {x}.py'",              # f-string: opaque on 3.11 and on 3.12+
+    "b'scripts/guard exec -- python3 scripts/audit/lower_baseline.py'",   # bytes are not a plain str literal
+    "x = '''scripts/guard exec -- python3 \"unterminated",   # tokenizing raises: today's shlex verdict stands
+    "'scripts/guard exec -- python3 scripts/audit/lower_baseline.py' + f'scripts/guard exec -- python3 {a}.py'"])
+def test_python_lines_the_scan_cannot_resolve_stay_opaque(py_exec_repo, text):
+    repo, d = py_exec_repo
+    level, note = resolve_guard_exec(real_git(), repo, d, f"tests/test_x.py:5:{text}")
+    assert level is Level.MAGENTO and note.startswith("opaque guard exec: tests/test_x.py:5")
+
+
+def test_a_python_string_literal_naming_a_php_module_is_php(py_exec_repo):
+    repo, d = py_exec_repo
+    line = "tests/test_x.py:2:    CMD = 'scripts/guard exec -- python3 -m agent_ratchet.php.scan'"
+    level, note = resolve_guard_exec(real_git(), repo, d, line)
+    assert level is Level.PHP and note == "guard exec -m agent_ratchet.php.scan: tests/test_x.py:2 [php]"
+
+
 def test_guard_exec_symlinked_script_is_opaque(tmp_path):
     repo = make_clone(make_bare(tmp_path / "bare", "alpha"), tmp_path / "work")
     commit_files(repo, "tree", {"tools/dyn.py": "import importlib\n", "Makefile": "x:\n\tscripts/guard exec -- python3 scripts/a.py\n"})

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
+import io
 import re
 import shlex
+import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -92,10 +95,40 @@ def resolve_guard_exec(git: Git, repo: Path, d: str, line: str) -> tuple[Level, 
     match = _HIT_RE.match(line)
     where = f"{match.group(1)}:{match.group(2)}" if match else line
     text = match.group(3) if match else line
-    found = [_resolve_one(git, repo, d, where, rest) for rest in text.split(_EXEC_MARKER)[1:]] or [_opaque(where)]
+    found = [_resolve_one(git, repo, d, where, rest) if rest is not None else _opaque(where)
+             for rest in _exec_texts(where, text)] or [_opaque(where)]
     level = max(level for level, _ in found)
     notes = [note for lvl, note in found if lvl is not Level.CORE] or [found[0][1]]
     return level, "; ".join(notes)   # every occurrence on the line counts; each non-core one is evidenced
+
+
+def _exec_texts(where: str, text: str) -> list[str | None]:
+    """The command texts following each marker; None marks one that cannot be resolved (opaque).
+
+    A `.py` line is tokenized: a marker inside plain str literals is resolved from the literal's value (a test that
+    asserts the text of its own wrapper does not run it). A marker anywhere else (comment, f-string on 3.12+,
+    code), or a line that does not tokenize on its own, keeps the whole-line split."""
+    whole = text.split(_EXEC_MARKER)[1:]
+    if not where.rpartition(":")[0].endswith(".py"):
+        return whole
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return whole
+    strings = [t.string for t in tokens if t.type == tokenize.STRING and _EXEC_MARKER in t.string]
+    if sum(s.count(_EXEC_MARKER) for s in strings) != text.count(_EXEC_MARKER):
+        return whole   # a marker outside every STRING token
+    out: list[str | None] = []
+    for s in strings:
+        try:
+            value = ast.literal_eval(s)
+        except (ValueError, SyntaxError):
+            value = None
+        if isinstance(value, str):
+            out += value.split(_EXEC_MARKER)[1:]
+        else:
+            out.append(None)   # f-string (3.11), bytes or anything else that is not a plain literal
+    return out
 
 
 def _resolve_one(git: Git, repo: Path, d: str, where: str, rest: str) -> tuple[Level, str]:
