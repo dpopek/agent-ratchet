@@ -177,6 +177,8 @@ def _profiled_findings(tmp_path: Path, cfg: dict) -> list[str]:
     ({}, []),
 ], ids=["php_profile", "php_without_magento", "no_profile"])
 def test_gated_imports_keep_profiled_findings(tmp_path: Path, cfg: dict, expected: list[str]) -> None:
+    # `frameworks: [magento]` without `languages: [php]` is rejected by the config validator, so it cannot produce findings.
+    # The magento gate is therefore exercised by "php only" (no magento findings) against "php + magento".
     require_magento()
     full = {"extra_slop_rules": [], "legacy_loc_waivers": [], **cfg}
     assert _profiled_findings(tmp_path, full) == expected

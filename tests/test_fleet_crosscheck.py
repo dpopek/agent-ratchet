@@ -24,7 +24,7 @@ CONFIG_REL = "scripts/audit/audit_guard_config.json"
 
 # Runs `agent_ratchet.cli.main(argv)` with the transition counters installed first, then prints one JSON line.
 #   transitions: calls of `transition_scan._evaluate_transition`, the function that evaluates one commit pair.
-#   gate_calls:  calls of the php/magento entry points `_evaluate_transition` ends with (their profile gates).
+#   gate_calls:  calls of `php_profile_active` from `_evaluate_transition`, the profile-gate check it makes per transition.
 RUNNER = r"""
 import contextlib, io, json, sys
 import agent_ratchet.cli as cli
@@ -42,8 +42,7 @@ def counted(name, key, module=ts):
     setattr(module, name, wrapper)
 
 counted("_evaluate_transition", "transitions")
-counted("php_transition_violations", "gate_calls")
-counted("magento_transition_violations", "gate_calls")
+counted("php_profile_active", "gate_calls")
 counted("_evaluate_commit_range", "baseline_ranges", tbi)
 stdout, stderr = io.StringIO(), io.StringIO()
 with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -156,7 +155,7 @@ def test_core_only_run_loads_no_surface_module(tmp_path, form, min_transitions, 
     assert out["baseline_ranges"] >= min_baseline_ranges
     assert out["transitions"] >= min_transitions
     if min_transitions:
-        assert out["gate_calls"] >= 2 * min_transitions   # php and magento entry per evaluated transition
+        assert out["gate_calls"] >= min_transitions   # counts profile-gate checks: one per evaluated transition
     assert "agent_ratchet.cli" in out["modules"]
     assert not (set(out["modules"]) & surface), sorted(set(out["modules"]) & surface)
 
