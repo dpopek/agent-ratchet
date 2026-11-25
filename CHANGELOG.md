@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.4.1
+
+- Changed: PHP and Magento scan modules load only when the profile is active; no change in findings.
+- Fixed: guard-fleet: a failed read-back after a merge reports FAILED; `guard exec` inside Python string literals is resolved.
+
 ## 4.4.0
 
 - Added: guard-fleet: one-command rollout of agent-ratchet releases to consumer repositories (`fleet/`).
