@@ -9,10 +9,10 @@ from fleet_import import guard_fleet, load_tree_from_worktree
 
 guard_fleet()
 
-from guard_fleet.classify import Level  # noqa: E402
-from guard_fleet.classify.graph import module_edges  # noqa: E402
-from guard_fleet.classify.surfaces import compute_surfaces  # noqa: E402
-from guard_fleet.classify.tree import module_name  # noqa: E402
+from guard_fleet.classify import Level  # noqa: E402 -- guard_fleet() puts fleet/src on sys.path first
+from guard_fleet.classify.graph import module_edges  # noqa: E402 -- guard_fleet() puts fleet/src on sys.path first
+from guard_fleet.classify.surfaces import compute_surfaces  # noqa: E402 -- guard_fleet() puts fleet/src on sys.path first
+from guard_fleet.classify.tree import module_name  # noqa: E402 -- guard_fleet() puts fleet/src on sys.path first
 
 ROOT = Path(__file__).resolve().parents[1]
 SCAN_SURFACE = {"agent_ratchet.php.scan": Level.PHP, "agent_ratchet.magento.scan": Level.MAGENTO,
