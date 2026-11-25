@@ -12,3 +12,4 @@ Notes for coding agents working on agent-ratchet.
 - [verified] tree-sitter-php parses `new class {}` as `anonymous_class`. Its methods get the symbol `<ns>\class@anonymous#<k>::<method>`, where `k` is the class's position in file order.
 - [verified] `--config-file` / `AGENT_RATCHET_CONFIG` is a deliberately unprotected, local-only mode (see README). `external_config.activate_cli` resets the override on every run.
 - [verified] fleet/ never imports agent_ratchet; parity with the core lives in tests/test_fleet_parity.py.
+- [verified] `transition_scan` imports `php.scan` and `magento.scan` only inside the two profile G-blocks in `_evaluate_transition`. A top-level or ungated import makes them core again, and every PHP-only release would then bump every consumer (`tests/test_fleet_refinement_layout.py`).

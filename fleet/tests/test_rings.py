@@ -18,7 +18,7 @@ from guard_fleet.land import Approval, Outcome
 from guard_fleet.ledger import Ledger, Record
 from guard_fleet.plan import PlanRow
 from guard_fleet.rings import (ConsumerState, billing_state, canary_block, deploy_lines, land_rings, rebuild_state,
-                               render_confirmation, ring2_ready, triggers_on_push)
+                               render_confirmation, ring2_ready, _recorded_failure, triggers_on_push)
 from guard_fleet.roll import Rolled
 from guard_fleet.target import Target
 from test_land import SLUG, _seed_push_run, land_env  # noqa: F401  (the land_env fixture)
@@ -327,6 +327,25 @@ def test_a_later_pass_for_the_same_head_clears_a_recorded_failure_another_head_d
     assert ring2_ready(stub, cfg, TARGET)[0] is False
     stub._record("alpha", "push-run", "pass", "a" * 40)
     assert ring2_ready(stub, cfg, TARGET) == (True, "")
+
+
+def test_a_readback_merge_failure_is_closed_by_a_later_verify_pass_for_the_same_head(stub, cfg):
+    seed_landed_ring1(stub)
+    stub._record("alpha", "merge", "fail", "a" * 40, reason="read-back failed", readback=True)
+    assert "merge failed at" in (_recorded_failure(stub.ledger.records()[0], "alpha") or "")   # no pass yet
+    stub._record("alpha", "verify", "pass", "e" * 40)   # another head
+    assert _recorded_failure(stub.ledger.records()[0], "alpha") is not None
+    stub._record("alpha", "verify", "pass", "a" * 40)
+    assert _recorded_failure(stub.ledger.records()[0], "alpha") is None
+    assert ring2_ready(stub, cfg, TARGET) == (True, "")
+
+
+def test_a_mismatch_merge_failure_stays_after_a_verify_pass(stub, cfg):
+    seed_landed_ring1(stub)
+    stub._record("alpha", "merge", "fail", "a" * 40, reason="merged at another head")   # no readback flag
+    stub._record("alpha", "verify", "pass", "a" * 40)
+    assert "merge failed at" in _recorded_failure(stub.ledger.records()[0], "alpha")
+    assert ring2_ready(stub, cfg, TARGET)[0] is False
 
 
 def test_ring2_refused_when_a_live_verify_fails(stub, cfg):

@@ -379,8 +379,15 @@ class Lander:
         if state != "MERGED":
             return self._outcome(c, "BLOCKED", "merge", f"merge: PR #{number} is {state}")
         merge_sha = str((view.get("mergeCommit") or {}).get("oid") or "")
-        fetch_default(ctx.git, c.dir, c.default_branch)
-        second = rev_parse(ctx.git, c.dir, f"{merge_sha}^2") if merge_sha else None
+        try:   # the PR is merged: a failing read-back is FAILED after a remote side effect, not an escape
+            fetch_default(ctx.git, c.dir, c.default_branch)
+            second = rev_parse(ctx.git, c.dir, f"{merge_sha}^2") if merge_sha else None
+        except (GitError, GitNetworkError) as err:
+            reason = f"merge: PR #{number} merged as {merge_sha[:12]} but the read-back failed: {err}"
+            self._record(c, "merge", attempt=rolled.attempt, base=rolled.base, head=h,
+                         detail={"verdict": "fail", "merge": merge_sha, "reason": reason, "readback": True})
+            return self._outcome(c, "FAILED", "merge", reason, merge_sha=merge_sha or None,
+                                 next_command=self._resume())
         if view.get("headRefOid") != h or second != h:
             reason = (f"merge: PR #{number} merged at head {str(view.get('headRefOid'))[:12]} "
                       f"(merge {merge_sha[:12]}, second parent {str(second)[:12]}), not H {h[:12]}")

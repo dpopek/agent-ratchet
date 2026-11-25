@@ -13,7 +13,8 @@ from classify_fixtures import REFINED_LAYOUT, REFINED_TRANSITION_GATES, tree_fro
 from fakes import real_git
 from repos import commit_files, make_bare, make_clone, tag_annotated
 from guard_fleet.classify import Level, classify_release, decide
-from guard_fleet.classify.decision import evidence_lines
+from guard_fleet.classify.changes import classify_path
+from guard_fleet.classify.decision import ReleaseClass, evidence_lines
 from guard_fleet.classify.fingerprints import FINGERPRINT_TARGETS, REVIEWED, fingerprint
 from guard_fleet.classify.surfaces import compute_surfaces
 from guard_fleet.classify.tree import load_tree
@@ -156,3 +157,28 @@ def test_v4_4_0_diff_paths_are_metadata_or_version_only(repo_git, peel):
     rel = classify_release(git, root, peel("v4.3.4"), v4_4_0_or_head(root))
     assert rel.min_level is None, evidence_lines(rel)
     assert rel.fingerprint_mismatch == (), rel.fingerprint_mismatch
+
+
+def test_refinement_diff_bumps_core_only_consumers(repo_git, peel, head_sha):
+    # v4.4.0 -> HEAD moves transition_scan (core); php/scan.py is core at v4.4.0, so its surface is united to core
+    git, root = repo_git
+    rel = classify_release(git, root, peel("v4.4.0"), head_sha())
+    assert rel.min_level is Level.CORE, evidence_lines(rel)
+    assert decide(rel, FakeExposure(Level.CORE), include_unexposed=False) == "BUMP"
+    assert "src/agent_ratchet/transition_scan.py [core]" in evidence_lines(rel)
+
+
+@pytest.mark.parametrize("path,level,skipped_for,bumped_for", [
+    ("src/agent_ratchet/php/scan.py", Level.PHP, Level.CORE, Level.PHP),
+    ("src/agent_ratchet/magento/di.py", Level.MAGENTO, Level.CORE, Level.MAGENTO),
+])
+def test_later_scan_only_change_skips_core_only_consumers(repo_git, head_sha, path, level, skipped_for, bumped_for):
+    # spec §6.13: once the layout is released, a change confined to a scan module no longer reaches core-only consumers
+    tree = load_tree(*repo_git, head_sha())
+    surfaces = compute_surfaces(tree)
+    change = classify_path(path, "M", p_tree=tree, t_tree=tree, p_map=surfaces, t_map=surfaces)
+    assert change.level is level, change
+    rel = ReleaseClass(p="p", t="t", changes=(change,), min_level=change.level, all_core_reason=None,
+                       fingerprint_mismatch=())
+    assert decide(rel, FakeExposure(skipped_for), include_unexposed=False) == "SKIP"
+    assert decide(rel, FakeExposure(bumped_for), include_unexposed=False) == "BUMP"

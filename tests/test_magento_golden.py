@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -154,3 +155,30 @@ def test_shadow_counts(tmp_path: Path) -> None:
     assert f"agent-ratchet shadow: magento {DI_A}: plugin=1 preference=1" in proc.stderr, proc.stderr
     assert "agent-ratchet shadow: magento app/code/Acme/ModA/etc/frontend/di.xml: plugin=0 preference=1" in proc.stderr
     assert "shadow: magento" not in _diff_scan(repo, base, head).stderr
+
+
+def _profiled_findings(tmp_path: Path, cfg: dict) -> list[str]:
+    php_case = GOLDEN.parent / "php" / "01_rebound"
+    mag_case = GOLDEN / "01_disabled_added"
+    base_files = {**_tree(php_case / "base"), **_tree(mag_case / "base")}
+    target_files = {**_tree(php_case / "target"), **_tree(mag_case / "target")}
+    repo = _new_repo(tmp_path)
+    (repo / CONFIG_REL).write_bytes(_json_bytes(cfg))
+    base = _commit_files(repo, "base", base_files, include_guards=True)
+    _apply(repo, target_files, base_files)
+    head = _commit_files(repo, "target", target_files)
+    out = _diff_scan(repo, base, head).stderr
+    return sorted(re.search(r"\[((?:php|magento)_[a-z_]+)\]", ln).group(1) for ln in out.splitlines() if re.search(r"\[(?:php|magento)_[a-z_]+\]", ln))
+
+
+@pytest.mark.parametrize(("cfg", "expected"), [
+    ({"languages": ["php"], "frameworks": ["magento"]}, ["magento_di_plugin_disabled", "php_suppression_rebound"]),
+    ({"languages": ["php"]}, ["php_suppression_rebound"]),
+    ({}, []),
+], ids=["php_profile", "php_without_magento", "no_profile"])
+def test_gated_imports_keep_profiled_findings(tmp_path: Path, cfg: dict, expected: list[str]) -> None:
+    # `frameworks: [magento]` without `languages: [php]` is rejected by the config validator, so it cannot produce findings.
+    # The magento gate is therefore exercised by "php only" (no magento findings) against "php + magento".
+    require_magento()
+    full = {"extra_slop_rules": [], "legacy_loc_waivers": [], **cfg}
+    assert _profiled_findings(tmp_path, full) == expected

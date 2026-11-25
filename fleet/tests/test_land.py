@@ -336,6 +336,28 @@ def test_merge_result_always_read_back(land_env, monkeypatch, state, expected):
         assert [r.detail["verdict"] for r in land_env.records("merge")] == ["fail"]
 
 
+@pytest.mark.parametrize("fn", ["fetch_default", "rev_parse"])
+@pytest.mark.parametrize("exc", [GitError, GitNetworkError])
+def test_a_git_error_in_the_post_merge_read_back_is_failed_not_an_escape(land_env, monkeypatch, fn, exc):
+    err = exc(Result(("git", "fetch"), 128, b"", b"fatal: unreachable", False))
+
+    def effect(orig, argv, slug, env):
+        res = orig(argv, slug, env)   # the merge really happens; only the local read-back breaks
+
+        def boom(*a, **k):
+            raise err
+        monkeypatch.setattr(land_mod, fn, boom)
+        return res
+    land_env.patch_merge(monkeypatch, effect)
+    out = land_env.lander.land_consumer(land_env.alpha, land_env.rolled)
+    merged = sha_of(land_env.bare, "main")
+    assert (out.state, out.step, out.merge_sha) == ("FAILED", "merge", merged)   # FAILED -> run exit 6 (release.py)
+    assert out.reason == f"merge: PR #1 merged as {merged[:12]} but the read-back failed: {err}"
+    recs = land_env.records("merge")
+    assert [(r.detail["verdict"], r.detail["merge"]) for r in recs] == [("fail", merged)]
+    assert recs[0].detail["reason"] == out.reason
+
+
 def test_network_loss_during_the_read_back_propagates(land_env, monkeypatch):
     def effect(orig, argv, slug, env):
         orig(argv, slug, env)

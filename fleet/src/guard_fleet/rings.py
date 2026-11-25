@@ -67,16 +67,26 @@ def canary_block(cfg: FleetConfig, states: Sequence[ConsumerState]) -> str | Non
 
 
 def _recorded_failure(records: Sequence[Record], short: str) -> str | None:
-    """A verify or push-run "fail" with no later "pass" of the same step for the same head, from any process."""
+    """A verify, push-run or merge "fail" with no later "pass" of the same step for the same head, from any process.
+
+    A merge "fail" flagged `readback` (the PR merged at H but the local read-back errored) is also closed by a later
+    verify "pass" for the same head: the live re-verify is the read-back that failed. A mismatch merge fail is not."""
     open_failures: dict[tuple[str, str | None], str] = {}
+    readback: set[tuple[str, str | None]] = set()
     for r in records:
         if r.consumer != short or r.step not in _FAIL_STEPS:
             continue
         verdict = r.detail.get("verdict")
         if verdict == "fail":
             open_failures[(r.step, r.head)] = str(r.detail.get("reason") or "")
+            if r.step == "merge" and r.detail.get("readback") is True:
+                readback.add((r.step, r.head))
+            else:
+                readback.discard((r.step, r.head))
         elif verdict == "pass":
             open_failures.pop((r.step, r.head), None)
+            if r.step == "verify" and (key := ("merge", r.head)) in readback:
+                open_failures.pop(key, None)
     if not open_failures:
         return None
     (step, head), reason = next(iter(open_failures.items()))
