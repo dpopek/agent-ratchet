@@ -447,6 +447,7 @@ def _break_the_read_back_after_merge_of(monkeypatch, slug, exc):
         return orig_fetch(*a, **k)
     monkeypatch.setattr(gh_mod.Gh, "pr_merge", merge)
     monkeypatch.setattr(land_mod, "fetch_default", fetch)
+    return broken   # clear() it: the read-back works again
 
 
 def _assert_failed_read_back(release_env):
@@ -558,6 +559,19 @@ def test_a_git_error_in_the_read_back_after_a_merge_is_failed_exit_6(release_env
     _break_the_read_back_after_merge_of(monkeypatch, "owner/alpha", GitError)
     assert release_env.release() is FleetExit.FAILED
     _assert_failed_read_back(release_env)
+
+
+def test_a_verified_resume_closes_the_read_back_failure_and_ring_2_goes_on(release_env, monkeypatch):
+    from guard_fleet.git import GitNetworkError
+    broken = _break_the_read_back_after_merge_of(monkeypatch, "owner/alpha", GitNetworkError)
+    assert release_env.release() is FleetExit.FAILED
+    assert release_env.merged() == ["beta", "alpha"]
+    assert release_env.records("alpha", "merge")[-1].detail["readback"] is True
+    broken.clear()                                                       # the blip is over
+    assert release_env.release() is FleetExit.OK
+    assert release_env.merged() == ["beta", "alpha", "gamma"]            # alpha is not merged twice; ring 2 landed
+    assert release_env.end()["alpha"] == "CURRENT"
+    assert release_env.records("alpha", "verify")[-1].detail["verdict"] == "pass"
 
 
 def test_a_failed_canary_push_run_is_exit_6_and_nothing_else_merges(release_env):
