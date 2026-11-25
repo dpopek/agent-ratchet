@@ -386,7 +386,8 @@ class Lander:
             reason = f"merge: PR #{number} merged as {merge_sha[:12]} but the read-back failed: {err}"
             self._record(c, "merge", attempt=rolled.attempt, base=rolled.base, head=h,
                          detail={"verdict": "fail", "merge": merge_sha, "reason": reason, "readback": True})
-            return self._outcome(c, "FAILED", "merge", reason, merge_sha=merge_sha or None)
+            return self._outcome(c, "FAILED", "merge", reason, merge_sha=merge_sha or None,
+                                 next_command=self._resume())
         if view.get("headRefOid") != h or second != h:
             reason = (f"merge: PR #{number} merged at head {str(view.get('headRefOid'))[:12]} "
                       f"(merge {merge_sha[:12]}, second parent {str(second)[:12]}), not H {h[:12]}")

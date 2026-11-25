@@ -456,6 +456,7 @@ def _assert_failed_read_back(release_env):
     assert end["beta"] == "LANDED"
     assert end["alpha"].startswith("FAILED merge: merge: PR #") and "but the read-back failed" in end["alpha"]
     assert "fatal: read-back lost" in end["alpha"]
+    assert f"  alpha: {RESUME}" in release_env.out().rsplit("Next:", 1)[1]   # the one next command
 
 
 def _lose_network_at_merge_of(monkeypatch, slug):
